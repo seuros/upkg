@@ -68,23 +68,23 @@ fn select_platform_variation(cask: &Value) -> Option<&Value> {
     #[cfg(target_os = "macos")]
     {
         let variations = cask.get("variations")?;
-        return variations.get(current_macos_variation_key());
+        variations.get(current_macos_variation_key())
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
         let variations = cask.get("variations")?;
-        return ["x86_64_linux", "arm64_linux"]
+        ["x86_64_linux", "arm64_linux"]
             .iter()
-            .find_map(|key| variations.get(*key));
+            .find_map(|key| variations.get(*key))
     }
 
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
     {
         let variations = cask.get("variations")?;
-        return ["arm64_linux", "x86_64_linux"]
+        ["arm64_linux", "x86_64_linux"]
             .iter()
-            .find_map(|key| variations.get(*key));
+            .find_map(|key| variations.get(*key))
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]

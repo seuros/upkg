@@ -1,0 +1,16 @@
+repos:
+  - repo: local
+    hooks:
+      - id: dictator
+        name: dictator
+        entry: dictator lint .
+        language: system
+        pass_filenames: false
+        fail_fast: true
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        pass_filenames: false
+        types: [rust]

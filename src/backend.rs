@@ -72,27 +72,27 @@ impl Backend {
     pub fn detect() -> Result<Self, UpkgError> {
         #[cfg(target_os = "android")]
         {
-            return Ok(Self::Android(android::detect()?));
+            Ok(Self::Android(android::detect()?))
         }
 
         #[cfg(target_os = "linux")]
         {
-            return Ok(Self::Linux(linux::detect()?));
+            Ok(Self::Linux(linux::detect()?))
         }
 
         #[cfg(target_os = "macos")]
         {
-            return Ok(Self::Macos);
+            Ok(Self::Macos)
         }
 
         #[cfg(target_os = "windows")]
         {
-            return Ok(Self::Windows(windows::detect()?));
+            Ok(Self::Windows(windows::detect()?))
         }
 
         #[cfg(target_os = "freebsd")]
         {
-            return Ok(Self::FreeBsd);
+            Ok(Self::FreeBsd)
         }
 
         #[cfg(not(any(

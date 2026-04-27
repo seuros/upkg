@@ -112,12 +112,11 @@ fn parse_formula(source: &str) -> Result<ParsedFormula<'_>, Error> {
 fn find_install_method<'a>(root: Node<'a>, source: &'a [u8]) -> Option<Node<'a>> {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
-        if node.kind() == "method" || node.kind() == "method_definition" {
-            if let Some(name) = method_name(node, source)
-                && name == "install"
-            {
-                return Some(node);
-            }
+        if (node.kind() == "method" || node.kind() == "method_definition")
+            && let Some(name) = method_name(node, source)
+            && name == "install"
+        {
+            return Some(node);
         }
 
         let mut cursor = node.walk();

@@ -83,12 +83,12 @@ impl Context {
 fn default_root() -> PathBuf {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        return PathBuf::from("/opt/homebrew");
+        PathBuf::from("/opt/homebrew")
     }
 
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
     {
-        return PathBuf::from("/usr/local");
+        PathBuf::from("/usr/local")
     }
 
     #[cfg(not(target_os = "macos"))]

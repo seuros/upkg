@@ -46,7 +46,7 @@ pub fn scan_installed(cellar: &Path) -> Result<Vec<InstalledKeg>, Error> {
     }
 
     let mut out = Vec::new();
-    for formula_dir in fs::read_dir(&cellar).map_err(|e| Error::StoreCorruption {
+    for formula_dir in fs::read_dir(cellar).map_err(|e| Error::StoreCorruption {
         message: format!(
             "failed to read cellar directory '{}': {e}",
             cellar.display()

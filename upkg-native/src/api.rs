@@ -26,10 +26,7 @@ impl Default for InstallOptions {
 
 fn resolve_root_and_prefix(options: &InstallOptions) -> (PathBuf, PathBuf) {
     let default_prefix = default_prefix();
-    let root = options
-        .root
-        .clone()
-        .unwrap_or_else(default_root);
+    let root = options.root.clone().unwrap_or_else(default_root);
     let prefix = options.prefix.clone().unwrap_or(default_prefix);
     (root, prefix)
 }
@@ -126,9 +123,10 @@ fn default_prefix() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         if cfg!(target_arch = "aarch64") {
-            return PathBuf::from("/opt/homebrew");
+            PathBuf::from("/opt/homebrew")
+        } else {
+            PathBuf::from("/usr/local")
         }
-        return PathBuf::from("/usr/local");
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -143,7 +141,7 @@ fn default_prefix() -> PathBuf {
 fn default_root() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
-        return default_prefix();
+        default_prefix()
     }
 
     #[cfg(not(target_os = "macos"))]

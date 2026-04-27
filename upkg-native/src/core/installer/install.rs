@@ -2206,12 +2206,8 @@ end
                 tag
             )))
             .respond_with(move |_: &wiremock::Request| {
-                let attempt = attempt_clone.fetch_add(1, Ordering::SeqCst);
-                if attempt == 0 {
-                    ResponseTemplate::new(200).set_body_bytes(valid_bottle.clone())
-                } else {
-                    ResponseTemplate::new(200).set_body_bytes(valid_bottle.clone())
-                }
+                attempt_clone.fetch_add(1, Ordering::SeqCst);
+                ResponseTemplate::new(200).set_body_bytes(valid_bottle.clone())
             })
             .mount(&mock_server)
             .await;

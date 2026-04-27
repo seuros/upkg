@@ -46,7 +46,7 @@ fn install(packages: &[String], dry_run: bool) -> Result<ExitCode, UpkgError> {
     {
         let _ = (backend, spec);
         native::install_native(packages)?;
-        return Ok(ExitCode::SUCCESS);
+        Ok(ExitCode::SUCCESS)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -67,7 +67,7 @@ fn uninstall(packages: &[String], dry_run: bool) -> Result<ExitCode, UpkgError> 
     {
         let _ = (backend, spec);
         native::uninstall_native(packages)?;
-        return Ok(ExitCode::SUCCESS);
+        Ok(ExitCode::SUCCESS)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -88,7 +88,7 @@ fn upgrade(packages: &[String], dry_run: bool) -> Result<ExitCode, UpkgError> {
     {
         let _ = (backend, spec);
         native::upgrade_native(packages)?;
-        return Ok(ExitCode::SUCCESS);
+        Ok(ExitCode::SUCCESS)
     }
 
     #[cfg(not(target_os = "macos"))]

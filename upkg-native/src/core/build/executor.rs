@@ -169,43 +169,41 @@ fn move_path(source: &Path, target: &Path, is_dir: bool) -> Result<(), Error> {
         })?;
     }
 
-    if is_dir {
-        if target.exists() {
-            let entries = std::fs::read_dir(source).map_err(|e| Error::FileError {
+    if is_dir && target.exists() {
+        let entries = std::fs::read_dir(source).map_err(|e| Error::FileError {
+            message: format!(
+                "failed to read source directory '{}': {e}",
+                source.display()
+            ),
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|e| Error::FileError {
                 message: format!(
-                    "failed to read source directory '{}': {e}",
+                    "failed to iterate source directory '{}': {e}",
                     source.display()
                 ),
             })?;
-            for entry in entries {
-                let entry = entry.map_err(|e| Error::FileError {
+            let child_source = entry.path();
+            let child_target = target.join(entry.file_name());
+            let child_is_dir = entry
+                .file_type()
+                .map_err(|e| Error::FileError {
                     message: format!(
-                        "failed to iterate source directory '{}': {e}",
-                        source.display()
+                        "failed to inspect source entry '{}': {e}",
+                        child_source.display()
                     ),
-                })?;
-                let child_source = entry.path();
-                let child_target = target.join(entry.file_name());
-                let child_is_dir = entry
-                    .file_type()
-                    .map_err(|e| Error::FileError {
-                        message: format!(
-                            "failed to inspect source entry '{}': {e}",
-                            child_source.display()
-                        ),
-                    })?
-                    .is_dir();
-                move_path(&child_source, &child_target, child_is_dir)?;
-            }
-
-            std::fs::remove_dir(source).map_err(|e| Error::FileError {
-                message: format!(
-                    "failed to remove source directory '{}' after move: {e}",
-                    source.display()
-                ),
-            })?;
-            return Ok(());
+                })?
+                .is_dir();
+            move_path(&child_source, &child_target, child_is_dir)?;
         }
+
+        std::fs::remove_dir(source).map_err(|e| Error::FileError {
+            message: format!(
+                "failed to remove source directory '{}' after move: {e}",
+                source.display()
+            ),
+        })?;
+        return Ok(());
     }
 
     std::fs::rename(source, target).map_err(|e| Error::FileError {
