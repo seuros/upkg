@@ -1,0 +1,76 @@
+{
+  "name": "foo",
+  "full_name": "foo",
+  "tap": "homebrew/core",
+  "oldname": null,
+  "aliases": [],
+  "versioned_formulae": [],
+  "desc": "Test formula",
+  "license": "MIT",
+  "homepage": "https://example.com",
+  "versions": {
+    "stable": "1.2.3",
+    "head": null,
+    "bottle": true
+  },
+  "urls": {
+    "stable": {
+      "url": "https://example.com/foo-1.2.3.tar.gz",
+      "tag": null,
+      "revision": null,
+      "checksum": "abc123"
+    }
+  },
+  "revision": 0,
+  "version_scheme": 0,
+  "bottle": {
+    "stable": {
+      "rebuild": 0,
+      "root_url": "https://ghcr.io/v2/homebrew/core/foo",
+      "files": {
+        "arm64_sonoma": {
+          "cellar": "/opt/homebrew/Cellar",
+          "url": "https://ghcr.io/v2/homebrew/core/foo/blobs/sha256:def456",
+          "sha256": "def456"
+        },
+        "monterey": {
+          "cellar": "/opt/homebrew/Cellar",
+          "url": "https://ghcr.io/v2/homebrew/core/foo/blobs/sha256:ghi789",
+          "sha256": "ghi789"
+        }
+      }
+    }
+  },
+  "keg_only": false,
+  "keg_only_reason": null,
+  "options": [],
+  "build_dependencies": [],
+  "dependencies": [],
+  "test_dependencies": [],
+  "recommended_dependencies": [],
+  "optional_dependencies": [],
+  "uses_from_macos": [],
+  "uses_from_macos_bounds": [],
+  "requirements": [],
+  "conflicts_with": [],
+  "conflicts_with_reasons": [],
+  "link_overwrite": [],
+  "caveats": null,
+  "installed": [],
+  "linked_keg": null,
+  "pinned": false,
+  "outdated": false,
+  "deprecated": false,
+  "deprecation_date": null,
+  "deprecation_reason": null,
+  "disabled": false,
+  "disable_date": null,
+  "disable_reason": null,
+  "post_install_defined": false,
+  "service": null,
+  "tap_git_head": "abc",
+  "ruby_source_path": "Formula/f/foo.rb",
+  "ruby_source_checksum": {
+    "sha256": "xyz"
+  }
+}

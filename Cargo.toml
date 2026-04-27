@@ -1,0 +1,26 @@
+[package]
+name = "upkg"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "BSD-2-Clause"
+repository = "https://github.com/seuros/upkg"
+
+[dependencies]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+upkg-native = { path = "upkg-native" }
+
+[workspace]
+members = [".", "upkg-native"]
+default-members = ["."]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[dev-dependencies]
+rstest = "0.26.1"
