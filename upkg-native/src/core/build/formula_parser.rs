@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::types::Error;
 use tree_sitter::{Node, Parser, Tree};
 
@@ -14,8 +16,14 @@ pub enum InstallAction {
     },
     Install {
         destination: InstallTarget,
-        sources: Vec<String>,
+        sources: Vec<InstallSource>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallSource {
+    pub source: String,
+    pub target_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,22 +79,33 @@ pub fn parse_supported_install_plan(source: &str) -> Result<Option<InstallPlan>,
         }));
     };
 
+    let mut locals = HashMap::new();
     let mut actions = Vec::new();
     let mut cursor = body.walk();
     for child in body.named_children(&mut cursor) {
-        if child.kind() == "call" {
-            let Some(action) = parse_call(child, parsed.source.as_bytes()) else {
-                return Ok(None);
-            };
-            actions.push(action);
-            continue;
+        match child.kind() {
+            "call" => {
+                let Some(action) = parse_call(child, parsed.source.as_bytes(), &locals) else {
+                    return Ok(None);
+                };
+                actions.push(action);
+            }
+            "assignment" => {
+                let Some((name, value)) =
+                    parse_assignment(child, parsed.source.as_bytes(), &locals)
+                else {
+                    return Ok(None);
+                };
+                locals.insert(name, value);
+            }
+            "unless_modifier" => {
+                if !unless_modifier_is_skipped(child, parsed.source.as_bytes()) {
+                    return Ok(None);
+                }
+            }
+            "comment" => {}
+            _ => return Ok(None),
         }
-
-        if child.kind() == "comment" {
-            continue;
-        }
-
-        return Ok(None);
     }
 
     Ok(Some(InstallPlan { actions }))
@@ -135,7 +154,11 @@ fn method_name<'a>(node: Node<'a>, source: &'a [u8]) -> Option<&'a str> {
     None
 }
 
-fn parse_call(node: Node<'_>, source: &[u8]) -> Option<InstallAction> {
+fn parse_call(
+    node: Node<'_>,
+    source: &[u8],
+    locals: &HashMap<String, String>,
+) -> Option<InstallAction> {
     let method = node.child_by_field_name("method")?.utf8_text(source).ok()?;
     let receiver = node
         .child_by_field_name("receiver")
@@ -143,7 +166,7 @@ fn parse_call(node: Node<'_>, source: &[u8]) -> Option<InstallAction> {
 
     match (receiver, method) {
         (None, "mv") => parse_move_call(node, source),
-        (Some(receiver), "install") => parse_install_call(receiver, node, source),
+        (Some(receiver), "install") => parse_install_call(receiver, node, source, locals),
         _ => None,
     }
 }
@@ -153,14 +176,14 @@ fn parse_move_call(node: Node<'_>, source: &[u8]) -> Option<InstallAction> {
     let (destination, sources) = args.split_last()?;
     let destination = match destination {
         Argument::Target(target) => *target,
-        Argument::String(_) => return None,
+        Argument::String(_) | Argument::Renamed { .. } => return None,
     };
 
     let mut parsed_sources = Vec::with_capacity(sources.len());
     for source in sources {
         match source {
             Argument::String(value) => parsed_sources.push(value.clone()),
-            Argument::Target(_) => return None,
+            Argument::Target(_) | Argument::Renamed { .. } => return None,
         }
     }
 
@@ -170,14 +193,26 @@ fn parse_move_call(node: Node<'_>, source: &[u8]) -> Option<InstallAction> {
     })
 }
 
-fn parse_install_call(receiver: &str, node: Node<'_>, source: &[u8]) -> Option<InstallAction> {
+fn parse_install_call(
+    receiver: &str,
+    node: Node<'_>,
+    source: &[u8],
+    locals: &HashMap<String, String>,
+) -> Option<InstallAction> {
     let destination = install_target(receiver)?;
-    let args = parse_arguments(node.child_by_field_name("arguments")?, source)?;
+    let args = parse_arguments_with_locals(node.child_by_field_name("arguments")?, source, locals)?;
     let mut sources = Vec::with_capacity(args.len());
 
     for arg in args {
         match arg {
-            Argument::String(value) => sources.push(value),
+            Argument::String(value) => sources.push(InstallSource {
+                source: value,
+                target_name: None,
+            }),
+            Argument::Renamed { source, target } => sources.push(InstallSource {
+                source,
+                target_name: Some(target),
+            }),
             Argument::Target(_) => return None,
         }
     }
@@ -189,17 +224,138 @@ fn parse_install_call(receiver: &str, node: Node<'_>, source: &[u8]) -> Option<I
 }
 
 fn parse_arguments(node: Node<'_>, source: &[u8]) -> Option<Vec<Argument>> {
+    parse_arguments_with_locals(node, source, &HashMap::new())
+}
+
+fn parse_arguments_with_locals(
+    node: Node<'_>,
+    source: &[u8],
+    locals: &HashMap<String, String>,
+) -> Option<Vec<Argument>> {
     let mut values = Vec::new();
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         let parsed = match child.kind() {
             "string" => Argument::String(parse_string(child, source)?),
-            "identifier" => Argument::Target(install_target(child.utf8_text(source).ok()?)?),
+            "identifier" => {
+                let identifier = child.utf8_text(source).ok()?;
+                if let Some(value) = locals.get(identifier) {
+                    Argument::String(value.clone())
+                } else {
+                    Argument::Target(install_target(identifier)?)
+                }
+            }
+            "hash" => {
+                let mut renamed = parse_hash_renames(child, source, locals)?;
+                values.append(&mut renamed);
+                continue;
+            }
+            "pair" => parse_rename_pair(child, source, locals)?,
             _ => return None,
         };
         values.push(parsed);
     }
     Some(values)
+}
+
+fn parse_assignment(
+    node: Node<'_>,
+    source: &[u8],
+    locals: &HashMap<String, String>,
+) -> Option<(String, String)> {
+    let left = node.child_by_field_name("left")?;
+    let name = left.utf8_text(source).ok()?.to_string();
+    let value = eval_string_expr(node.child_by_field_name("right")?, source, locals)?;
+    Some((name, value))
+}
+
+fn eval_string_expr(
+    node: Node<'_>,
+    source: &[u8],
+    locals: &HashMap<String, String>,
+) -> Option<String> {
+    match node.kind() {
+        "string" => parse_string(node, source),
+        "identifier" => locals.get(node.utf8_text(source).ok()?).cloned(),
+        "conditional" => {
+            let condition = eval_bool_expr(node.child_by_field_name("condition")?, source)?;
+            let branch = if condition {
+                node.child_by_field_name("consequence")?
+            } else {
+                node.child_by_field_name("alternative")?
+            };
+            eval_string_expr(branch, source, locals)
+        }
+        _ => None,
+    }
+}
+
+fn eval_bool_expr(node: Node<'_>, source: &[u8]) -> Option<bool> {
+    match node.kind() {
+        "true" => Some(true),
+        "false" => Some(false),
+        "call" => {
+            let method = node.child_by_field_name("method")?.utf8_text(source).ok()?;
+            let receiver = node
+                .child_by_field_name("receiver")
+                .and_then(|value| value.utf8_text(source).ok());
+            match (receiver, method) {
+                (Some("build"), "head?") => Some(false),
+                (Some("build"), "stable?") => Some(true),
+                (Some("OS"), "mac?") => Some(cfg!(target_os = "macos")),
+                (Some("OS"), "linux?") => Some(cfg!(target_os = "linux")),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn unless_modifier_is_skipped(node: Node<'_>, source: &[u8]) -> bool {
+    let Some(condition) = node.child_by_field_name("condition") else {
+        return false;
+    };
+    if eval_bool_expr(condition, source) != Some(true) {
+        return false;
+    }
+
+    let Some(body) = node.child_by_field_name("body") else {
+        return false;
+    };
+    body.kind() == "call"
+        && body
+            .child_by_field_name("method")
+            .and_then(|method| method.utf8_text(source).ok())
+            == Some("odie")
+}
+
+fn parse_hash_renames(
+    node: Node<'_>,
+    source: &[u8],
+    locals: &HashMap<String, String>,
+) -> Option<Vec<Argument>> {
+    let mut values = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() != "pair" {
+            return None;
+        }
+        values.push(parse_rename_pair(child, source, locals)?);
+    }
+    Some(values)
+}
+
+fn parse_rename_pair(
+    node: Node<'_>,
+    source: &[u8],
+    locals: &HashMap<String, String>,
+) -> Option<Argument> {
+    let from = eval_string_expr(node.child_by_field_name("key")?, source, locals)?;
+    let to = eval_string_expr(node.child_by_field_name("value")?, source, locals)?;
+    Some(Argument::Renamed {
+        source: from,
+        target: to,
+    })
 }
 
 fn parse_string(node: Node<'_>, source: &[u8]) -> Option<String> {
@@ -254,6 +410,7 @@ fn install_target(value: &str) -> Option<InstallTarget> {
 enum Argument {
     String(String),
     Target(InstallTarget),
+    Renamed { source: String, target: String },
 }
 
 #[cfg(test)]
@@ -306,13 +463,84 @@ end
                 actions: vec![
                     InstallAction::Install {
                         destination: InstallTarget::Bin,
-                        sources: vec!["foo".to_string()],
+                        sources: vec![InstallSource {
+                            source: "foo".to_string(),
+                            target_name: None,
+                        }],
                     },
                     InstallAction::Install {
                         destination: InstallTarget::Prefix,
-                        sources: vec!["README.md".to_string(), "LICENSE".to_string()],
+                        sources: vec![
+                            InstallSource {
+                                source: "README.md".to_string(),
+                                target_name: None,
+                            },
+                            InstallSource {
+                                source: "LICENSE".to_string(),
+                                target_name: None,
+                            },
+                        ],
                     },
                 ],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_local_variable_ternary_and_renamed_install() {
+        let plan = parse_supported_install_plan(
+            r#"
+class AgentSafehouse < Formula
+  def install
+    artifact_path = build.head? ? "dist/safehouse.sh" : "safehouse.sh"
+    bin.install artifact_path => "safehouse"
+  end
+end
+"#,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            plan,
+            InstallPlan {
+                actions: vec![InstallAction::Install {
+                    destination: InstallTarget::Bin,
+                    sources: vec![InstallSource {
+                        source: "safehouse.sh".to_string(),
+                        target_name: Some("safehouse".to_string()),
+                    }],
+                }],
+            }
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn skips_macos_odie_guard() {
+        let plan = parse_supported_install_plan(
+            r#"
+class AgentSafehouse < Formula
+  def install
+    odie "Agent Safehouse requires macOS" unless OS.mac?
+    bin.install "safehouse.sh" => "safehouse"
+  end
+end
+"#,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            plan,
+            InstallPlan {
+                actions: vec![InstallAction::Install {
+                    destination: InstallTarget::Bin,
+                    sources: vec![InstallSource {
+                        source: "safehouse.sh".to_string(),
+                        target_name: Some("safehouse".to_string()),
+                    }],
+                }],
             }
         );
     }

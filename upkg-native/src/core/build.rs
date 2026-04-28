@@ -1,5 +1,3 @@
-#[path = "build/environment.rs"]
-pub mod environment;
 #[path = "build/executor.rs"]
 pub mod executor;
 #[path = "build/formula_parser.rs"]
