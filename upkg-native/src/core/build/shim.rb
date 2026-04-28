@@ -317,7 +317,7 @@ class Pathname
   end
 
   def mark_executable_if_bin_install(path)
-    install_dir = to_s.delete_suffix("/")
+    install_dir = to_s.sub(%r{/+\z}, "")
     return unless install_dir.end_with?("/bin") || install_dir.end_with?("/sbin")
     return if File.directory?(path.to_s)
 
