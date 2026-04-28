@@ -248,9 +248,18 @@ impl ApiClient {
             }
         }
 
-        let response = request.send().await.map_err(|e| Error::NetworkFailure {
-            message: e.to_string(),
-        })?;
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(e) => {
+                if let Some(formula) = self.get_local_tap_formula(name)? {
+                    return Ok(formula);
+                }
+
+                return Err(Error::NetworkFailure {
+                    message: e.to_string(),
+                });
+            }
+        };
 
         if response.status() == StatusCode::NOT_MODIFIED
             && let Some(entry) = cached_entry
@@ -680,6 +689,44 @@ end
             .await;
 
         let client = ApiClient::with_base_url(mock_server.uri())
+            .with_tap_roots(vec![tap_root.path().to_path_buf()]);
+        let formula = client.get_formula("agent-safehouse").await.unwrap();
+
+        assert_eq!(formula.name, "agent-safehouse");
+        assert_eq!(formula.versions.stable, "0.9.0");
+        assert_eq!(
+            formula.ruby_source_path,
+            Some(formula_path.display().to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn resolves_short_name_from_local_tap_after_core_network_failure() {
+        let tap_root = tempdir().unwrap();
+        let formula_dir = tap_root
+            .path()
+            .join("eugene1g")
+            .join("homebrew-safehouse")
+            .join("Formula");
+        std::fs::create_dir_all(&formula_dir).unwrap();
+        let formula_path = formula_dir.join("agent-safehouse.rb");
+        std::fs::write(
+            &formula_path,
+            r#"
+class AgentSafehouse < Formula
+  url "https://github.com/eugene1g/agent-safehouse/releases/download/v0.9.0/safehouse.sh"
+  version "0.9.0"
+  sha256 "61c2f71ee13ef9089442cb13cf050cc679e767ec48da9771e7d8f8a3eb2a8697"
+
+  def install
+    bin.install "safehouse.sh" => "safehouse"
+  end
+end
+"#,
+        )
+        .unwrap();
+
+        let client = ApiClient::with_base_url("http://127.0.0.1:1".to_string())
             .with_tap_roots(vec![tap_root.path().to_path_buf()]);
         let formula = client.get_formula("agent-safehouse").await.unwrap();
 
