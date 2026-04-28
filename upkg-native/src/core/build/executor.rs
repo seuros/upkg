@@ -114,8 +114,15 @@ async fn execute_native_install_plan(
                 destination,
                 sources,
             } => {
-                let destination = install_destination(plan, *destination);
-                install_sources(source_root, &destination, sources).await?;
+                let target = *destination;
+                let destination = install_destination(plan, target);
+                install_sources(
+                    source_root,
+                    &destination,
+                    sources,
+                    is_executable_target(target),
+                )
+                .await?;
             }
         }
     }
@@ -127,6 +134,7 @@ async fn install_sources(
     source_root: &Path,
     destination: &Path,
     sources: &[String],
+    executable_target: bool,
 ) -> Result<(), Error> {
     fs::create_dir_all(destination)
         .await
@@ -157,6 +165,40 @@ async fn install_sources(
 
         let target_path = destination.join(file_name);
         move_path(&source_path, &target_path, metadata.is_dir())?;
+        if executable_target {
+            ensure_executable(&target_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn is_executable_target(target: InstallTarget) -> bool {
+    matches!(target, InstallTarget::Bin | InstallTarget::Sbin)
+}
+
+fn ensure_executable(path: &Path) -> Result<(), Error> {
+    let metadata = std::fs::metadata(path).map_err(|e| Error::FileError {
+        message: format!("failed to read installed path '{}': {e}", path.display()),
+    })?;
+    if metadata.is_dir() {
+        return Ok(());
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = metadata.permissions();
+        let mode = permissions.mode();
+        let executable_bits = (mode & 0o444) >> 2;
+        permissions.set_mode(mode | executable_bits);
+        std::fs::set_permissions(path, permissions).map_err(|e| Error::FileError {
+            message: format!(
+                "failed to mark installed path '{}' executable: {e}",
+                path.display()
+            ),
+        })?;
     }
 
     Ok(())
@@ -398,12 +440,19 @@ mod tests {
 
     #[tokio::test]
     async fn native_install_plan_moves_supported_targets() {
+        use std::os::unix::fs::PermissionsExt;
+
         let tmp = tempfile::tempdir().unwrap();
         let source_root = tmp.path().join("source");
         std::fs::create_dir_all(source_root.join("themes")).unwrap();
         std::fs::create_dir_all(source_root.join("build")).unwrap();
         std::fs::write(source_root.join("themes/default.omp.json"), "{}").unwrap();
         std::fs::write(source_root.join("build/foo"), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(
+            source_root.join("build/foo"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
         std::fs::write(source_root.join("README.md"), "readme").unwrap();
 
         let prefix = tmp.path().join("prefix");
@@ -436,6 +485,11 @@ mod tests {
                 .exists()
         );
         assert!(plan.cellar_path.join("bin").join("foo").exists());
+        let mode = std::fs::metadata(plan.cellar_path.join("bin").join("foo"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o111, 0o111);
         assert!(
             plan.cellar_path
                 .join("share")
@@ -501,6 +555,73 @@ end
                 .join("default.omp.json")
                 .exists()
         );
+    }
+
+    #[tokio::test]
+    async fn run_build_marks_bin_install_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let Some(ruby) = find_ruby().await.ok() else {
+            return;
+        };
+
+        let tmp = tempfile::tempdir().unwrap();
+        let source_root = tmp.path().join("source");
+        std::fs::create_dir_all(&source_root).unwrap();
+        std::fs::write(source_root.join("foo.sh"), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(
+            source_root.join("foo.sh"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+
+        let shim_path = tmp.path().join("shim.rb");
+        std::fs::write(&shim_path, SHIM_RUBY).unwrap();
+
+        let formula_path = tmp.path().join("foo.rb");
+        std::fs::write(
+            &formula_path,
+            r#"
+class Foo < Formula
+  def install
+    bin.install "foo.sh" => "foo"
+  end
+end
+"#,
+        )
+        .unwrap();
+
+        let prefix = tmp.path().join("prefix");
+        let cellar = prefix.join("Cellar");
+        std::fs::create_dir_all(&cellar).unwrap();
+
+        let mut env = HashMap::new();
+        env.insert("UPKG_PREFIX".to_string(), prefix.display().to_string());
+        env.insert("UPKG_CELLAR".to_string(), cellar.display().to_string());
+        env.insert("UPKG_FORMULA_NAME".to_string(), "foo".to_string());
+        env.insert("UPKG_FORMULA_VERSION".to_string(), "1.0.0".to_string());
+        env.insert(
+            "UPKG_FORMULA_FILE".to_string(),
+            formula_path.display().to_string(),
+        );
+        env.insert("UPKG_INSTALLED_DEPS".to_string(), "{}".to_string());
+
+        run_build(&ruby, &shim_path, &source_root, &env)
+            .await
+            .unwrap();
+
+        let mode = std::fs::metadata(
+            prefix
+                .join("Cellar")
+                .join("foo")
+                .join("1.0.0")
+                .join("bin")
+                .join("foo"),
+        )
+        .unwrap()
+        .permissions()
+        .mode();
+        assert_eq!(mode & 0o111, 0o111);
     }
 
     #[tokio::test]

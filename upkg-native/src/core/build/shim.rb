@@ -275,7 +275,9 @@ class Pathname
         Dir.children(src.to_s).each { |child| dst.install(src + child) }
       else
         FileUtils.mkdir_p(self)
-        FileUtils.cp(src.to_s, self.to_s)
+        dst = self + src.basename
+        FileUtils.cp(src.to_s, dst.to_s)
+        mark_executable_if_bin_install(dst)
       end
     end
   end
@@ -309,7 +311,19 @@ class Pathname
   def install_renamed(from, to)
     from = Pathname.new(from) unless from.is_a?(Pathname)
     FileUtils.mkdir_p(self)
-    FileUtils.cp(from.to_s, (self + to.to_s).to_s)
+    dst = self + to.to_s
+    FileUtils.cp(from.to_s, dst.to_s)
+    mark_executable_if_bin_install(dst)
+  end
+
+  def mark_executable_if_bin_install(path)
+    install_dir = to_s.delete_suffix("/")
+    return unless install_dir.end_with?("/bin") || install_dir.end_with?("/sbin")
+    return if File.directory?(path.to_s)
+
+    mode = File.stat(path.to_s).mode
+    executable_bits = (mode & 0o444) >> 2
+    File.chmod(mode | executable_bits, path.to_s)
   end
 end
 
