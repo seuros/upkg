@@ -29,9 +29,46 @@ pub async fn download_and_extract_source(
             message: format!("failed to create source directory: {e}"),
         })?;
 
+    if !looks_like_archive(url) {
+        let filename = source_filename(url)?;
+        fs::copy(&tarball_path, src_dir.join(filename))
+            .await
+            .map_err(|e| Error::FileError {
+                message: format!("failed to stage source file: {e}"),
+            })?;
+        return Ok(src_dir);
+    }
+
     extract_tarball(&tarball_path, &src_dir)?;
 
     find_source_root(&src_dir).await
+}
+
+fn looks_like_archive(url: &str) -> bool {
+    let path = url::Url::parse(url)
+        .ok()
+        .map(|url| url.path().to_string())
+        .unwrap_or_else(|| url.to_string());
+
+    [
+        ".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.bz2", ".tbz2", ".tar", ".zip",
+    ]
+    .iter()
+    .any(|suffix| path.ends_with(suffix))
+}
+
+fn source_filename(url: &str) -> Result<String, Error> {
+    let parsed = url::Url::parse(url).map_err(|e| Error::NetworkFailure {
+        message: format!("invalid source URL '{url}': {e}"),
+    })?;
+    parsed
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| Error::NetworkFailure {
+            message: format!("source URL '{url}' does not include a filename"),
+        })
 }
 
 async fn download_source(url: &str, dest: &Path) -> Result<(), Error> {
@@ -149,4 +186,50 @@ async fn find_source_root(src_dir: &Path) -> Result<PathBuf, Error> {
     }
 
     Ok(src_dir.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn detects_archive_urls() {
+        assert!(looks_like_archive("https://example.com/foo.tar.gz"));
+        assert!(looks_like_archive("https://example.com/foo.zip?download=1"));
+        assert!(!looks_like_archive("https://example.com/safehouse.sh"));
+    }
+
+    #[test]
+    fn extracts_source_filename_from_url() {
+        assert_eq!(
+            source_filename("https://example.com/releases/download/v1/safehouse.sh").unwrap(),
+            "safehouse.sh"
+        );
+    }
+
+    #[tokio::test]
+    async fn stages_single_file_sources_without_extracting() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/safehouse.sh"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("#!/bin/sh\n"))
+            .mount(&server)
+            .await;
+
+        let work_dir = tempfile::tempdir().unwrap();
+        let source_root = download_and_extract_source(
+            &format!("{}/safehouse.sh", server.uri()),
+            None,
+            work_dir.path(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(source_root.join("safehouse.sh")).unwrap(),
+            "#!/bin/sh\n"
+        );
+    }
 }

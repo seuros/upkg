@@ -1135,6 +1135,27 @@ mod tests {
     }
 
     #[test]
+    fn failure_context_uses_formula_named_by_error() {
+        let requested = vec!["zzz".to_string(), "agent-safehouse".to_string()];
+        let formula_names = vec![
+            ("zzz".to_string(), "zzz".to_string()),
+            ("agent-safehouse".to_string(), "agent-safehouse".to_string()),
+        ];
+        let error = Error::MissingFormula {
+            name: "agent-safehouse".to_string(),
+        };
+
+        assert_eq!(
+            crate::cli::commands::install::failure_context_for_error(
+                &error,
+                &formula_names,
+                &requested
+            ),
+            "agent-safehouse"
+        );
+    }
+
+    #[test]
     fn dependency_cellar_path_uses_formula_token_for_tap_name() {
         let tmp = TempDir::new().unwrap();
         let cellar = Cellar::new(tmp.path()).unwrap();

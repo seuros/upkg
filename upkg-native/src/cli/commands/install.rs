@@ -20,7 +20,7 @@ pub async fn execute(
         style(formulas.join(", ")).bold()
     );
 
-    let mut normalized_names: Vec<String> = Vec::new();
+    let mut formula_names: Vec<(String, String)> = Vec::new();
     let mut cask_names: Vec<String> = Vec::new();
     for formula in &formulas {
         let result: Result<String, _> = normalize_formula_name(formula);
@@ -29,7 +29,7 @@ pub async fn execute(
                 if name.starts_with("cask:") {
                     cask_names.push(name);
                 } else {
-                    normalized_names.push(name);
+                    formula_names.push((formula.clone(), name));
                 }
             }
             Err(e) => {
@@ -41,6 +41,11 @@ pub async fn execute(
 
     let mut installed_count = 0usize;
 
+    let normalized_names: Vec<String> = formula_names
+        .iter()
+        .map(|(_, normalized)| normalized.clone())
+        .collect();
+
     if !normalized_names.is_empty() {
         let plan = match installer
             .plan_with_options(&normalized_names, build_from_source)
@@ -48,9 +53,8 @@ pub async fn execute(
         {
             Ok(p) => p,
             Err(e) => {
-                for formula in &formulas {
-                    explain_install_failure(formula, &e);
-                }
+                let formula = failure_context_for_error(&e, &formula_names, &formulas);
+                explain_install_failure(&formula, &e);
                 return Err(e);
             }
         };
@@ -209,9 +213,8 @@ pub async fn execute(
                 return Err(e.clone());
             }
             Err(e) => {
-                for formula in &formulas {
-                    explain_install_failure(formula, &e);
-                }
+                let formula = failure_context_for_error(&e, &formula_names, &formulas);
+                explain_install_failure(&formula, &e);
                 return Err(e);
             }
         };
@@ -238,4 +241,33 @@ pub async fn execute(
     );
 
     Ok(())
+}
+
+pub(crate) fn failure_context_for_error(
+    error: &crate::types::Error,
+    formula_names: &[(String, String)],
+    requested: &[String],
+) -> String {
+    if let Some(error_name) = error_formula_name(error) {
+        if let Some((original, _)) = formula_names
+            .iter()
+            .find(|(_, normalized)| normalized == error_name)
+        {
+            return original.clone();
+        }
+        return error_name.to_string();
+    }
+
+    requested.join(", ")
+}
+
+fn error_formula_name(error: &crate::types::Error) -> Option<&str> {
+    match error {
+        crate::types::Error::UnsupportedBottle { name }
+        | crate::types::Error::MissingFormula { name }
+        | crate::types::Error::UnsupportedTap { name }
+        | crate::types::Error::UnsupportedFormula { name, .. }
+        | crate::types::Error::NotInstalled { name } => Some(name),
+        _ => None,
+    }
 }
