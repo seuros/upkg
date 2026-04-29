@@ -1,8 +1,21 @@
+#[cfg(target_os = "macos")]
+mod api;
 mod backend;
 mod cli;
+#[cfg(target_os = "macos")]
+mod core;
 mod error;
 #[cfg(target_os = "macos")]
+mod init;
+#[cfg(target_os = "macos")]
 mod native;
+#[cfg(target_os = "macos")]
+mod native_cli;
+#[cfg(target_os = "macos")]
+mod types;
+
+#[cfg(target_os = "macos")]
+pub use types::*;
 
 use std::process::ExitCode;
 

@@ -1,25 +1,8 @@
 {
   "release-type": "rust",
-  "plugins": [
-    {
-      "type": "cargo-workspace"
-    },
-    {
-      "type": "linked-versions",
-      "groupName": "upkg",
-      "components": [
-        "upkg",
-        "upkg-native"
-      ],
-      "merge": false
-    }
-  ],
   "packages": {
     ".": {
       "component": "upkg"
-    },
-    "upkg-native": {
-      "component": "upkg-native"
     }
   }
 }

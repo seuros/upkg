@@ -18,7 +18,7 @@ pub enum UpkgError {
     Unsupported(&'static str),
     Io(std::io::Error),
     #[cfg(target_os = "macos")]
-    Native(upkg_native::types::Error),
+    Native(crate::types::Error),
     #[cfg(not(target_os = "macos"))]
     CommandFailed {
         command: String,

@@ -1,5 +1,9 @@
 /target
 .DS_Store
 *.swp
+**/*.rs.bk
 .idea/
 .vscode/
+/test_zb/
+/site/node_modules
+/site/_site
