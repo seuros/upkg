@@ -30,6 +30,9 @@ pub enum CommandKind {
     },
     Help,
     Version,
+    SelfUpgrade {
+        dry_run: bool,
+    },
 }
 
 impl Cli {
@@ -43,6 +46,7 @@ impl Cli {
             "install" | "i" => Self::parse_install(values),
             "uninstall" | "remove" | "rm" => Self::parse_uninstall(values),
             "upgrade" | "update" => Self::parse_upgrade(values),
+            "--self-upgrade" | "self-upgrade" => Self::parse_self_upgrade(values),
             "help" | "--help" | "-h" => Ok(Self {
                 command: CommandKind::Help,
             }),
@@ -127,8 +131,23 @@ impl Cli {
         })
     }
 
+    fn parse_self_upgrade(values: Vec<String>) -> Result<Self, UpkgError> {
+        let mut dry_run = false;
+
+        for arg in values.into_iter().skip(1) {
+            match arg.as_str() {
+                "--dry-run" => dry_run = true,
+                _ => return Err(UpkgError::Usage("self-upgrade only accepts --dry-run")),
+            }
+        }
+
+        Ok(Self {
+            command: CommandKind::SelfUpgrade { dry_run },
+        })
+    }
+
     pub fn help_text() -> &'static str {
-        "upkg - unified package manager frontend\n\nUSAGE:\n  upkg install [--app] [--dry-run] <package> [package...]\n  upkg uninstall [--app] [--dry-run] <package> [package...]\n  upkg upgrade [--app] [--dry-run] [package...]\n  upkg --version\n\nEXAMPLES:\n  upkg install curl git\n  upkg install --app ghostty\n  upkg uninstall jq\n  upkg upgrade\n  upkg upgrade --dry-run neovim\n"
+        "upkg - unified package manager frontend\n\nUSAGE:\n  upkg install [--app] [--dry-run] <package> [package...]\n  upkg uninstall [--app] [--dry-run] <package> [package...]\n  upkg upgrade [--app] [--dry-run] [package...]\n  upkg --self-upgrade [--dry-run]\n  upkg --version\n\nEXAMPLES:\n  upkg install curl git\n  upkg install --app ghostty\n  upkg uninstall jq\n  upkg upgrade\n  upkg upgrade --dry-run neovim\n  upkg --self-upgrade\n"
     }
 }
 
@@ -251,6 +270,32 @@ mod tests {
 
         match cli.command {
             CommandKind::Version => {}
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parse_self_upgrade_flag() {
+        let cli = Cli::parse(["--self-upgrade"].into_iter().map(str::to_string))
+            .expect("parse should succeed");
+
+        match cli.command {
+            CommandKind::SelfUpgrade { dry_run } => assert!(!dry_run),
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parse_self_upgrade_dry_run() {
+        let cli = Cli::parse(
+            ["self-upgrade", "--dry-run"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .expect("parse should succeed");
+
+        match cli.command {
+            CommandKind::SelfUpgrade { dry_run } => assert!(dry_run),
             _ => panic!("unexpected command"),
         }
     }

@@ -31,6 +31,16 @@ tree-sitter = "0.26.8"
 tree-sitter-ruby = "0.23.1"
 libc = "0.2.180"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "process"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rama = { version = "0.3.0-alpha.4", features = ["http-full", "rustls"] }
+flate2 = "1.1.8"
+tar = "0.4.44"
+sha2 = "0.11.0"
+url = "2.5.8"
+
 [profile.release]
 opt-level = 3
 lto = "fat"

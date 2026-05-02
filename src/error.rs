@@ -17,6 +17,7 @@ pub enum UpkgError {
     ))]
     Unsupported(&'static str),
     Io(std::io::Error),
+    SelfUpgrade(String),
     #[cfg(target_os = "macos")]
     Native(crate::types::Error),
     #[cfg(not(target_os = "macos"))]
@@ -44,6 +45,7 @@ impl fmt::Display for UpkgError {
             ))]
             Self::Unsupported(msg) => write!(f, "{msg}"),
             Self::Io(err) => write!(f, "{err}"),
+            Self::SelfUpgrade(msg) => write!(f, "{msg}"),
             #[cfg(target_os = "macos")]
             Self::Native(err) => write!(f, "{err}"),
             #[cfg(not(target_os = "macos"))]
@@ -78,6 +80,12 @@ mod tests {
         let err = UpkgError::from(io_err);
         let msg = err.to_string();
         assert!(msg.contains("file not found"));
+    }
+
+    #[test]
+    fn self_upgrade_error_displays_message() {
+        let err = UpkgError::SelfUpgrade("cannot self-upgrade".to_string());
+        assert_eq!(err.to_string(), "cannot self-upgrade");
     }
 
     #[cfg(any(

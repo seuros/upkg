@@ -11,6 +11,7 @@ mod init;
 mod native;
 #[cfg(target_os = "macos")]
 mod native_cli;
+mod self_upgrade;
 #[cfg(target_os = "macos")]
 mod types;
 
@@ -60,6 +61,7 @@ fn run() -> Result<ExitCode, UpkgError> {
             println!("upkg {}", env!("CARGO_PKG_VERSION"));
             Ok(ExitCode::SUCCESS)
         }
+        CommandKind::SelfUpgrade { dry_run } => self_upgrade(dry_run),
     }
 }
 
@@ -129,6 +131,11 @@ fn upgrade(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<Exit
 fn print_dry_run(backend: &Backend, spec: &backend::CommandSpec) -> Result<ExitCode, UpkgError> {
     println!("backend: {}", backend.name());
     println!("dry-run: {}", spec.render());
+    Ok(ExitCode::SUCCESS)
+}
+
+fn self_upgrade(dry_run: bool) -> Result<ExitCode, UpkgError> {
+    self_upgrade::run(dry_run)?;
     Ok(ExitCode::SUCCESS)
 }
 
