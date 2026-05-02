@@ -45,6 +45,28 @@ pub async fn execute(
 
     let mut installed_count = 0usize;
 
+    if package_kind == crate::api::PackageKindHint::Auto && !formula_names.is_empty() {
+        let targets = match installer.resolve_auto_install_targets(&formula_names).await {
+            Ok(targets) => targets,
+            Err(e) => {
+                let formula = failure_context_for_error(&e, &formula_names, &formulas);
+                explain_install_failure(&formula, &e);
+                return Err(e);
+            }
+        };
+
+        for (original, cask_name) in targets.casks {
+            println!(
+                "{} {} is a cask; installing as app",
+                style("==>").cyan().bold(),
+                style(original).bold()
+            );
+            cask_names.push(cask_name);
+        }
+
+        formula_names = targets.formulas;
+    }
+
     let normalized_names: Vec<String> = formula_names
         .iter()
         .map(|(_, normalized)| normalized.clone())
