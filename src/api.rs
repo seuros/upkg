@@ -3,6 +3,12 @@ use std::path::PathBuf;
 use crate::core::installer::install::create_installer;
 use crate::types::Error;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageKindHint {
+    Auto,
+    App,
+}
+
 #[derive(Debug, Clone)]
 pub struct InstallOptions {
     pub root: Option<PathBuf>,
@@ -10,6 +16,7 @@ pub struct InstallOptions {
     pub concurrency: usize,
     pub no_link: bool,
     pub build_from_source: bool,
+    pub package_kind: PackageKindHint,
 }
 
 impl Default for InstallOptions {
@@ -20,6 +27,7 @@ impl Default for InstallOptions {
             concurrency: 20,
             no_link: false,
             build_from_source: false,
+            package_kind: PackageKindHint::Auto,
         }
     }
 }
@@ -61,6 +69,7 @@ pub fn install(formulas: &[String], options: &InstallOptions) -> Result<(), Erro
             formulas.to_vec(),
             options.no_link,
             options.build_from_source,
+            options.package_kind,
         )
         .await
     })
@@ -76,8 +85,8 @@ pub fn uninstall(formulas: &[String], options: &InstallOptions) -> Result<(), Er
     let (root, prefix) = resolve_root_and_prefix(options);
     let mut installer = create_installer(&root, &prefix, options.concurrency)?;
 
-    for formula in formulas {
-        installer.uninstall(formula)?;
+    for formula in package_requests(formulas, options.package_kind)? {
+        installer.uninstall(&formula)?;
     }
     let _ = installer.gc()?;
 
@@ -85,6 +94,12 @@ pub fn uninstall(formulas: &[String], options: &InstallOptions) -> Result<(), Er
 }
 
 pub fn upgrade(formulas: &[String], options: &InstallOptions) -> Result<(), Error> {
+    if formulas.is_empty() && options.package_kind == PackageKindHint::App {
+        return Err(Error::InvalidArgument {
+            message: "upgrade --app requires at least one app for now".to_string(),
+        });
+    }
+
     let (root, prefix) = resolve_root_and_prefix(options);
     crate::init::ensure_init(&root, &prefix, true)?;
 
@@ -114,6 +129,7 @@ pub fn upgrade(formulas: &[String], options: &InstallOptions) -> Result<(), Erro
             targets,
             options.no_link,
             options.build_from_source,
+            options.package_kind,
         )
         .await
     })
@@ -149,5 +165,42 @@ fn default_root() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".upkg")
+    }
+}
+
+fn package_requests(
+    packages: &[String],
+    kind: PackageKindHint,
+) -> Result<Vec<String>, crate::types::Error> {
+    match kind {
+        PackageKindHint::Auto => Ok(packages.to_vec()),
+        PackageKindHint::App => packages
+            .iter()
+            .map(|package| {
+                let trimmed = package.trim();
+                if let Some(token) = trimmed.strip_prefix("cask:") {
+                    if token.is_empty() {
+                        return Err(Error::InvalidArgument {
+                            message: "cask token cannot be empty".to_string(),
+                        });
+                    }
+                    return Ok(trimmed.to_string());
+                }
+                if let Some((tap, token)) = trimmed.rsplit_once('/') {
+                    if token.is_empty() {
+                        return Err(Error::MissingFormula {
+                            name: trimmed.to_string(),
+                        });
+                    }
+                    if tap != "homebrew/cask" {
+                        return Err(Error::InvalidArgument {
+                            message: format!("'{package}' is not a supported app reference"),
+                        });
+                    }
+                    return Ok(format!("cask:{token}"));
+                }
+                Ok(format!("cask:{trimmed}"))
+            })
+            .collect(),
     }
 }

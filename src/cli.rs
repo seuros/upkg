@@ -5,19 +5,28 @@ pub struct Cli {
     pub command: CommandKind,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageKind {
+    Auto,
+    App,
+}
+
 #[derive(Debug)]
 pub enum CommandKind {
     Install {
         packages: Vec<String>,
         dry_run: bool,
+        kind: PackageKind,
     },
     Uninstall {
         packages: Vec<String>,
         dry_run: bool,
+        kind: PackageKind,
     },
     Upgrade {
         packages: Vec<String>,
         dry_run: bool,
+        kind: PackageKind,
     },
     Help,
     Version,
@@ -46,13 +55,14 @@ impl Cli {
 
     fn parse_install(values: Vec<String>) -> Result<Self, UpkgError> {
         let mut dry_run = false;
+        let mut kind = PackageKind::Auto;
         let mut packages = Vec::new();
 
         for arg in values.into_iter().skip(1) {
-            if arg == "--dry-run" {
-                dry_run = true;
-            } else {
-                packages.push(arg);
+            match arg.as_str() {
+                "--dry-run" => dry_run = true,
+                "--app" => kind = PackageKind::App,
+                _ => packages.push(arg),
             }
         }
 
@@ -61,19 +71,24 @@ impl Cli {
         }
 
         Ok(Self {
-            command: CommandKind::Install { packages, dry_run },
+            command: CommandKind::Install {
+                packages,
+                dry_run,
+                kind,
+            },
         })
     }
 
     fn parse_uninstall(values: Vec<String>) -> Result<Self, UpkgError> {
         let mut dry_run = false;
+        let mut kind = PackageKind::Auto;
         let mut packages = Vec::new();
 
         for arg in values.into_iter().skip(1) {
-            if arg == "--dry-run" {
-                dry_run = true;
-            } else {
-                packages.push(arg);
+            match arg.as_str() {
+                "--dry-run" => dry_run = true,
+                "--app" => kind = PackageKind::App,
+                _ => packages.push(arg),
             }
         }
 
@@ -82,29 +97,38 @@ impl Cli {
         }
 
         Ok(Self {
-            command: CommandKind::Uninstall { packages, dry_run },
+            command: CommandKind::Uninstall {
+                packages,
+                dry_run,
+                kind,
+            },
         })
     }
 
     fn parse_upgrade(values: Vec<String>) -> Result<Self, UpkgError> {
         let mut dry_run = false;
+        let mut kind = PackageKind::Auto;
         let mut packages = Vec::new();
 
         for arg in values.into_iter().skip(1) {
-            if arg == "--dry-run" {
-                dry_run = true;
-            } else {
-                packages.push(arg);
+            match arg.as_str() {
+                "--dry-run" => dry_run = true,
+                "--app" => kind = PackageKind::App,
+                _ => packages.push(arg),
             }
         }
 
         Ok(Self {
-            command: CommandKind::Upgrade { packages, dry_run },
+            command: CommandKind::Upgrade {
+                packages,
+                dry_run,
+                kind,
+            },
         })
     }
 
     pub fn help_text() -> &'static str {
-        "upkg - unified package manager frontend\n\nUSAGE:\n  upkg install [--dry-run] <package> [package...]\n  upkg uninstall [--dry-run] <package> [package...]\n  upkg upgrade [--dry-run] [package...]\n  upkg --version\n\nEXAMPLES:\n  upkg install curl git\n  upkg uninstall jq\n  upkg upgrade\n  upkg upgrade --dry-run neovim\n"
+        "upkg - unified package manager frontend\n\nUSAGE:\n  upkg install [--app] [--dry-run] <package> [package...]\n  upkg uninstall [--app] [--dry-run] <package> [package...]\n  upkg upgrade [--app] [--dry-run] [package...]\n  upkg --version\n\nEXAMPLES:\n  upkg install curl git\n  upkg install --app ghostty\n  upkg uninstall jq\n  upkg upgrade\n  upkg upgrade --dry-run neovim\n"
     }
 }
 
@@ -122,9 +146,14 @@ mod tests {
         .expect("parse should succeed");
 
         match cli.command {
-            CommandKind::Install { packages, dry_run } => {
+            CommandKind::Install {
+                packages,
+                dry_run,
+                kind,
+            } => {
                 assert_eq!(packages, vec!["git"]);
                 assert!(dry_run);
+                assert_eq!(kind, PackageKind::Auto);
             }
             _ => panic!("unexpected command"),
         }
@@ -150,9 +179,14 @@ mod tests {
         .expect("parse should succeed");
 
         match cli.command {
-            CommandKind::Uninstall { packages, dry_run } => {
+            CommandKind::Uninstall {
+                packages,
+                dry_run,
+                kind,
+            } => {
                 assert_eq!(packages, vec!["git"]);
                 assert!(dry_run);
+                assert_eq!(kind, PackageKind::Auto);
             }
             _ => panic!("unexpected command"),
         }
@@ -174,9 +208,37 @@ mod tests {
             Cli::parse(["upgrade"].into_iter().map(str::to_string)).expect("parse should succeed");
 
         match cli.command {
-            CommandKind::Upgrade { packages, dry_run } => {
+            CommandKind::Upgrade {
+                packages,
+                dry_run,
+                kind,
+            } => {
                 assert!(packages.is_empty());
                 assert!(!dry_run);
+                assert_eq!(kind, PackageKind::Auto);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parse_install_app_hint() {
+        let cli = Cli::parse(
+            ["install", "--app", "ghostty"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .expect("parse should succeed");
+
+        match cli.command {
+            CommandKind::Install {
+                packages,
+                dry_run,
+                kind,
+            } => {
+                assert_eq!(packages, vec!["ghostty"]);
+                assert!(!dry_run);
+                assert_eq!(kind, PackageKind::App);
             }
             _ => panic!("unexpected command"),
         }

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 
 use crate::core::cellar::link::Linker;
@@ -761,6 +762,10 @@ impl Installer {
     }
 
     pub fn uninstall(&mut self, name: &str) -> Result<(), Error> {
+        if let Some(token) = name.strip_prefix("cask:") {
+            return self.uninstall_cask(token);
+        }
+
         let installed =
             find_installed(self.cellar.root_dir(), name).ok_or(Error::NotInstalled {
                 name: name.to_string(),
@@ -771,6 +776,55 @@ impl Installer {
         self.linker.unlink_keg(&keg_path)?;
 
         self.cellar.remove_keg(keg_name, &installed.version)?;
+
+        Ok(())
+    }
+
+    fn uninstall_cask(&mut self, token: &str) -> Result<(), Error> {
+        let caskroom_path = self.prefix.join("Caskroom").join(token);
+        if !caskroom_path.exists() {
+            return Err(Error::NotInstalled {
+                name: format!("cask:{token}"),
+            });
+        }
+
+        if let Some(cask_json) = load_latest_cask_metadata_json(&caskroom_path, token)? {
+            let cask = resolve_cask(token, &cask_json)?;
+            remove_cask_linked_artifacts(&self.prefix, &cask)?;
+        }
+
+        for version_dir in cask_versions(&caskroom_path)? {
+            for entry in fs::read_dir(&version_dir).map_err(|e| Error::StoreCorruption {
+                message: format!(
+                    "failed to read cask version directory '{}': {e}",
+                    version_dir.display()
+                ),
+            })? {
+                let path = match entry {
+                    Ok(entry) => entry.path(),
+                    Err(_) => continue,
+                };
+                if !path.is_symlink() {
+                    continue;
+                }
+                let target = fs::read_link(&path).map_err(|e| Error::StoreCorruption {
+                    message: format!("failed to read cask symlink '{}': {e}", path.display()),
+                })?;
+                if target.extension().and_then(|ext| ext.to_str()) == Some("app")
+                    && target.starts_with(cask_app_dir(&self.prefix))
+                {
+                    remove_path_if_exists(&target)?;
+                }
+                remove_path_if_exists(&path)?;
+            }
+        }
+
+        fs::remove_dir_all(&caskroom_path).map_err(|e| Error::StoreCorruption {
+            message: format!(
+                "failed to remove caskroom path '{}': {e}",
+                caskroom_path.display()
+            ),
+        })?;
 
         Ok(())
     }
@@ -847,6 +901,11 @@ impl Installer {
             )
             .await?;
 
+        if !cask.apps.is_empty() {
+            self.install_cask_apps(&cask, &cask_json, &blob_path)?;
+            return Ok(());
+        }
+
         let extracted = self.store.ensure_entry(&cask.sha256, &blob_path)?;
         let keg_path = self.cellar.keg_path(&cask.install_name, &cask.version);
         let mut cleanup = FailedInstallGuard::new(
@@ -873,6 +932,28 @@ impl Installer {
         )?;
 
         cleanup.disarm();
+        Ok(())
+    }
+
+    fn install_cask_apps(
+        &self,
+        cask: &crate::core::installer::cask::ResolvedCask,
+        cask_json: &serde_json::Value,
+        blob_path: &Path,
+    ) -> Result<(), Error> {
+        let caskroom_path = self.prefix.join("Caskroom").join(&cask.token);
+        let staged_path = caskroom_path.join(&cask.version);
+
+        fs::create_dir_all(&staged_path).map_err(|e| Error::StoreCorruption {
+            message: format!("failed to create cask staging directory: {e}"),
+        })?;
+
+        with_cask_source_root(&self.store, cask, blob_path, |source_root| {
+            stage_cask_apps(source_root, &staged_path, &self.prefix, cask)?;
+            stage_cask_linked_artifacts(source_root, &self.prefix, cask)
+        })?;
+
+        write_brew_cask_metadata(&caskroom_path, cask, cask_json)?;
         Ok(())
     }
 }
@@ -1028,6 +1109,513 @@ fn resolve_cask_source_path(
     }
 
     Ok(extracted_root.join(source_path))
+}
+
+fn resolve_cask_link_source_path(
+    source_root: &Path,
+    prefix: &Path,
+    cask: &crate::core::installer::cask::ResolvedCask,
+    source: &str,
+) -> Result<PathBuf, Error> {
+    if source == "$APPDIR" {
+        return Ok(cask_app_dir(prefix));
+    }
+    if let Some(stripped) = source.strip_prefix("$APPDIR/") {
+        return Ok(cask_app_dir(prefix).join(stripped));
+    }
+
+    resolve_cask_source_path(source_root, cask, source)
+}
+
+fn with_cask_source_root(
+    store: &Store,
+    cask: &crate::core::installer::cask::ResolvedCask,
+    blob_path: &Path,
+    f: impl FnOnce(&Path) -> Result<(), Error>,
+) -> Result<(), Error> {
+    if is_dmg(&cask.url, blob_path) {
+        let mounted = MountedDmg::attach(blob_path)?;
+        f(&mounted.mountpoint)
+    } else {
+        let extracted = store.ensure_entry(&cask.sha256, blob_path)?;
+        f(&extracted)
+    }
+}
+
+fn is_dmg(url: &str, path: &Path) -> bool {
+    url.to_ascii_lowercase().ends_with(".dmg")
+        || path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("dmg"))
+            .unwrap_or(false)
+}
+
+struct MountedDmg {
+    mountpoint: PathBuf,
+}
+
+impl MountedDmg {
+    fn attach(path: &Path) -> Result<Self, Error> {
+        let mountpoint = std::env::temp_dir().join(format!(
+            "upkg-dmg-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+
+        fs::create_dir_all(&mountpoint).map_err(|e| Error::StoreCorruption {
+            message: format!("failed to create dmg mountpoint: {e}"),
+        })?;
+
+        let output = Command::new("hdiutil")
+            .args(["attach", "-nobrowse", "-readonly", "-mountpoint"])
+            .arg(&mountpoint)
+            .arg(path)
+            .output()
+            .map_err(|e| Error::ExecutionError {
+                message: format!("failed to run hdiutil attach: {e}"),
+            })?;
+
+        if !output.status.success() {
+            let _ = fs::remove_dir_all(&mountpoint);
+            return Err(Error::ExecutionError {
+                message: format!(
+                    "failed to mount dmg '{}': {}",
+                    path.display(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            });
+        }
+
+        Ok(Self { mountpoint })
+    }
+}
+
+impl Drop for MountedDmg {
+    fn drop(&mut self) {
+        let _ = Command::new("hdiutil")
+            .args(["detach", "-quiet"])
+            .arg(&self.mountpoint)
+            .status();
+        let _ = fs::remove_dir_all(&self.mountpoint);
+    }
+}
+
+fn stage_cask_apps(
+    source_root: &Path,
+    staged_path: &Path,
+    prefix: &Path,
+    cask: &crate::core::installer::cask::ResolvedCask,
+) -> Result<(), Error> {
+    let app_dir = cask_app_dir(prefix);
+    fs::create_dir_all(&app_dir).map_err(|e| Error::StoreCorruption {
+        message: format!(
+            "failed to create app directory '{}': {e}",
+            app_dir.display()
+        ),
+    })?;
+
+    for app in &cask.apps {
+        let source = resolve_cask_source_path(source_root, cask, &app.source)?;
+        if !source.exists() {
+            return Err(Error::InvalidArgument {
+                message: format!(
+                    "cask '{}' app source '{}' not found",
+                    cask.token, app.source
+                ),
+            });
+        }
+
+        let staged_app = staged_path.join(&app.target);
+        let target = app_dir.join(&app.target);
+
+        if target.exists() {
+            return Err(Error::InvalidArgument {
+                message: format!(
+                    "app '{}' already exists at '{}'",
+                    app.target,
+                    target.display()
+                ),
+            });
+        }
+
+        remove_path_if_exists(&staged_app)?;
+        copy_path_preserving_metadata(&source, &staged_app)?;
+        move_path_preserving_metadata(&staged_app, &target)?;
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&target, &staged_app).map_err(|e| {
+                Error::StoreCorruption {
+                    message: format!(
+                        "failed to link staged app '{}' to '{}': {e}",
+                        staged_app.display(),
+                        target.display()
+                    ),
+                }
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+fn stage_cask_linked_artifacts(
+    source_root: &Path,
+    prefix: &Path,
+    cask: &crate::core::installer::cask::ResolvedCask,
+) -> Result<(), Error> {
+    for artifact in &cask.linked_artifacts {
+        let source = resolve_cask_link_source_path(source_root, prefix, cask, &artifact.source)?;
+        if !source.exists() {
+            return Err(Error::InvalidArgument {
+                message: format!(
+                    "cask '{}' artifact source '{}' not found",
+                    cask.token, artifact.source
+                ),
+            });
+        }
+
+        let target = cask_prefix_target(prefix, &artifact.target)?;
+        if target.exists() && !target.is_symlink() {
+            return Err(Error::InvalidArgument {
+                message: format!(
+                    "cask '{}' artifact target '{}' already exists",
+                    cask.token,
+                    target.display()
+                ),
+            });
+        }
+
+        if target.is_symlink() {
+            remove_path_if_exists(&target)?;
+        }
+
+        let parent = target.parent().ok_or_else(|| Error::StoreCorruption {
+            message: format!("target '{}' has no parent", target.display()),
+        })?;
+        fs::create_dir_all(parent).map_err(|e| Error::StoreCorruption {
+            message: format!("failed to create cask artifact target directory: {e}"),
+        })?;
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&source, &target).map_err(|e| Error::StoreCorruption {
+                message: format!(
+                    "failed to link cask artifact '{}' to '{}': {e}",
+                    target.display(),
+                    source.display()
+                ),
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+fn remove_cask_linked_artifacts(
+    prefix: &Path,
+    cask: &crate::core::installer::cask::ResolvedCask,
+) -> Result<(), Error> {
+    for artifact in &cask.linked_artifacts {
+        let target = cask_prefix_target(prefix, &artifact.target)?;
+        if target.is_symlink() {
+            remove_path_if_exists(&target)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn cask_prefix_target(prefix: &Path, target: &str) -> Result<PathBuf, Error> {
+    let target_path = Path::new(target);
+    if target_path.is_absolute()
+        || target_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(Error::InvalidArgument {
+            message: format!("unsupported cask artifact target '{target}'"),
+        });
+    }
+
+    Ok(prefix.join(target_path))
+}
+
+fn cask_app_dir(_prefix: &Path) -> PathBuf {
+    if let Some(path) = std::env::var_os("UPKG_APPDIR") {
+        return PathBuf::from(path);
+    }
+
+    #[cfg(test)]
+    {
+        _prefix.join("Applications")
+    }
+
+    #[cfg(not(test))]
+    {
+        PathBuf::from("/Applications")
+    }
+}
+
+fn remove_path_if_exists(path: &Path) -> Result<(), Error> {
+    if !path.exists() && !path.is_symlink() {
+        return Ok(());
+    }
+
+    let metadata = fs::symlink_metadata(path).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to read path '{}': {e}", path.display()),
+    })?;
+
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
+    .map_err(|e| Error::StoreCorruption {
+        message: format!("failed to remove '{}': {e}", path.display()),
+    })
+}
+
+fn copy_path_preserving_metadata(source: &Path, target: &Path) -> Result<(), Error> {
+    let parent = target.parent().ok_or_else(|| Error::StoreCorruption {
+        message: format!("target '{}' has no parent", target.display()),
+    })?;
+    fs::create_dir_all(parent).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to create target parent '{}': {e}", parent.display()),
+    })?;
+
+    let output = Command::new("/bin/cp")
+        .arg("-pR")
+        .arg(source)
+        .arg(target)
+        .output()
+        .map_err(|e| Error::ExecutionError {
+            message: format!("failed to run cp: {e}"),
+        })?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(Error::ExecutionError {
+            message: format!(
+                "failed to copy '{}' to '{}': {}",
+                source.display(),
+                target.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        })
+    }
+}
+
+fn move_path_preserving_metadata(source: &Path, target: &Path) -> Result<(), Error> {
+    if fs::rename(source, target).is_ok() {
+        return Ok(());
+    }
+
+    copy_path_preserving_metadata(source, target)?;
+    remove_path_if_exists(source)
+}
+
+fn write_brew_cask_metadata(
+    caskroom_path: &Path,
+    cask: &crate::core::installer::cask::ResolvedCask,
+    cask_json: &serde_json::Value,
+) -> Result<(), Error> {
+    let metadata_dir = caskroom_path.join(".metadata");
+    let timestamp = current_brew_timestamp();
+    let caskfile_dir = metadata_dir
+        .join(&cask.version)
+        .join(&timestamp)
+        .join("Casks");
+    fs::create_dir_all(&caskfile_dir).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to create cask metadata directory: {e}"),
+    })?;
+
+    write_json_pretty(
+        &caskfile_dir.join(format!("{}.json", cask.token)),
+        cask_json,
+    )?;
+    write_json_pretty(&metadata_dir.join("config.json"), &brew_cask_config_json())?;
+    write_json_pretty(
+        &metadata_dir.join("INSTALL_RECEIPT.json"),
+        &brew_cask_receipt_json(cask, cask_json),
+    )?;
+
+    Ok(())
+}
+
+fn current_brew_timestamp() -> String {
+    let output = Command::new("date")
+        .args(["-u", "+%Y%m%d%H%M%S.000"])
+        .output();
+
+    output
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "19700101000000.000".to_string())
+}
+
+fn brew_cask_config_json() -> serde_json::Value {
+    serde_json::json!({
+        "default": {
+            "appdir": "/Applications"
+        },
+        "env": {},
+        "explicit": {}
+    })
+}
+
+fn brew_cask_receipt_json(
+    cask: &crate::core::installer::cask::ResolvedCask,
+    cask_json: &serde_json::Value,
+) -> serde_json::Value {
+    let tap_git_head = cask_json
+        .get("tap_git_head")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let ruby_source_path = cask_json
+        .get("ruby_source_path")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+
+    serde_json::json!({
+        "homebrew_version": "4.0.0",
+        "loaded_from_api": true,
+        "uninstall_flight_blocks": false,
+        "installed_as_dependency": false,
+        "installed_on_request": true,
+        "time": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+        "runtime_dependencies": {},
+        "source": {
+            "tap": "homebrew/cask",
+            "tap_git_head": tap_git_head,
+            "version": cask.version,
+            "path": ruby_source_path
+        },
+        "arch": std::env::consts::ARCH,
+        "uninstall_artifacts": brew_cask_uninstall_artifacts(cask),
+        "built_on": null
+    })
+}
+
+fn brew_cask_uninstall_artifacts(
+    cask: &crate::core::installer::cask::ResolvedCask,
+) -> Vec<serde_json::Value> {
+    use crate::core::installer::cask::CaskLinkedArtifactKind;
+
+    cask.apps
+        .iter()
+        .map(|app| serde_json::json!({ "app": [app.target] }))
+        .chain(cask.linked_artifacts.iter().map(|artifact| {
+            let key = match &artifact.kind {
+                CaskLinkedArtifactKind::Manpage => "manpage",
+                CaskLinkedArtifactKind::BashCompletion => "bash_completion",
+                CaskLinkedArtifactKind::FishCompletion => "fish_completion",
+                CaskLinkedArtifactKind::ZshCompletion => "zsh_completion",
+            };
+            serde_json::json!({ key: [artifact.source.replace("$APPDIR", "/Applications")] })
+        }))
+        .collect()
+}
+
+fn write_json_pretty(path: &Path, value: &serde_json::Value) -> Result<(), Error> {
+    let data = serde_json::to_vec_pretty(value).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to serialize JSON for '{}': {e}", path.display()),
+    })?;
+    fs::write(path, data).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to write '{}': {e}", path.display()),
+    })
+}
+
+fn load_latest_cask_metadata_json(
+    caskroom_path: &Path,
+    token: &str,
+) -> Result<Option<serde_json::Value>, Error> {
+    let metadata_dir = caskroom_path.join(".metadata");
+    if !metadata_dir.exists() {
+        return Ok(None);
+    }
+
+    let mut candidates = Vec::new();
+    for version_entry in fs::read_dir(&metadata_dir).map_err(|e| Error::StoreCorruption {
+        message: format!(
+            "failed to read cask metadata directory '{}': {e}",
+            metadata_dir.display()
+        ),
+    })? {
+        let version_path = match version_entry {
+            Ok(entry) => entry.path(),
+            Err(_) => continue,
+        };
+        if !version_path.is_dir() {
+            continue;
+        }
+        for timestamp_entry in fs::read_dir(&version_path).map_err(|e| Error::StoreCorruption {
+            message: format!(
+                "failed to read cask metadata version directory '{}': {e}",
+                version_path.display()
+            ),
+        })? {
+            let timestamp_path = match timestamp_entry {
+                Ok(entry) => entry.path(),
+                Err(_) => continue,
+            };
+            let cask_file = timestamp_path.join("Casks").join(format!("{token}.json"));
+            if cask_file.exists() {
+                candidates.push(cask_file);
+            }
+        }
+    }
+
+    candidates.sort();
+    let Some(path) = candidates.pop() else {
+        return Ok(None);
+    };
+
+    let data = fs::read_to_string(&path).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to read cask metadata '{}': {e}", path.display()),
+    })?;
+    serde_json::from_str(&data)
+        .map(Some)
+        .map_err(|e| Error::StoreCorruption {
+            message: format!("failed to parse cask metadata '{}': {e}", path.display()),
+        })
+}
+
+fn cask_versions(caskroom_path: &Path) -> Result<Vec<PathBuf>, Error> {
+    let mut versions = Vec::new();
+    for entry in fs::read_dir(caskroom_path).map_err(|e| Error::StoreCorruption {
+        message: format!(
+            "failed to read caskroom path '{}': {e}",
+            caskroom_path.display()
+        ),
+    })? {
+        let path = match entry {
+            Ok(entry) => entry.path(),
+            Err(_) => continue,
+        };
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name == ".metadata")
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if path.is_dir() {
+            versions.push(path);
+        }
+    }
+    Ok(versions)
 }
 
 pub fn create_installer(
@@ -2494,5 +3082,143 @@ end
             result.unwrap_err(),
             crate::types::Error::MissingFormula { .. }
         ));
+    }
+
+    #[test]
+    fn stage_cask_apps_moves_app_and_leaves_caskroom_symlink() {
+        let tmp = TempDir::new().unwrap();
+        let source_root = tmp.path().join("mounted");
+        let source_app = source_root.join("Ghostty.app");
+        let staged_path = tmp.path().join("homebrew/Caskroom/ghostty/1.3.1");
+        let prefix = tmp.path().join("homebrew");
+
+        fs::create_dir_all(source_app.join("Contents")).unwrap();
+        fs::write(source_app.join("Contents/Info.plist"), "ghostty").unwrap();
+        fs::create_dir_all(&staged_path).unwrap();
+
+        let cask = crate::core::installer::cask::ResolvedCask {
+            install_name: "cask:ghostty".to_string(),
+            token: "ghostty".to_string(),
+            version: "1.3.1".to_string(),
+            url: "https://example.com/Ghostty.dmg".to_string(),
+            sha256: "abc".to_string(),
+            binaries: Vec::new(),
+            apps: vec![crate::core::installer::cask::CaskApp {
+                source: "Ghostty.app".to_string(),
+                target: "Ghostty.app".to_string(),
+            }],
+            linked_artifacts: Vec::new(),
+        };
+
+        stage_cask_apps(&source_root, &staged_path, &prefix, &cask).unwrap();
+
+        let target_app = prefix.join("Applications/Ghostty.app");
+        assert!(target_app.join("Contents/Info.plist").exists());
+        assert!(staged_path.join("Ghostty.app").is_symlink());
+        assert_eq!(
+            fs::read_link(staged_path.join("Ghostty.app")).unwrap(),
+            target_app
+        );
+    }
+
+    #[test]
+    fn stage_cask_linked_artifacts_links_appdir_sources_into_prefix() {
+        let tmp = TempDir::new().unwrap();
+        let source_root = tmp.path().join("mounted");
+        let prefix = tmp.path().join("homebrew");
+        let app_resources = prefix.join("Applications/Ghostty.app/Contents/Resources");
+
+        fs::create_dir_all(app_resources.join("man/man1")).unwrap();
+        fs::create_dir_all(app_resources.join("bash-completion/completions")).unwrap();
+        fs::write(app_resources.join("man/man1/ghostty.1"), "man").unwrap();
+        fs::write(
+            app_resources.join("bash-completion/completions/ghostty.bash"),
+            "complete",
+        )
+        .unwrap();
+
+        let cask = crate::core::installer::cask::ResolvedCask {
+            install_name: "cask:ghostty".to_string(),
+            token: "ghostty".to_string(),
+            version: "1.3.1".to_string(),
+            url: "https://example.com/Ghostty.dmg".to_string(),
+            sha256: "abc".to_string(),
+            binaries: Vec::new(),
+            apps: Vec::new(),
+            linked_artifacts: vec![
+                crate::core::installer::cask::CaskLinkedArtifact {
+                    kind: crate::core::installer::cask::CaskLinkedArtifactKind::Manpage,
+                    source:
+                        "$APPDIR/Ghostty.app/Contents/Resources/man/man1/ghostty.1".to_string(),
+                    target: "share/man/man1/ghostty.1".to_string(),
+                },
+                crate::core::installer::cask::CaskLinkedArtifact {
+                    kind: crate::core::installer::cask::CaskLinkedArtifactKind::BashCompletion,
+                    source: "$APPDIR/Ghostty.app/Contents/Resources/bash-completion/completions/ghostty.bash".to_string(),
+                    target: "etc/bash_completion.d/ghostty".to_string(),
+                },
+            ],
+        };
+
+        stage_cask_linked_artifacts(&source_root, &prefix, &cask).unwrap();
+
+        assert_eq!(
+            fs::read_link(prefix.join("share/man/man1/ghostty.1")).unwrap(),
+            app_resources.join("man/man1/ghostty.1")
+        );
+        assert_eq!(
+            fs::read_link(prefix.join("etc/bash_completion.d/ghostty")).unwrap(),
+            app_resources.join("bash-completion/completions/ghostty.bash")
+        );
+    }
+
+    #[test]
+    fn uninstall_cask_removes_app_and_caskroom() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("upkg");
+        let prefix = tmp.path().join("homebrew");
+        let caskroom_app = prefix.join("Caskroom/ghostty/1.3.1/Ghostty.app");
+        let target_app = prefix.join("Applications/Ghostty.app");
+        let manpage_source = target_app.join("Contents/Resources/man/man1/ghostty.1");
+        let manpage_link = prefix.join("share/man/man1/ghostty.1");
+        let metadata_cask =
+            prefix.join("Caskroom/ghostty/.metadata/1.3.1/20260502093557.000/Casks/ghostty.json");
+
+        fs::create_dir_all(target_app.join("Contents")).unwrap();
+        fs::create_dir_all(manpage_source.parent().unwrap()).unwrap();
+        fs::write(&manpage_source, "man").unwrap();
+        fs::create_dir_all(manpage_link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&manpage_source, &manpage_link).unwrap();
+        fs::create_dir_all(caskroom_app.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&target_app, &caskroom_app).unwrap();
+        fs::create_dir_all(metadata_cask.parent().unwrap()).unwrap();
+        write_json_pretty(
+            &metadata_cask,
+            &serde_json::json!({
+                "token": "ghostty",
+                "version": "1.3.1",
+                "url": "https://example.com/Ghostty.dmg",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "artifacts": [
+                    { "app": ["Ghostty.app"] },
+                    { "manpage": ["$APPDIR/Ghostty.app/Contents/Resources/man/man1/ghostty.1"] }
+                ]
+            }),
+        )
+        .unwrap();
+
+        let api_client = ApiClient::new();
+        let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
+        let store = Store::new(&root).unwrap();
+        let cellar = Cellar::new(&root).unwrap();
+        let linker = Linker::new(&prefix).unwrap();
+
+        let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, prefix);
+
+        installer.uninstall("cask:ghostty").unwrap();
+
+        assert!(!target_app.exists());
+        assert!(!manpage_link.exists());
+        assert!(!tmp.path().join("homebrew/Caskroom/ghostty").exists());
     }
 }

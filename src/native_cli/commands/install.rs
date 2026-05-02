@@ -12,6 +12,7 @@ pub async fn execute(
     formulas: Vec<String>,
     no_link: bool,
     build_from_source: bool,
+    package_kind: crate::api::PackageKindHint,
 ) -> Result<(), crate::types::Error> {
     let start = Instant::now();
     println!(
@@ -23,7 +24,10 @@ pub async fn execute(
     let mut formula_names: Vec<(String, String)> = Vec::new();
     let mut cask_names: Vec<String> = Vec::new();
     for formula in &formulas {
-        let result: Result<String, _> = normalize_formula_name(formula);
+        let result = match package_kind {
+            crate::api::PackageKindHint::Auto => normalize_formula_name(formula),
+            crate::api::PackageKindHint::App => normalize_app_name(formula),
+        };
         match result {
             Ok(name) => {
                 if name.starts_with("cask:") {
@@ -241,6 +245,19 @@ pub async fn execute(
     );
 
     Ok(())
+}
+
+fn normalize_app_name(name: &str) -> Result<String, crate::types::Error> {
+    let normalized = normalize_formula_name(name)?;
+    if normalized.starts_with("cask:") {
+        return Ok(normalized);
+    }
+    if normalized.contains('/') {
+        return Err(crate::types::Error::InvalidArgument {
+            message: format!("'{name}' is not a supported app reference"),
+        });
+    }
+    Ok(format!("cask:{normalized}"))
 }
 
 pub(crate) fn failure_context_for_error(

@@ -8,6 +8,27 @@ pub struct CaskBinary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaskApp {
+    pub source: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaskLinkedArtifactKind {
+    Manpage,
+    BashCompletion,
+    FishCompletion,
+    ZshCompletion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaskLinkedArtifact {
+    pub kind: CaskLinkedArtifactKind,
+    pub source: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedCask {
     pub install_name: String,
     pub token: String,
@@ -15,6 +36,8 @@ pub struct ResolvedCask {
     pub url: String,
     pub sha256: String,
     pub binaries: Vec<CaskBinary>,
+    pub apps: Vec<CaskApp>,
+    pub linked_artifacts: Vec<CaskLinkedArtifact>,
 }
 
 pub fn resolve_cask(token: &str, cask: &Value) -> Result<ResolvedCask, Error> {
@@ -38,9 +61,11 @@ pub fn resolve_cask(token: &str, cask: &Value) -> Result<ResolvedCask, Error> {
     }
 
     let binaries = parse_binary_artifacts(cask)?;
-    if binaries.is_empty() {
+    let apps = parse_app_artifacts(cask)?;
+    let linked_artifacts = parse_linked_artifacts(cask)?;
+    if binaries.is_empty() && apps.is_empty() {
         return Err(Error::InvalidArgument {
-            message: format!("cask '{token}' does not expose supported binary artifacts"),
+            message: format!("cask '{token}' does not expose supported app or binary artifacts"),
         });
     }
 
@@ -51,6 +76,8 @@ pub fn resolve_cask(token: &str, cask: &Value) -> Result<ResolvedCask, Error> {
         url,
         sha256,
         binaries,
+        apps,
+        linked_artifacts,
     })
 }
 
@@ -131,6 +158,92 @@ fn parse_binary_artifacts(cask: &Value) -> Result<Vec<CaskBinary>, Error> {
     Ok(binaries)
 }
 
+fn parse_app_artifacts(cask: &Value) -> Result<Vec<CaskApp>, Error> {
+    let mut apps = Vec::new();
+    let artifacts = cask
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::InvalidArgument {
+            message: "failed to parse cask JSON: missing artifacts array".to_string(),
+        })?;
+
+    for artifact in artifacts {
+        let Some(entries) = artifact.get("app").and_then(Value::as_array) else {
+            continue;
+        };
+
+        for entry in entries {
+            let (source, target) = parse_binary_entry(entry)?;
+            apps.push(CaskApp { source, target });
+        }
+    }
+
+    Ok(apps)
+}
+
+fn parse_linked_artifacts(cask: &Value) -> Result<Vec<CaskLinkedArtifact>, Error> {
+    let mut linked_artifacts = Vec::new();
+    let artifacts = cask
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::InvalidArgument {
+            message: "failed to parse cask JSON: missing artifacts array".to_string(),
+        })?;
+
+    for artifact in artifacts {
+        linked_artifacts.extend(parse_linked_artifact_entries(
+            artifact,
+            "manpage",
+            CaskLinkedArtifactKind::Manpage,
+            manpage_target,
+        )?);
+        linked_artifacts.extend(parse_linked_artifact_entries(
+            artifact,
+            "bash_completion",
+            CaskLinkedArtifactKind::BashCompletion,
+            bash_completion_target,
+        )?);
+        linked_artifacts.extend(parse_linked_artifact_entries(
+            artifact,
+            "fish_completion",
+            CaskLinkedArtifactKind::FishCompletion,
+            fish_completion_target,
+        )?);
+        linked_artifacts.extend(parse_linked_artifact_entries(
+            artifact,
+            "zsh_completion",
+            CaskLinkedArtifactKind::ZshCompletion,
+            zsh_completion_target,
+        )?);
+    }
+
+    Ok(linked_artifacts)
+}
+
+fn parse_linked_artifact_entries(
+    artifact: &Value,
+    key: &str,
+    kind: CaskLinkedArtifactKind,
+    target_for: fn(&str, Option<&str>) -> Result<String, Error>,
+) -> Result<Vec<CaskLinkedArtifact>, Error> {
+    let Some(entries) = artifact.get(key).and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+
+    entries
+        .iter()
+        .map(|entry| {
+            let (source, target) = parse_symlink_entry(entry)?;
+            let target = target_for(&source, target.as_deref())?;
+            Ok(CaskLinkedArtifact {
+                kind: kind.clone(),
+                source,
+                target,
+            })
+        })
+        .collect()
+}
+
 fn parse_binary_entry(entry: &Value) -> Result<(String, String), Error> {
     if let Some(path) = entry.as_str() {
         return Ok((path.to_string(), basename(path)?));
@@ -161,6 +274,106 @@ fn parse_binary_entry(entry: &Value) -> Result<(String, String), Error> {
     }
 
     Ok((source.to_string(), target))
+}
+
+fn parse_symlink_entry(entry: &Value) -> Result<(String, Option<String>), Error> {
+    if let Some(path) = entry.as_str() {
+        return Ok((path.to_string(), None));
+    }
+
+    let array = entry.as_array().ok_or_else(|| Error::InvalidArgument {
+        message: "unsupported cask symlink artifact shape".to_string(),
+    })?;
+    let source = array
+        .first()
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::InvalidArgument {
+            message: "unsupported cask symlink source".to_string(),
+        })?;
+    let target = array
+        .get(1)
+        .and_then(Value::as_object)
+        .and_then(|obj| obj.get("target"))
+        .and_then(Value::as_str)
+        .map(validate_relative_target)
+        .transpose()?;
+
+    Ok((source.to_string(), target))
+}
+
+fn manpage_target(source: &str, target: Option<&str>) -> Result<String, Error> {
+    let target = target
+        .map(ToString::to_string)
+        .unwrap_or_else(|| basename(source).unwrap_or_else(|_| source.to_string()));
+    let section = manpage_section(&target).or_else(|| manpage_section(source));
+    let section = section.ok_or_else(|| Error::InvalidArgument {
+        message: format!("failed to determine manpage section for '{source}'"),
+    })?;
+    Ok(format!("share/man/man{section}/{target}"))
+}
+
+fn bash_completion_target(source: &str, target: Option<&str>) -> Result<String, Error> {
+    let target = target
+        .map(ToString::to_string)
+        .unwrap_or_else(|| completion_stem(source));
+    Ok(format!("etc/bash_completion.d/{target}"))
+}
+
+fn fish_completion_target(source: &str, target: Option<&str>) -> Result<String, Error> {
+    let mut target = target
+        .map(ToString::to_string)
+        .unwrap_or_else(|| basename(source).unwrap_or_else(|_| source.to_string()));
+    if !target.ends_with(".fish") {
+        target.push_str(".fish");
+    }
+    Ok(format!("share/fish/vendor_completions.d/{target}"))
+}
+
+fn zsh_completion_target(source: &str, target: Option<&str>) -> Result<String, Error> {
+    let mut target = target
+        .map(ToString::to_string)
+        .unwrap_or_else(|| basename(source).unwrap_or_else(|_| source.to_string()));
+    if !target.starts_with('_') {
+        target.insert(0, '_');
+    }
+    Ok(format!("share/zsh/site-functions/{target}"))
+}
+
+fn manpage_section(path: &str) -> Option<String> {
+    let name = std::path::Path::new(path).file_name()?.to_str()?;
+    let without_gz = name.strip_suffix(".gz").unwrap_or(name);
+    let section = without_gz.rsplit_once('.')?.1;
+    if section == "n"
+        || section == "l"
+        || section
+            .chars()
+            .next()
+            .map(|ch| ch.is_ascii_digit())
+            .unwrap_or(false)
+    {
+        Some(section.to_string())
+    } else {
+        None
+    }
+}
+
+fn completion_stem(path: &str) -> String {
+    let name = basename(path).unwrap_or_else(|_| path.to_string());
+    std::path::Path::new(&name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(ToString::to_string)
+        .unwrap_or(name)
+}
+
+fn validate_relative_target(target: &str) -> Result<String, Error> {
+    if target.contains('/') || target.contains('$') || target.contains('~') {
+        return Err(Error::InvalidArgument {
+            message: format!("unsupported cask symlink target path '{target}'"),
+        });
+    }
+
+    Ok(target.to_string())
 }
 
 fn basename(path: &str) -> Result<String, Error> {
@@ -223,6 +436,60 @@ mod tests {
         assert_eq!(resolved.binaries.len(), 2);
         assert_eq!(resolved.binaries[0].target, "tool");
         assert_eq!(resolved.binaries[1].target, "tool-two");
+    }
+
+    #[test]
+    fn resolve_cask_parses_app_artifacts() {
+        let cask = serde_json::json!({
+            "token": "ghostty",
+            "version": "1.0.0",
+            "url": "https://example.com/Ghostty.dmg",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifacts": [{
+                "app": ["Ghostty.app"]
+            }]
+        });
+
+        let resolved = resolve_cask("ghostty", &cask).unwrap();
+        assert!(resolved.binaries.is_empty());
+        assert_eq!(resolved.apps.len(), 1);
+        assert_eq!(resolved.apps[0].source, "Ghostty.app");
+        assert_eq!(resolved.apps[0].target, "Ghostty.app");
+    }
+
+    #[test]
+    fn resolve_cask_parses_secondary_artifacts() {
+        let cask = serde_json::json!({
+            "token": "ghostty",
+            "version": "1.0.0",
+            "url": "https://example.com/Ghostty.dmg",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifacts": [
+                { "app": ["Ghostty.app"] },
+                { "manpage": ["$APPDIR/Ghostty.app/Contents/Resources/man/man1/ghostty.1"] },
+                { "manpage": ["$APPDIR/Ghostty.app/Contents/Resources/man/man5/ghostty.5"] },
+                { "bash_completion": ["$APPDIR/Ghostty.app/Contents/Resources/bash-completion/completions/ghostty.bash"] },
+                { "fish_completion": ["$APPDIR/Ghostty.app/Contents/Resources/fish/vendor_completions.d/ghostty.fish"] },
+                { "zsh_completion": ["$APPDIR/Ghostty.app/Contents/Resources/zsh/site-functions/_ghostty"] }
+            ]
+        });
+
+        let resolved = resolve_cask("ghostty", &cask).unwrap();
+        let targets: Vec<_> = resolved
+            .linked_artifacts
+            .iter()
+            .map(|artifact| artifact.target.as_str())
+            .collect();
+        assert_eq!(
+            targets,
+            vec![
+                "share/man/man1/ghostty.1",
+                "share/man/man5/ghostty.5",
+                "etc/bash_completion.d/ghostty",
+                "share/fish/vendor_completions.d/ghostty.fish",
+                "share/zsh/site-functions/_ghostty"
+            ]
+        );
     }
 
     #[test]

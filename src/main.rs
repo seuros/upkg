@@ -20,7 +20,7 @@ pub use types::*;
 use std::process::ExitCode;
 
 use backend::Backend;
-use cli::{Cli, CommandKind};
+use cli::{Cli, CommandKind, PackageKind};
 use error::UpkgError;
 
 fn main() -> ExitCode {
@@ -37,9 +37,21 @@ fn run() -> Result<ExitCode, UpkgError> {
     let cli = Cli::parse(std::env::args().skip(1))?;
 
     match cli.command {
-        CommandKind::Install { packages, dry_run } => install(&packages, dry_run),
-        CommandKind::Uninstall { packages, dry_run } => uninstall(&packages, dry_run),
-        CommandKind::Upgrade { packages, dry_run } => upgrade(&packages, dry_run),
+        CommandKind::Install {
+            packages,
+            dry_run,
+            kind,
+        } => install(&packages, dry_run, kind),
+        CommandKind::Uninstall {
+            packages,
+            dry_run,
+            kind,
+        } => uninstall(&packages, dry_run, kind),
+        CommandKind::Upgrade {
+            packages,
+            dry_run,
+            kind,
+        } => upgrade(&packages, dry_run, kind),
         CommandKind::Help => {
             println!("{}", Cli::help_text());
             Ok(ExitCode::SUCCESS)
@@ -51,7 +63,7 @@ fn run() -> Result<ExitCode, UpkgError> {
     }
 }
 
-fn install(packages: &[String], dry_run: bool) -> Result<ExitCode, UpkgError> {
+fn install(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<ExitCode, UpkgError> {
     let backend = Backend::detect()?;
     let spec = backend.install_spec(packages);
 
@@ -62,7 +74,7 @@ fn install(packages: &[String], dry_run: bool) -> Result<ExitCode, UpkgError> {
     #[cfg(target_os = "macos")]
     {
         let _ = (backend, spec);
-        native::install_native(packages)?;
+        native::install_native(packages, kind)?;
         Ok(ExitCode::SUCCESS)
     }
 
@@ -72,7 +84,7 @@ fn install(packages: &[String], dry_run: bool) -> Result<ExitCode, UpkgError> {
     }
 }
 
-fn uninstall(packages: &[String], dry_run: bool) -> Result<ExitCode, UpkgError> {
+fn uninstall(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<ExitCode, UpkgError> {
     let backend = Backend::detect()?;
     let spec = backend.uninstall_spec(packages);
 
@@ -83,7 +95,7 @@ fn uninstall(packages: &[String], dry_run: bool) -> Result<ExitCode, UpkgError> 
     #[cfg(target_os = "macos")]
     {
         let _ = (backend, spec);
-        native::uninstall_native(packages)?;
+        native::uninstall_native(packages, kind)?;
         Ok(ExitCode::SUCCESS)
     }
 
@@ -93,7 +105,7 @@ fn uninstall(packages: &[String], dry_run: bool) -> Result<ExitCode, UpkgError> 
     }
 }
 
-fn upgrade(packages: &[String], dry_run: bool) -> Result<ExitCode, UpkgError> {
+fn upgrade(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<ExitCode, UpkgError> {
     let backend = Backend::detect()?;
     let spec = backend.upgrade_spec(packages);
 
@@ -104,7 +116,7 @@ fn upgrade(packages: &[String], dry_run: bool) -> Result<ExitCode, UpkgError> {
     #[cfg(target_os = "macos")]
     {
         let _ = (backend, spec);
-        native::upgrade_native(packages)?;
+        native::upgrade_native(packages, kind)?;
         Ok(ExitCode::SUCCESS)
     }
 
