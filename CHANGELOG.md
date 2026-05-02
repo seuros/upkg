@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/seuros/upkg/compare/upkg-v0.3.0...upkg-v0.4.0) (2026-05-02)
+
+
+### Features
+
+* add self-upgrade command ([018aac8](https://github.com/seuros/upkg/commit/018aac8d50932d66e4c1b7193926f4d450355c16))
+
 ## [0.3.0](https://github.com/seuros/upkg/compare/upkg-v0.2.1...upkg-v0.3.0) (2026-05-02)
 
 
