@@ -17,7 +17,7 @@ jobs:
       upkg_tag: ${{ steps.release.outputs.tag_name }}
       upkg_version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -87,7 +87,7 @@ jobs:
           cd ../../..
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: upkg-${{ matrix.target }}
           path: upkg-v${{ needs.release-please.outputs.upkg_version }}-${{ matrix.target }}.*
@@ -102,7 +102,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
