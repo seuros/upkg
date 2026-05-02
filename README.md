@@ -47,12 +47,25 @@ No runtime switch, no shelling out to `brew`. The engine is built in and keeps t
 
 Same formula and cask names. Different engine.
 
+For app casks, use `--app`:
+
+```bash
+upkg install --app ghostty
+upkg uninstall --app ghostty
+```
+
+App installs are written in the Homebrew-compatible cask layout, so `brew
+info --cask <name>` can detect them. Supported cask artifacts currently include
+apps, manpages, and bash/fish/zsh completions.
+
 ## Usage
 
 ```bash
 upkg install git curl
+upkg install --app ghostty
 upkg install --dry-run ripgrep
 upkg uninstall htop
+upkg uninstall --app ghostty
 upkg upgrade
 upkg help
 ```
