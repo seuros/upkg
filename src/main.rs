@@ -44,6 +44,10 @@ fn run() -> Result<ExitCode, UpkgError> {
             println!("{}", Cli::help_text());
             Ok(ExitCode::SUCCESS)
         }
+        CommandKind::Version => {
+            println!("upkg {}", env!("CARGO_PKG_VERSION"));
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }
 

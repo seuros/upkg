@@ -20,6 +20,7 @@ pub enum CommandKind {
         dry_run: bool,
     },
     Help,
+    Version,
 }
 
 impl Cli {
@@ -35,6 +36,9 @@ impl Cli {
             "upgrade" | "update" => Self::parse_upgrade(values),
             "help" | "--help" | "-h" => Ok(Self {
                 command: CommandKind::Help,
+            }),
+            "--version" | "-V" => Ok(Self {
+                command: CommandKind::Version,
             }),
             _ => Err(UpkgError::Usage("unsupported command")),
         }
@@ -100,7 +104,7 @@ impl Cli {
     }
 
     pub fn help_text() -> &'static str {
-        "upkg - unified package manager frontend\n\nUSAGE:\n  upkg install [--dry-run] <package> [package...]\n  upkg uninstall [--dry-run] <package> [package...]\n  upkg upgrade [--dry-run] [package...]\n\nEXAMPLES:\n  upkg install curl git\n  upkg uninstall jq\n  upkg upgrade\n  upkg upgrade --dry-run neovim\n"
+        "upkg - unified package manager frontend\n\nUSAGE:\n  upkg install [--dry-run] <package> [package...]\n  upkg uninstall [--dry-run] <package> [package...]\n  upkg upgrade [--dry-run] [package...]\n  upkg --version\n\nEXAMPLES:\n  upkg install curl git\n  upkg uninstall jq\n  upkg upgrade\n  upkg upgrade --dry-run neovim\n"
     }
 }
 
@@ -174,6 +178,17 @@ mod tests {
                 assert!(packages.is_empty());
                 assert!(!dry_run);
             }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parse_version_flag() {
+        let cli = Cli::parse(["--version"].into_iter().map(str::to_string))
+            .expect("parse should succeed");
+
+        match cli.command {
+            CommandKind::Version => {}
             _ => panic!("unexpected command"),
         }
     }
