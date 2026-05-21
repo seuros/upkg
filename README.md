@@ -70,6 +70,7 @@ upkg install --dry-run ripgrep
 upkg uninstall htop
 upkg uninstall --app ghostty
 upkg upgrade
+upkg list
 upkg --self-upgrade
 upkg help
 ```

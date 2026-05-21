@@ -83,6 +83,7 @@ pub fn uninstall(formulas: &[String], options: &InstallOptions) -> Result<(), Er
     }
 
     let (root, prefix) = resolve_root_and_prefix(options);
+    crate::init::ensure_init(&root, &prefix, true)?;
     let mut installer = create_installer(&root, &prefix, options.concurrency)?;
 
     for formula in package_requests(formulas, options.package_kind)? {
@@ -108,14 +109,7 @@ pub fn upgrade(formulas: &[String], options: &InstallOptions) -> Result<(), Erro
     runtime.block_on(async {
         let mut installer = create_installer(&root, &prefix, options.concurrency)?;
         let targets = if formulas.is_empty() {
-            let mut installed: Vec<String> = installer
-                .list_installed()?
-                .into_iter()
-                .map(|keg| keg.name)
-                .collect();
-            installed.sort();
-            installed.dedup();
-            installed
+            installed_formula_targets(installer.list_installed()?)
         } else {
             formulas.to_vec()
         };
@@ -133,6 +127,28 @@ pub fn upgrade(formulas: &[String], options: &InstallOptions) -> Result<(), Erro
         )
         .await
     })
+}
+
+pub fn list(
+    options: &InstallOptions,
+) -> Result<Vec<crate::core::storage::receipt::InstalledKeg>, Error> {
+    let (root, prefix) = resolve_root_and_prefix(options);
+    crate::init::ensure_init(&root, &prefix, true)?;
+    let installer = create_installer(&root, &prefix, options.concurrency)?;
+    installer.list_installed()
+}
+
+fn installed_formula_targets(
+    installed: Vec<crate::core::storage::receipt::InstalledKeg>,
+) -> Vec<String> {
+    let mut targets: Vec<String> = installed
+        .into_iter()
+        .map(|keg| keg.name)
+        .filter(|name| !name.starts_with("cask:"))
+        .collect();
+    targets.sort();
+    targets.dedup();
+    targets
 }
 
 fn default_prefix() -> PathBuf {
@@ -202,5 +218,34 @@ fn package_requests(
                 Ok(format!("cask:{trimmed}"))
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::storage::receipt::InstalledKeg;
+
+    #[test]
+    fn no_arg_upgrade_targets_exclude_app_casks() {
+        let targets = installed_formula_targets(vec![
+            InstalledKeg {
+                name: "ripgrep".to_string(),
+                version: "14.1.1".to_string(),
+                store_key: "rg-sha".to_string(),
+            },
+            InstalledKeg {
+                name: "cask:ghostty".to_string(),
+                version: "1.3.0".to_string(),
+                store_key: String::new(),
+            },
+            InstalledKeg {
+                name: "ripgrep".to_string(),
+                version: "14.1.1".to_string(),
+                store_key: "rg-sha".to_string(),
+            },
+        ]);
+
+        assert_eq!(targets, vec!["ripgrep".to_string()]);
     }
 }

@@ -53,6 +53,7 @@ fn run() -> Result<ExitCode, UpkgError> {
             dry_run,
             kind,
         } => upgrade(&packages, dry_run, kind),
+        CommandKind::List => list(),
         CommandKind::Help => {
             println!("{}", Cli::help_text());
             Ok(ExitCode::SUCCESS)
@@ -125,6 +126,21 @@ fn upgrade(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<Exit
     #[cfg(not(target_os = "macos"))]
     {
         execute_spec(backend, spec)
+    }
+}
+
+fn list() -> Result<ExitCode, UpkgError> {
+    #[cfg(target_os = "macos")]
+    {
+        native::list_native()?;
+        Ok(ExitCode::SUCCESS)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(UpkgError::Unsupported(
+            "upkg list is not available on this platform yet",
+        ))
     }
 }
 

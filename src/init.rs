@@ -13,7 +13,12 @@ const PREFIX_MANAGED_DIRS: &[&str] = &[
 ];
 
 fn managed_dirs(root: &Path, prefix: &Path) -> Vec<PathBuf> {
-    let mut dirs = vec![root.join("store"), root.join("cache"), root.join("locks")];
+    let mut dirs = vec![
+        root.join("store"),
+        root.join("cache"),
+        root.join("locks"),
+        root.join("db"),
+    ];
     dirs.extend(PREFIX_MANAGED_DIRS.iter().map(|dir| prefix.join(dir)));
     dirs
 }
@@ -453,6 +458,20 @@ mod tests {
         }
 
         assert!(!needs_init(&root, &prefix));
+    }
+
+    #[test]
+    fn needs_init_when_db_dir_missing() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("root");
+        let prefix = tmp.path().join("prefix");
+
+        for dir in managed_dirs(&root, &prefix) {
+            fs::create_dir_all(dir).unwrap();
+        }
+        fs::remove_dir(root.join("db")).unwrap();
+
+        assert!(needs_init(&root, &prefix));
     }
 
     #[test]

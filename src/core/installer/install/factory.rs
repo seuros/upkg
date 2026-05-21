@@ -5,6 +5,8 @@ use crate::core::cellar::materialize::Cellar;
 use crate::core::network::api::ApiClient;
 use crate::core::network::download::ParallelDownloader;
 use crate::core::storage::blob::BlobCache;
+use crate::core::storage::receipt::scan_installed;
+use crate::core::storage::state_db::{InstalledPackage, InstalledPackageKind, StateDb};
 use crate::core::storage::store::Store;
 use crate::types::Error;
 
@@ -44,6 +46,8 @@ pub fn create_installer(
     let store = Store::new(root).map_err(|e| Error::StoreCorruption {
         message: format!("failed to create store: {e}"),
     })?;
+    let state_db = StateDb::open(&root.join("db").join("upkg.sqlite3"))?;
+    backfill_state_db_if_empty(&state_db, prefix)?;
     let cellar = Cellar::new_at(prefix.join("Cellar")).map_err(|e| Error::StoreCorruption {
         message: format!("failed to create cellar: {e}"),
     })?;
@@ -58,6 +62,99 @@ pub fn create_installer(
         store,
         cellar,
         linker,
+        state_db,
         prefix: prefix.to_path_buf(),
     })
+}
+
+fn backfill_state_db_if_empty(state_db: &StateDb, prefix: &Path) -> Result<(), Error> {
+    if state_db.has_installed_packages()? {
+        return Ok(());
+    }
+
+    let installed_at = current_timestamp();
+    for keg in scan_installed(&prefix.join("Cellar"))? {
+        state_db.record_installed(&InstalledPackage {
+            kind: if keg.name.starts_with("cask:") {
+                InstalledPackageKind::App
+            } else {
+                InstalledPackageKind::Formula
+            },
+            name: keg.name.clone(),
+            formula_name: keg.name,
+            version: keg.version,
+            store_key: keg.store_key,
+            installed_at,
+        })?;
+    }
+
+    for (token, version) in scan_caskroom(prefix)? {
+        state_db.record_installed(&InstalledPackage {
+            name: format!("cask:{token}"),
+            formula_name: format!("cask:{token}"),
+            version,
+            store_key: String::new(),
+            kind: InstalledPackageKind::App,
+            installed_at,
+        })?;
+    }
+
+    Ok(())
+}
+
+fn scan_caskroom(prefix: &Path) -> Result<Vec<(String, String)>, Error> {
+    let caskroom = prefix.join("Caskroom");
+    if !caskroom.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&caskroom).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to read Caskroom '{}': {e}", caskroom.display()),
+    })? {
+        let path = match entry {
+            Ok(entry) => entry.path(),
+            Err(_) => continue,
+        };
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(token) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(version) = latest_cask_version(&path)? else {
+            continue;
+        };
+        out.push((token.to_string(), version));
+    }
+
+    Ok(out)
+}
+
+fn latest_cask_version(cask_path: &Path) -> Result<Option<String>, Error> {
+    let mut versions = Vec::new();
+    for entry in std::fs::read_dir(cask_path).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to read cask path '{}': {e}", cask_path.display()),
+    })? {
+        let path = match entry {
+            Ok(entry) => entry.path(),
+            Err(_) => continue,
+        };
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name == ".metadata" || !path.is_dir() {
+            continue;
+        }
+        versions.push(name.to_string());
+    }
+    versions.sort();
+    Ok(versions.pop())
+}
+
+fn current_timestamp() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }

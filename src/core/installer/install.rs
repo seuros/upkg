@@ -29,6 +29,7 @@ use crate::core::storage::blob::BlobCache;
 use crate::core::storage::receipt::{
     InstallReceipt, InstalledKeg, find_installed, scan_installed, write_receipt,
 };
+use crate::core::storage::state_db::{InstalledPackage, InstalledPackageKind, StateDb};
 use crate::core::storage::store::Store;
 
 use crate::types::{Error, Formula, InstallMethod, formula_token};
@@ -41,6 +42,7 @@ pub struct Installer {
     store: Store,
     cellar: Cellar,
     linker: Linker,
+    state_db: StateDb,
     prefix: std::path::PathBuf,
 }
 
@@ -85,7 +87,23 @@ impl Installer {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0),
         };
-        write_receipt(keg_path, &receipt)
+        write_receipt(keg_path, &receipt)?;
+        self.record_installed_package(&receipt)
+    }
+
+    fn record_installed_package(&self, receipt: &InstallReceipt) -> Result<(), Error> {
+        self.state_db.record_installed(&InstalledPackage {
+            name: receipt.install_name.clone(),
+            formula_name: receipt.formula_name.clone(),
+            version: receipt.version.clone(),
+            store_key: receipt.store_key.clone(),
+            kind: if receipt.install_name.starts_with("cask:") {
+                InstalledPackageKind::App
+            } else {
+                InstalledPackageKind::Formula
+            },
+            installed_at: receipt.installed_at,
+        })
     }
 
     #[cfg(test)]
@@ -103,6 +121,7 @@ impl Installer {
             store,
             cellar,
             linker,
+            state_db: StateDb::in_memory().expect("test state db"),
             prefix,
         }
     }
@@ -159,6 +178,7 @@ impl Installer {
         self.linker.unlink_keg(&keg_path)?;
 
         self.cellar.remove_keg(keg_name, &installed.version)?;
+        self.state_db.remove_installed(&installed.name)?;
 
         Ok(())
     }
@@ -208,6 +228,7 @@ impl Installer {
                 caskroom_path.display()
             ),
         })?;
+        self.state_db.remove_installed(&format!("cask:{token}"))?;
 
         Ok(())
     }
@@ -265,7 +286,16 @@ impl Installer {
     }
 
     pub fn list_installed(&self) -> Result<Vec<InstalledKeg>, Error> {
-        scan_installed(self.cellar.root_dir())
+        self.state_db.list_installed().map(|packages| {
+            packages
+                .into_iter()
+                .map(|package| InstalledKeg {
+                    name: package.name,
+                    version: package.version,
+                    store_key: package.store_key,
+                })
+                .collect()
+        })
     }
 
     async fn install_single_cask(&mut self, token: &str, link: bool) -> Result<(), Error> {
@@ -337,6 +367,16 @@ impl Installer {
         })?;
 
         write_brew_cask_metadata(&caskroom_path, cask, cask_json)?;
+        self.record_installed_package(&InstallReceipt {
+            install_name: cask.install_name.clone(),
+            formula_name: cask.install_name.clone(),
+            version: cask.version.clone(),
+            store_key: cask.sha256.clone(),
+            installed_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+        })?;
         Ok(())
     }
 }

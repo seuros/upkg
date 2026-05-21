@@ -28,6 +28,7 @@ pub enum CommandKind {
         dry_run: bool,
         kind: PackageKind,
     },
+    List,
     Help,
     Version,
     SelfUpgrade {
@@ -46,6 +47,7 @@ impl Cli {
             "install" | "i" => Self::parse_install(values),
             "uninstall" | "remove" | "rm" => Self::parse_uninstall(values),
             "upgrade" | "update" => Self::parse_upgrade(values),
+            "list" | "ls" => Self::parse_list(values),
             "--self-upgrade" | "self-upgrade" => Self::parse_self_upgrade(values),
             "help" | "--help" | "-h" => Ok(Self {
                 command: CommandKind::Help,
@@ -146,8 +148,18 @@ impl Cli {
         })
     }
 
+    fn parse_list(values: Vec<String>) -> Result<Self, UpkgError> {
+        if values.len() != 1 {
+            return Err(UpkgError::Usage("list does not accept arguments yet"));
+        }
+
+        Ok(Self {
+            command: CommandKind::List,
+        })
+    }
+
     pub fn help_text() -> &'static str {
-        "upkg - unified package manager frontend\n\nUSAGE:\n  upkg install [--app] [--dry-run] <package> [package...]\n  upkg uninstall [--app] [--dry-run] <package> [package...]\n  upkg upgrade [--app] [--dry-run] [package...]\n  upkg --self-upgrade [--dry-run]\n  upkg --version\n\nEXAMPLES:\n  upkg install curl git\n  upkg install --app ghostty\n  upkg uninstall jq\n  upkg upgrade\n  upkg upgrade --dry-run neovim\n  upkg --self-upgrade\n"
+        "upkg - unified package manager frontend\n\nUSAGE:\n  upkg install [--app] [--dry-run] <package> [package...]\n  upkg uninstall [--app] [--dry-run] <package> [package...]\n  upkg upgrade [--app] [--dry-run] [package...]\n  upkg list\n  upkg --self-upgrade [--dry-run]\n  upkg --version\n\nEXAMPLES:\n  upkg install curl git\n  upkg install --app ghostty\n  upkg uninstall jq\n  upkg upgrade\n  upkg upgrade --dry-run neovim\n  upkg list\n  upkg --self-upgrade\n"
     }
 }
 
@@ -238,6 +250,14 @@ mod tests {
             }
             _ => panic!("unexpected command"),
         }
+    }
+
+    #[test]
+    fn parse_list() {
+        let cli =
+            Cli::parse(["list"].into_iter().map(str::to_string)).expect("parse should succeed");
+
+        assert!(matches!(cli.command, CommandKind::List));
     }
 
     #[test]
