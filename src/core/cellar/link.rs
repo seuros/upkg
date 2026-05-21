@@ -35,6 +35,17 @@ fn keg_name_from_symlink(dst: &Path) -> Option<String> {
     keg_name_from_path(&canonical)
 }
 
+fn same_cellar_formula(left: &Path, right: &Path) -> bool {
+    let left_name = fs::canonicalize(left)
+        .ok()
+        .and_then(|path| keg_name_from_path(&path));
+    let right_name = fs::canonicalize(right)
+        .ok()
+        .and_then(|path| keg_name_from_path(&path));
+
+    left_name.is_some() && left_name == right_name
+}
+
 impl Linker {
     pub fn new(prefix: &Path) -> io::Result<Self> {
         let bin_dir = prefix.join("bin");
@@ -106,6 +117,9 @@ impl Linker {
                     if fs::canonicalize(&resolved).ok() == fs::canonicalize(&src_path).ok() {
                         continue;
                     }
+                    if same_cellar_formula(&resolved, &src_path) {
+                        continue;
+                    }
                 }
                 conflicts.push(ConflictedLink {
                     path: dst_path.clone(),
@@ -146,6 +160,7 @@ impl Linker {
 
             if matching_old.exists()
                 && fs::canonicalize(&matching_old).ok() != fs::canonicalize(&src_path).ok()
+                && !same_cellar_formula(&matching_old, &src_path)
             {
                 conflicts.push(ConflictedLink {
                     path: dst_path,
@@ -210,6 +225,8 @@ impl Linker {
                         } else {
                             let _ = fs::remove_file(&dst_path);
                         }
+                    } else if same_cellar_formula(&resolved, &src_path) {
+                        let _ = fs::remove_file(&dst_path);
                     } else {
                         return Err(Error::LinkConflict {
                             conflicts: vec![ConflictedLink {
@@ -364,6 +381,25 @@ mod tests {
         keg_path
     }
 
+    fn setup_versioned_keg(prefix: &Path, name: &str, version: &str) -> PathBuf {
+        let keg_path = prefix.join("Cellar").join(name).join(version);
+        let bin_dir = keg_path.join("bin");
+        let include_dir = keg_path.join("include").join(name);
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::create_dir_all(&include_dir).unwrap();
+
+        let exe = bin_dir.join(name);
+        fs::write(&exe, format!("#!/bin/sh\necho {name}-{version}")).unwrap();
+        fs::set_permissions(&exe, PermissionsExt::from_mode(0o755)).unwrap();
+        fs::write(
+            include_dir.join("signature.h"),
+            format!("/* {name} {version} */"),
+        )
+        .unwrap();
+
+        keg_path
+    }
+
     #[test]
     fn links_executables_to_bin() {
         let tmp = TempDir::new().unwrap();
@@ -485,6 +521,31 @@ mod tests {
         assert!(linker.link_keg(&keg2).is_err());
         assert!(!prefix.join("bin/beta-only").exists());
         assert!(!prefix.join("opt/beta").exists());
+    }
+
+    #[test]
+    fn link_keg_replaces_links_owned_by_previous_version_of_same_formula() {
+        let tmp = TempDir::new().unwrap();
+        let prefix = tmp.path();
+        let linker = Linker::new(prefix).unwrap();
+
+        let old_keg = setup_versioned_keg(prefix, "libgit2", "1.8.4");
+        let new_keg = setup_versioned_keg(prefix, "libgit2", "1.9.3");
+
+        linker.link_keg(&old_keg).unwrap();
+        linker.link_keg(&new_keg).unwrap();
+
+        let bin_target = fs::canonicalize(prefix.join("bin/libgit2")).unwrap();
+        assert_eq!(
+            bin_target,
+            fs::canonicalize(new_keg.join("bin/libgit2")).unwrap()
+        );
+
+        let header_target = fs::canonicalize(prefix.join("include/libgit2/signature.h")).unwrap();
+        assert_eq!(
+            header_target,
+            fs::canonicalize(new_keg.join("include/libgit2/signature.h")).unwrap()
+        );
     }
 
     #[test]
