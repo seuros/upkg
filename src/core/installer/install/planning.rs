@@ -109,10 +109,10 @@ impl Installer {
             .max_attempts(4);
 
         let mut last_err = None;
-        for attempt in 0..backoff.max_attempts() {
+        for attempt in 0..backoff.max_attempts {
             match self.api_client.get_formula(name).await {
                 Ok(f) => return Ok(f),
-                Err(Error::NetworkFailure { .. }) if attempt + 1 < backoff.max_attempts() => {
+                Err(Error::NetworkFailure { .. }) if attempt + 1 < backoff.max_attempts => {
                     let delay_ms = {
                         let mut rng = rand::rng();
                         backoff.delay(attempt + 1, &mut rng).unwrap_or(1_000)
@@ -120,7 +120,7 @@ impl Installer {
                     eprintln!(
                         "    Network error fetching {name}, retrying in {delay_ms}ms (attempt {}/{})",
                         attempt + 1,
-                        backoff.max_attempts()
+                        backoff.max_attempts
                     );
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     last_err = None;
