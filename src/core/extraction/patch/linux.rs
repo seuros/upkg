@@ -1,10 +1,9 @@
 use std::fs;
 use std::io::Read;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::core::extraction::patch::utils::{WritablePath, replace_with_temp};
 use crate::types::Error;
 use rayon::prelude::*;
 
@@ -153,13 +152,9 @@ fn patch_elf_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Erro
             Ok(m) => m,
             Err(_) => return,
         };
-        let original_mode = metadata.permissions().mode();
-        let is_readonly = original_mode & 0o200 == 0;
-
-        if is_readonly {
-            let mut perms = metadata.permissions();
-            perms.set_mode(original_mode | 0o200);
-            if let Err(e) = fs::set_permissions(path, perms) {
+        let writable = match WritablePath::from_metadata(path, &metadata) {
+            Ok(writable) => writable,
+            Err(e) => {
                 eprintln!(
                     "Warning: Failed to make file writable: {}: {}",
                     path.display(),
@@ -168,7 +163,7 @@ fn patch_elf_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Erro
                 patch_failures.fetch_add(1, Ordering::Relaxed);
                 return;
             }
-        }
+        };
 
         let result = (|| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let content = fs::read(path)?;
@@ -232,16 +227,8 @@ fn patch_elf_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Erro
                 }
             }
 
-            let temp_path = path.with_extension("tmp_patch");
-            {
-                let mut temp_file = fs::File::create(&temp_path)?;
-                elf.write(&mut temp_file)?;
-            }
-            fs::rename(temp_path, path)?;
-
-            let mut perms = metadata.permissions();
-            perms.set_mode(original_mode);
-            fs::set_permissions(path, perms)?;
+            replace_with_temp(path, |temp_file| elf.write(temp_file))?;
+            fs::set_permissions(path, writable.original_permissions())?;
 
             Ok(())
         })();
@@ -302,23 +289,9 @@ fn patch_text_placeholders(keg_path: &Path, prefix_dir: &Path) -> Result<(), Err
                 .replace("@@HOMEBREW_PERL@@", "/usr/bin/perl")
                 .replace("@@HOMEBREW_JAVA@@", "/usr/bin/java");
 
-            let metadata = fs::metadata(path)?;
-            let original_mode = metadata.permissions().mode();
-            let is_readonly = original_mode & 0o200 == 0;
-
-            if is_readonly {
-                let mut perms = metadata.permissions();
-                perms.set_mode(original_mode | 0o200);
-                fs::set_permissions(path, perms)?;
-            }
+            let _writable = WritablePath::new(path)?;
 
             fs::write(path, new_content)?;
-
-            if is_readonly {
-                let mut perms = metadata.permissions();
-                perms.set_mode(original_mode);
-                fs::set_permissions(path, perms)?;
-            }
 
             Ok(())
         })();

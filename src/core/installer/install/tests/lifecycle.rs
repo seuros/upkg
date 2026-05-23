@@ -46,23 +46,11 @@ async fn install_completes_successfully() {
         .mount(&mock_server)
         .await;
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client = ApiClient::with_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let mut installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.clone(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let mut installer = ctx.installer;
 
     installer
         .install(&["testpkg".to_string()], true)
@@ -124,23 +112,11 @@ async fn uninstall_cleans_everything() {
         .mount(&mock_server)
         .await;
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client = ApiClient::with_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let mut installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.clone(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let mut installer = ctx.installer;
 
     installer
         .install(&["uninstallme".to_string()], true)
@@ -201,23 +177,11 @@ async fn gc_removes_unreferenced_store_entries() {
         .mount(&mock_server)
         .await;
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client = ApiClient::with_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let mut installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.clone(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let mut installer = ctx.installer;
 
     installer
         .install(&["gctest".to_string()], true)
@@ -281,23 +245,11 @@ async fn gc_does_not_remove_referenced_store_entries() {
         .mount(&mock_server)
         .await;
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client = ApiClient::with_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let mut installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.clone(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let mut installer = ctx.installer;
 
     installer
         .install(&["keepme".to_string()], true)

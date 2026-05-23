@@ -1,3 +1,4 @@
+use crate::core::extraction::patch::utils::{WritablePath, replace_with_temp};
 use crate::types::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,8 +11,6 @@ const HOMEBREW_PREFIXES: &[&str] = &[
 ];
 
 fn patch_text_file_strings(path: &Path, new_prefix: &str, new_cellar: &str) -> Result<(), Error> {
-    use std::os::unix::fs::PermissionsExt;
-
     let mut file = match fs::File::open(path) {
         Ok(f) => f,
         Err(_) => return Ok(()),
@@ -70,52 +69,27 @@ fn patch_text_file_strings(path: &Path, new_prefix: &str, new_cellar: &str) -> R
         return Ok(());
     }
 
-    let metadata = fs::metadata(path).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to read metadata: {e}"),
+    let _writable = WritablePath::new(path).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to make writable: {e}"),
     })?;
-    let original_mode = metadata.permissions().mode();
-    let is_readonly = original_mode & 0o200 == 0;
-
-    if is_readonly {
-        let mut perms = metadata.permissions();
-        perms.set_mode(original_mode | 0o200);
-        fs::set_permissions(path, perms).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to make writable: {e}"),
-        })?;
-    }
 
     fs::write(path, new_content).map_err(|e| Error::StoreCorruption {
         message: format!("failed to write file: {e}"),
     })?;
-
-    if is_readonly {
-        let mut perms = metadata.permissions();
-        perms.set_mode(original_mode);
-        fs::set_permissions(path, perms).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to restore permissions: {e}"),
-        })?;
-    }
 
     Ok(())
 }
 
 fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error> {
     use std::io::{Read as _, Write as _};
-    use std::os::unix::fs::PermissionsExt;
 
     let metadata = fs::metadata(path).map_err(|e| Error::StoreCorruption {
         message: format!("failed to read metadata: {e}"),
     })?;
-    let original_mode = metadata.permissions().mode();
-    let is_readonly = original_mode & 0o200 == 0;
-
-    if is_readonly {
-        let mut perms = metadata.permissions();
-        perms.set_mode(original_mode | 0o200);
-        fs::set_permissions(path, perms).map_err(|e| Error::StoreCorruption {
+    let writable =
+        WritablePath::from_metadata(path, &metadata).map_err(|e| Error::StoreCorruption {
             message: format!("failed to make writable: {e}"),
         })?;
-    }
 
     let mut file = fs::File::open(path).map_err(|e| Error::StoreCorruption {
         message: format!("failed to open file: {e}"),
@@ -159,23 +133,16 @@ fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error
     }
 
     if patched && contents != original_contents {
-        let temp_path = path.with_extension("tmp_patch");
-        let mut temp_file = fs::File::create(&temp_path).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to create temp file: {e}"),
-        })?;
-        temp_file
-            .write_all(&contents)
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to write temp file: {e}"),
-            })?;
-        drop(temp_file);
-
-        fs::rename(&temp_path, path).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to rename temp file: {e}"),
+        replace_with_temp(path, |temp_file| temp_file.write_all(&contents)).map_err(|e| {
+            Error::StoreCorruption {
+                message: format!("failed to replace patched file: {e}"),
+            }
         })?;
 
-        fs::set_permissions(path, metadata.permissions()).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to restore permissions after patching: {e}"),
+        fs::set_permissions(path, writable.original_permissions()).map_err(|e| {
+            Error::StoreCorruption {
+                message: format!("failed to restore permissions after patching: {e}"),
+            }
         })?;
 
         match std::process::Command::new("codesign")
@@ -200,12 +167,6 @@ fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error
         }
     }
 
-    if is_readonly {
-        let mut perms = metadata.permissions();
-        perms.set_mode(original_mode);
-        let _ = fs::set_permissions(path, perms);
-    }
-
     Ok(())
 }
 
@@ -217,7 +178,6 @@ pub fn patch_homebrew_placeholders(
 ) -> Result<(), Error> {
     use rayon::prelude::*;
     use regex::Regex;
-    use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -323,17 +283,13 @@ pub fn patch_homebrew_placeholders(
             Ok(m) => m,
             Err(_) => return,
         };
-        let original_mode = metadata.permissions().mode();
-        let is_readonly = original_mode & 0o200 == 0;
-
-        if is_readonly {
-            let mut perms = metadata.permissions();
-            perms.set_mode(original_mode | 0o200);
-            if fs::set_permissions(path, perms).is_err() {
+        let _writable = match WritablePath::from_metadata(path, &metadata) {
+            Ok(writable) => writable,
+            Err(_) => {
                 patch_failures.fetch_add(1, Ordering::Relaxed);
                 return;
             }
-        }
+        };
 
         let mut patched_any = false;
 
@@ -389,12 +345,6 @@ pub fn patch_homebrew_placeholders(
                 .args(["--force", "--sign", "-", &path.to_string_lossy()])
                 .output();
         }
-
-        if is_readonly {
-            let mut perms = metadata.permissions();
-            perms.set_mode(original_mode);
-            let _ = fs::set_permissions(path, perms);
-        }
     });
 
     let failures = patch_failures.load(Ordering::Relaxed);
@@ -413,7 +363,6 @@ pub fn patch_homebrew_placeholders(
 
 pub fn codesign_and_strip_xattrs(keg_path: &Path) -> Result<(), Error> {
     use rayon::prelude::*;
-    use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
 
     let _ = Command::new("xattr")
@@ -464,24 +413,11 @@ pub fn codesign_and_strip_xattrs(keg_path: &Path) -> Result<(), Error> {
             Ok(m) => m,
             Err(_) => return,
         };
-        let original_mode = metadata.permissions().mode();
-        let is_readonly = original_mode & 0o200 == 0;
-
-        if is_readonly {
-            let mut perms = metadata.permissions();
-            perms.set_mode(original_mode | 0o200);
-            let _ = fs::set_permissions(path, perms);
-        }
+        let _writable = WritablePath::from_metadata(path, &metadata).ok();
 
         let _ = Command::new("codesign")
             .args(["--force", "--sign", "-", &path.to_string_lossy()])
             .output();
-
-        if is_readonly {
-            let mut perms = metadata.permissions();
-            perms.set_mode(original_mode);
-            let _ = fs::set_permissions(path, perms);
-        }
     });
 
     Ok(())

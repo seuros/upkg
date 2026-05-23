@@ -137,14 +137,8 @@ fn current_macos_variation_key() -> String {
 
 fn parse_binary_artifacts(cask: &Value) -> Result<Vec<CaskBinary>, Error> {
     let mut binaries = Vec::new();
-    let artifacts = cask
-        .get("artifacts")
-        .and_then(Value::as_array)
-        .ok_or_else(|| Error::InvalidArgument {
-            message: "failed to parse cask JSON: missing artifacts array".to_string(),
-        })?;
 
-    for artifact in artifacts {
+    for artifact in artifacts(cask)? {
         let Some(entries) = artifact.get("binary").and_then(Value::as_array) else {
             continue;
         };
@@ -160,14 +154,8 @@ fn parse_binary_artifacts(cask: &Value) -> Result<Vec<CaskBinary>, Error> {
 
 fn parse_app_artifacts(cask: &Value) -> Result<Vec<CaskApp>, Error> {
     let mut apps = Vec::new();
-    let artifacts = cask
-        .get("artifacts")
-        .and_then(Value::as_array)
-        .ok_or_else(|| Error::InvalidArgument {
-            message: "failed to parse cask JSON: missing artifacts array".to_string(),
-        })?;
 
-    for artifact in artifacts {
+    for artifact in artifacts(cask)? {
         let Some(entries) = artifact.get("app").and_then(Value::as_array) else {
             continue;
         };
@@ -183,14 +171,8 @@ fn parse_app_artifacts(cask: &Value) -> Result<Vec<CaskApp>, Error> {
 
 fn parse_linked_artifacts(cask: &Value) -> Result<Vec<CaskLinkedArtifact>, Error> {
     let mut linked_artifacts = Vec::new();
-    let artifacts = cask
-        .get("artifacts")
-        .and_then(Value::as_array)
-        .ok_or_else(|| Error::InvalidArgument {
-            message: "failed to parse cask JSON: missing artifacts array".to_string(),
-        })?;
 
-    for artifact in artifacts {
+    for artifact in artifacts(cask)? {
         linked_artifacts.extend(parse_linked_artifact_entries(
             artifact,
             "manpage",
@@ -220,6 +202,14 @@ fn parse_linked_artifacts(cask: &Value) -> Result<Vec<CaskLinkedArtifact>, Error
     Ok(linked_artifacts)
 }
 
+fn artifacts(cask: &Value) -> Result<&Vec<Value>, Error> {
+    cask.get("artifacts")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::InvalidArgument {
+            message: "failed to parse cask JSON: missing artifacts array".to_string(),
+        })
+}
+
 fn parse_linked_artifact_entries(
     artifact: &Value,
     key: &str,
@@ -245,60 +235,42 @@ fn parse_linked_artifact_entries(
 }
 
 fn parse_binary_entry(entry: &Value) -> Result<(String, String), Error> {
-    if let Some(path) = entry.as_str() {
-        return Ok((path.to_string(), basename(path)?));
-    }
-
-    let array = entry.as_array().ok_or_else(|| Error::InvalidArgument {
-        message: "unsupported cask binary artifact shape".to_string(),
-    })?;
-    let source = array
-        .first()
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::InvalidArgument {
-            message: "unsupported cask binary source".to_string(),
-        })?;
-
-    let target = array
-        .get(1)
-        .and_then(Value::as_object)
-        .and_then(|obj| obj.get("target"))
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .unwrap_or_else(|| basename(source).unwrap_or_else(|_| source.to_string()));
-
-    if target.contains('/') || target.contains('$') || target.contains('~') {
-        return Err(Error::InvalidArgument {
-            message: format!("unsupported cask binary target path '{target}'"),
-        });
-    }
-
+    let (source, target) = parse_artifact_entry(entry, "binary")?;
+    let target = target.unwrap_or_else(|| basename(source).unwrap_or_else(|_| source.to_string()));
     Ok((source.to_string(), target))
 }
 
 fn parse_symlink_entry(entry: &Value) -> Result<(String, Option<String>), Error> {
+    let (source, target) = parse_artifact_entry(entry, "symlink")?;
+    Ok((source.to_string(), target))
+}
+
+fn parse_artifact_entry<'a>(
+    entry: &'a Value,
+    artifact_kind: &str,
+) -> Result<(&'a str, Option<String>), Error> {
     if let Some(path) = entry.as_str() {
-        return Ok((path.to_string(), None));
+        return Ok((path, None));
     }
 
     let array = entry.as_array().ok_or_else(|| Error::InvalidArgument {
-        message: "unsupported cask symlink artifact shape".to_string(),
+        message: format!("unsupported cask {artifact_kind} artifact shape"),
     })?;
     let source = array
         .first()
         .and_then(Value::as_str)
         .ok_or_else(|| Error::InvalidArgument {
-            message: "unsupported cask symlink source".to_string(),
+            message: format!("unsupported cask {artifact_kind} source"),
         })?;
     let target = array
         .get(1)
         .and_then(Value::as_object)
         .and_then(|obj| obj.get("target"))
         .and_then(Value::as_str)
-        .map(validate_relative_target)
+        .map(|target| validate_relative_target(target, artifact_kind))
         .transpose()?;
 
-    Ok((source.to_string(), target))
+    Ok((source, target))
 }
 
 fn manpage_target(source: &str, target: Option<&str>) -> Result<String, Error> {
@@ -366,10 +338,10 @@ fn completion_stem(path: &str) -> String {
         .unwrap_or(name)
 }
 
-fn validate_relative_target(target: &str) -> Result<String, Error> {
+fn validate_relative_target(target: &str, artifact_kind: &str) -> Result<String, Error> {
     if target.contains('/') || target.contains('$') || target.contains('~') {
         return Err(Error::InvalidArgument {
-            message: format!("unsupported cask symlink target path '{target}'"),
+            message: format!("unsupported cask {artifact_kind} target path '{target}'"),
         });
     }
 

@@ -83,23 +83,11 @@ async fn install_with_dependencies() {
         .mount(&mock_server)
         .await;
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client = ApiClient::with_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let mut installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.clone(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let mut installer = ctx.installer;
 
     installer
         .install(&["mainpkg".to_string()], true)
@@ -168,24 +156,12 @@ end
         .mount(&mock_server)
         .await;
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client =
         ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.to_path_buf(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let installer = ctx.installer;
     let plan = installer
         .plan(&["hashicorp/tap/terraform".to_string()])
         .await
@@ -238,24 +214,12 @@ end
         .mount(&mock_server)
         .await;
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client =
         ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let mut installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.to_path_buf(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let mut installer = ctx.installer;
 
     installer
         .install(&["hashicorp/tap/terraform".to_string()], true)
@@ -315,23 +279,11 @@ async fn uninstalling_non_installed_tap_ref_does_not_remove_core_formula() {
         .mount(&mock_server)
         .await;
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client = ApiClient::with_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let mut installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.to_path_buf(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let mut installer = ctx.installer;
     installer
         .install(&["terraform".to_string()], true)
         .await

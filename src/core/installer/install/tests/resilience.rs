@@ -87,23 +87,11 @@ async fn preserves_successful_installs_when_one_package_fails() {
         .mount(&mock_server)
         .await;
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client = ApiClient::with_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let mut installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.clone(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let mut installer = ctx.installer;
 
     let result = installer
         .install(&["goodpkg".to_string(), "badpkg".to_string()], false)
@@ -190,23 +178,11 @@ async fn parallel_api_fetching_with_deep_deps() {
             .await;
     }
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client = ApiClient::with_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let mut installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.clone(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let mut installer = ctx.installer;
 
     installer
         .install(&["root".to_string()], true)
@@ -275,23 +251,11 @@ async fn streaming_extraction_processes_as_downloads_complete() {
         .mount(&mock_server)
         .await;
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client = ApiClient::with_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let mut installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.clone(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let mut installer = ctx.installer;
 
     installer
         .install(&["slowpkg".to_string()], true)
@@ -363,23 +327,11 @@ async fn retries_on_corrupted_download() {
         .mount(&mock_server)
         .await;
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client = ApiClient::with_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let mut installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.clone(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let mut installer = ctx.installer;
 
     installer
         .install(&["retrypkg".to_string()], true)

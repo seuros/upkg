@@ -5,12 +5,8 @@ use tokio::fs;
 
 use crate::core::checksum::verify_sha256_bytes;
 use crate::core::extraction::extract::extract_tarball;
-use rama::http::{
-    Response, body::util::BodyExt, client::EasyHttpWebClient, header::LOCATION,
-    service::client::HttpClientExt,
-};
-
-const MAX_REDIRECTS: usize = 10;
+use crate::http_client::{self, RamaClient, RedirectError, RedirectHeaders};
+use rama::http::{Response, body::util::BodyExt};
 
 pub async fn download_and_extract_source(
     url: &str,
@@ -72,7 +68,8 @@ fn source_filename(url: &str) -> Result<String, Error> {
 }
 
 async fn download_source(url: &str, dest: &Path) -> Result<(), Error> {
-    let response = send_get_with_redirects(url).await?;
+    let client = http_client::build_rama_client();
+    let response = send_get_with_redirects(&client, url).await?;
 
     let status = response.status();
     if !status.is_success() {
@@ -95,55 +92,33 @@ async fn download_source(url: &str, dest: &Path) -> Result<(), Error> {
     })
 }
 
-async fn send_get_with_redirects(url: &str) -> Result<Response, Error> {
-    let client = EasyHttpWebClient::default();
-    let mut current_url = url.to_string();
-    let mut redirects = 0usize;
-
-    loop {
-        let response =
-            client
-                .get(&current_url)
-                .send()
-                .await
-                .map_err(|e| Error::NetworkFailure {
-                    message: format!("failed to download source: {e}"),
-                })?;
-
-        if !response.status().is_redirection() {
-            return Ok(response);
-        }
-
-        let location = response
-            .headers()
-            .get(LOCATION)
-            .ok_or_else(|| Error::NetworkFailure {
-                message: format!("redirect ({}) without Location header", response.status()),
-            })?
-            .to_str()
-            .map_err(|_| Error::NetworkFailure {
-                message: "redirect Location header contains invalid characters".to_string(),
-            })?;
-
-        redirects += 1;
-        if redirects > MAX_REDIRECTS {
-            return Err(Error::NetworkFailure {
-                message: format!("too many redirects while fetching {url}"),
-            });
-        }
-
-        current_url = resolve_redirect_url(&current_url, location)?;
-    }
+async fn send_get_with_redirects(client: &RamaClient, url: &str) -> Result<Response, Error> {
+    http_client::send_get_with_redirects(client, url, RedirectHeaders::default())
+        .await
+        .map_err(map_redirect_error)
 }
 
-fn resolve_redirect_url(current_url: &str, location: &str) -> Result<String, Error> {
-    let base = url::Url::parse(current_url).map_err(|e| Error::NetworkFailure {
-        message: format!("invalid redirect base URL '{current_url}': {e}"),
-    })?;
-    let next = base.join(location).map_err(|e| Error::NetworkFailure {
-        message: format!("invalid redirect location '{location}': {e}"),
-    })?;
-    Ok(next.into())
+fn map_redirect_error(error: RedirectError) -> Error {
+    let message = match error {
+        RedirectError::Request(message) => format!("failed to download source: {message}"),
+        RedirectError::MissingLocation(status) => {
+            format!("redirect ({status}) without Location header")
+        }
+        RedirectError::InvalidLocationHeader => {
+            "redirect Location header contains invalid characters".to_string()
+        }
+        RedirectError::TooManyRedirects { url } => {
+            format!("too many redirects while fetching {url}")
+        }
+        RedirectError::InvalidBaseUrl { url, source } => {
+            format!("invalid redirect base URL '{url}': {source}")
+        }
+        RedirectError::InvalidLocation { location, source } => {
+            format!("invalid redirect location '{location}': {source}")
+        }
+    };
+
+    Error::NetworkFailure { message }
 }
 
 async fn verify_checksum(path: &Path, expected: Option<&str>, url: &str) -> Result<(), Error> {

@@ -91,8 +91,9 @@ fn stage_cask_linked_artifacts_links_appdir_sources_into_prefix() {
 #[test]
 fn uninstall_cask_removes_app_and_caskroom() {
     let tmp = TempDir::new().unwrap();
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
+    let api_client = ApiClient::new();
+    let ctx = new_test_context(api_client, &tmp);
+    let prefix = ctx.prefix.clone();
     let caskroom_app = prefix.join("Caskroom/ghostty/1.3.1/Ghostty.app");
     let target_app = prefix.join("Applications/Ghostty.app");
     let manpage_source = target_app.join("Contents/Resources/man/man1/ghostty.1");
@@ -123,13 +124,7 @@ fn uninstall_cask_removes_app_and_caskroom() {
     )
     .unwrap();
 
-    let api_client = ApiClient::new();
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let mut installer = Installer::new(api_client, blob_cache, store, cellar, linker, prefix);
+    let mut installer = ctx.installer;
 
     installer.uninstall("cask:ghostty").unwrap();
 

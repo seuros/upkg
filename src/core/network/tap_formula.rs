@@ -2,9 +2,8 @@ use crate::types::formula::{
     Bottle, BottleFile, BottleStable, FormulaUrls, KegOnly, SourceUrl, Versions,
 };
 use crate::types::{Error, Formula};
-use regex::Regex;
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
+use tree_sitter::{Node, Parser, Tree};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TapFormulaRef {
@@ -12,52 +11,6 @@ pub struct TapFormulaRef {
     pub repo: String,
     pub formula: String,
 }
-
-static VERSION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?m)^\s*version\s+["']([^"']+)["']"#).expect("VERSION_RE must compile")
-});
-static URL_VERSION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"(?m)^\s*url\s+["'][^"']*(?:refs/tags|archive|download)/v?([0-9][0-9A-Za-z._+-]*)"#,
-    )
-    .expect("URL_VERSION_RE must compile")
-});
-static REVISION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?m)^\s*revision\s+(\d+)\s*$"#).expect("REVISION_RE must compile")
-});
-static DEPENDS_ON_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?m)^\s*depends_on\s+["']([^"']+)["'](.*)$"#).expect("DEPENDS_ON_RE must compile")
-});
-static SOURCE_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?m)^\s*url\s+["']([^"']+)["']"#).expect("SOURCE_URL_RE must compile")
-});
-static SOURCE_SHA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?m)^\s*sha256\s+["']([0-9a-f]{64})["']\s*$"#)
-        .expect("SOURCE_SHA_RE must compile")
-});
-static CLASS_START_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"^\s*class\s+\w+\s*<\s*Formula\b"#).expect("CLASS_START_RE must compile")
-});
-static BOTTLE_START_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"^\s*bottle\s+do\b"#).expect("BOTTLE_START_RE must compile"));
-static END_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"^\s*end\b"#).expect("END_RE must compile"));
-static DO_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"\bdo\b\s*(?:\|[^|]*\|\s*)?(?:#.*)?$"#).expect("DO_RE must compile")
-});
-static KEYWORD_START_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"^\s*(if|unless|case|begin|def|class|module|for|while|until)\b"#)
-        .expect("KEYWORD_START_RE must compile")
-});
-static ROOT_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"root_url\s+["']([^"']+)["']"#).expect("ROOT_URL_RE must compile")
-});
-static REBUILD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?m)^\s*rebuild\s+(\d+)\s*$"#).expect("REBUILD_RE must compile")
-});
-static BOTTLE_SHA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"([a-z0-9_]+):\s*"([0-9a-f]{64})""#).expect("BOTTLE_SHA_RE must compile")
-});
 
 pub fn parse_tap_formula_ref(input: &str) -> Option<TapFormulaRef> {
     let mut parts = input.split('/');
@@ -78,12 +31,15 @@ pub fn parse_tap_formula_ref(input: &str) -> Option<TapFormulaRef> {
 }
 
 pub fn parse_tap_formula_ruby(spec: &TapFormulaRef, source: &str) -> Result<Formula, Error> {
-    let stable = parse_version(source).unwrap_or_else(|| "0".to_string());
-    let revision = parse_revision(source).unwrap_or(0);
-    let dependencies = parse_runtime_dependencies(source);
-    let build_dependencies = parse_build_dependencies(source);
-    let parsed_source_url = parse_source_url(source);
-    let bottle = parse_bottle(spec, source, &stable, revision);
+    let parsed = ParsedTapFormula::parse(source)?;
+    let formula_body = parsed.formula_body();
+
+    let stable = parse_version(&parsed, formula_body).unwrap_or_else(|| "0".to_string());
+    let revision = parse_revision(&parsed, formula_body).unwrap_or(0);
+    let dependencies = parse_runtime_dependencies(&parsed, formula_body);
+    let build_dependencies = parse_build_dependencies(&parsed, formula_body);
+    let parsed_source_url = parse_source_url(&parsed, formula_body);
+    let bottle = parse_bottle(spec, &parsed, formula_body, &stable, revision);
 
     let source_url = match parsed_source_url {
         ParsedSourceUrl::PresentWithChecksum(source_url) => Some(source_url),
@@ -126,19 +82,72 @@ pub fn parse_tap_formula_ruby(spec: &TapFormulaRef, source: &str) -> Result<Form
     })
 }
 
-fn parse_version(source: &str) -> Option<String> {
-    if let Some(v) = VERSION_RE
-        .captures(source)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str().to_string())
-    {
-        return Some(v);
+#[derive(Debug)]
+struct ParsedTapFormula<'a> {
+    tree: Tree,
+    source: &'a str,
+}
+
+impl<'a> ParsedTapFormula<'a> {
+    fn parse(source: &'a str) -> Result<Self, Error> {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_ruby::LANGUAGE.into())
+            .map_err(|e| Error::ExecutionError {
+                message: format!("failed to load Ruby grammar: {e}"),
+            })?;
+
+        let tree = parser
+            .parse(source, None)
+            .ok_or_else(|| Error::ExecutionError {
+                message: "failed to parse Ruby formula".to_string(),
+            })?;
+
+        Ok(Self { tree, source })
     }
 
-    URL_VERSION_RE
-        .captures(source)
-        .and_then(|c| c.get(1))
-        .map(|m| normalize_inferred_version(m.as_str()))
+    fn source_bytes(&self) -> &'a [u8] {
+        self.source.as_bytes()
+    }
+
+    fn formula_body(&self) -> Option<Node<'_>> {
+        find_formula_class_body(self.tree.root_node(), self.source_bytes())
+    }
+}
+
+fn parse_version(parsed: &ParsedTapFormula<'_>, body: Option<Node<'_>>) -> Option<String> {
+    let body = body?;
+    let version = find_top_level_call(body, parsed.source_bytes(), "version")
+        .and_then(|call| first_string_argument(call, parsed.source_bytes()));
+    if version.is_some() {
+        return version;
+    }
+
+    find_top_level_call(body, parsed.source_bytes(), "url")
+        .and_then(|call| first_string_argument(call, parsed.source_bytes()))
+        .and_then(|url| infer_version_from_url(&url))
+}
+
+fn infer_version_from_url(url: &str) -> Option<String> {
+    for marker in ["refs/tags/", "archive/", "download/"] {
+        let Some(index) = url.find(marker) else {
+            continue;
+        };
+        let mut raw = &url[index + marker.len()..];
+        if raw.starts_with('v') && raw.as_bytes().get(1).is_some_and(u8::is_ascii_digit) {
+            raw = &raw[1..];
+        }
+        if !raw.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+            continue;
+        }
+
+        let end = raw
+            .find(|c: char| !c.is_ascii_alphanumeric() && !matches!(c, '.' | '_' | '+' | '-'))
+            .unwrap_or(raw.len());
+        return Some(normalize_inferred_version(&raw[..end]));
+    }
+
+    None
 }
 
 fn normalize_inferred_version(raw: &str) -> String {
@@ -152,32 +161,28 @@ fn normalize_inferred_version(raw: &str) -> String {
     v
 }
 
-fn parse_revision(source: &str) -> Option<u32> {
-    REVISION_RE
-        .captures(source)
-        .and_then(|c| c.get(1))
-        .and_then(|m| m.as_str().parse::<u32>().ok())
+fn parse_revision(parsed: &ParsedTapFormula<'_>, body: Option<Node<'_>>) -> Option<u32> {
+    find_top_level_call(body?, parsed.source_bytes(), "revision")
+        .and_then(|call| first_integer_argument(call, parsed.source_bytes()))
 }
 
-fn parse_runtime_dependencies(source: &str) -> Vec<String> {
+fn parse_runtime_dependencies(
+    parsed: &ParsedTapFormula<'_>,
+    body: Option<Node<'_>>,
+) -> Vec<String> {
     let mut deps = Vec::new();
-    let body = extract_formula_class_body(source).unwrap_or(source);
-    let mut depth = 0usize;
 
-    for line in body.lines() {
-        let trimmed = line.trim();
-        if depth == 0
-            && let Some(cap) = DEPENDS_ON_RE.captures(trimmed)
-        {
-            let options = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-            if !options.contains(":build")
-                && !options.contains(":test")
-                && let Some(dep) = cap.get(1)
-            {
-                deps.push(dep.as_str().to_string());
-            }
+    for call in top_level_calls(body, parsed.source_bytes()) {
+        if call_method(call, parsed.source_bytes()) != Some("depends_on") {
+            continue;
         }
-        update_depth(&mut depth, trimmed);
+        let Some(dep) = dependency_name(call, parsed.source_bytes()) else {
+            continue;
+        };
+        let tags = dependency_tags(call, parsed.source_bytes());
+        if !tags.iter().any(|tag| tag == "build" || tag == "test") {
+            deps.push(dep);
+        }
     }
 
     deps.sort_unstable();
@@ -185,24 +190,22 @@ fn parse_runtime_dependencies(source: &str) -> Vec<String> {
     deps
 }
 
-fn parse_build_dependencies(source: &str) -> Vec<String> {
+fn parse_build_dependencies(parsed: &ParsedTapFormula<'_>, body: Option<Node<'_>>) -> Vec<String> {
     let mut deps = Vec::new();
-    let body = extract_formula_class_body(source).unwrap_or(source);
-    let mut depth = 0usize;
 
-    for line in body.lines() {
-        let trimmed = line.trim();
-        if depth == 0
-            && let Some(cap) = DEPENDS_ON_RE.captures(trimmed)
-        {
-            let options = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-            if options.contains(":build")
-                && let Some(dep) = cap.get(1)
-            {
-                deps.push(dep.as_str().to_string());
-            }
+    for call in top_level_calls(body, parsed.source_bytes()) {
+        if call_method(call, parsed.source_bytes()) != Some("depends_on") {
+            continue;
         }
-        update_depth(&mut depth, trimmed);
+        let Some(dep) = dependency_name(call, parsed.source_bytes()) else {
+            continue;
+        };
+        if dependency_tags(call, parsed.source_bytes())
+            .iter()
+            .any(|tag| tag == "build")
+        {
+            deps.push(dep);
+        }
     }
 
     deps.sort_unstable();
@@ -216,34 +219,25 @@ enum ParsedSourceUrl {
     PresentWithChecksum(SourceUrl),
 }
 
-fn parse_source_url(source: &str) -> ParsedSourceUrl {
-    let body = extract_formula_class_body(source).unwrap_or(source);
-    let mut depth = 0usize;
+fn parse_source_url(parsed: &ParsedTapFormula<'_>, body: Option<Node<'_>>) -> ParsedSourceUrl {
     let mut url: Option<String> = None;
     let mut checksum: Option<String> = None;
 
-    for line in body.lines() {
-        let trimmed = line.trim();
-
-        if depth == 0 {
-            if url.is_none()
-                && let Some(cap) = SOURCE_URL_RE.captures(trimmed)
-            {
-                url = cap.get(1).map(|m| m.as_str().to_string());
+    for call in top_level_calls(body, parsed.source_bytes()) {
+        match call_method(call, parsed.source_bytes()) {
+            Some("url") if url.is_none() => {
+                url = first_string_argument(call, parsed.source_bytes());
             }
-
-            if checksum.is_none()
-                && let Some(cap) = SOURCE_SHA_RE.captures(trimmed)
-            {
-                checksum = cap.get(1).map(|m| m.as_str().to_string());
+            Some("sha256") if checksum.is_none() => {
+                checksum = first_string_argument(call, parsed.source_bytes())
+                    .filter(|sha| is_sha256_hex(sha));
             }
-
-            if url.is_some() && checksum.is_some() {
-                break;
-            }
+            _ => {}
         }
 
-        update_depth(&mut depth, trimmed);
+        if url.is_some() && checksum.is_some() {
+            break;
+        }
     }
 
     match (url, checksum) {
@@ -258,53 +252,259 @@ fn parse_source_url(source: &str) -> ParsedSourceUrl {
     }
 }
 
-fn update_depth(depth: &mut usize, trimmed: &str) {
-    if END_RE.is_match(trimmed) {
-        *depth = depth.saturating_sub(1);
-        return;
-    }
-
-    *depth += DO_RE.find_iter(trimmed).count();
-    if KEYWORD_START_RE.is_match(trimmed) {
-        *depth += 1;
-    }
-}
-
-fn extract_formula_class_body(source: &str) -> Option<&str> {
-    let mut offset = 0usize;
-    let mut class_body_start: Option<usize> = None;
-    let mut depth = 0usize;
-
-    for line in source.split_inclusive('\n') {
-        let line_start = offset;
-        offset += line.len();
-        let trimmed = line.trim();
-
-        if class_body_start.is_none() {
-            if CLASS_START_RE.is_match(trimmed) {
-                class_body_start = Some(offset);
-                depth = 1;
-            }
-            continue;
+fn find_formula_class_body<'a>(root: Node<'a>, source: &'a [u8]) -> Option<Node<'a>> {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "class" && class_extends_formula(node, source) {
+            return class_body(node);
         }
 
-        let depth_before = depth;
-        update_depth(&mut depth, trimmed);
-        if depth_before > 0 && depth == 0 {
-            return class_body_start.map(|start| &source[start..line_start]);
-        }
+        let mut cursor = node.walk();
+        let children: Vec<_> = node.named_children(&mut cursor).collect();
+        stack.extend(children.into_iter().rev());
     }
 
     None
 }
 
-fn parse_bottle(spec: &TapFormulaRef, source: &str, stable: &str, revision: u32) -> Option<Bottle> {
-    let block = extract_bottle_block(source)?;
+fn class_extends_formula(node: Node<'_>, source: &[u8]) -> bool {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).any(|child| {
+        if child.kind() != "superclass" {
+            return false;
+        }
 
-    let root_url = parse_root_url(block)
+        let mut cursor = child.walk();
+        child
+            .named_children(&mut cursor)
+            .any(|grandchild| grandchild.utf8_text(source).ok() == Some("Formula"))
+    })
+}
+
+fn class_body<'a>(node: Node<'a>) -> Option<Node<'a>> {
+    if let Some(body) = node.child_by_field_name("body") {
+        return Some(body);
+    }
+
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .find(|child| child.kind() == "body_statement")
+}
+
+fn top_level_calls<'a>(body: Option<Node<'a>>, source: &'a [u8]) -> Vec<Node<'a>> {
+    let Some(body) = body else {
+        return Vec::new();
+    };
+
+    let mut calls = Vec::new();
+    let mut cursor = body.walk();
+    for child in body.named_children(&mut cursor) {
+        if child.kind() == "call" && call_method(child, source).is_some() {
+            calls.push(child);
+        }
+    }
+    calls
+}
+
+fn find_top_level_call<'a>(body: Node<'a>, source: &'a [u8], method: &str) -> Option<Node<'a>> {
+    top_level_calls(Some(body), source)
+        .into_iter()
+        .find(|call| call_method(*call, source) == Some(method))
+}
+
+fn descendant_calls<'a>(node: Node<'a>, source: &'a [u8]) -> Vec<Node<'a>> {
+    let mut calls = Vec::new();
+    let mut stack = Vec::new();
+    let mut cursor = node.walk();
+    stack.extend(node.named_children(&mut cursor));
+
+    while let Some(current) = stack.pop() {
+        if current.kind() == "call" && call_method(current, source).is_some() {
+            calls.push(current);
+        }
+
+        let mut cursor = current.walk();
+        stack.extend(current.named_children(&mut cursor));
+    }
+
+    calls.sort_by_key(Node::start_byte);
+    calls
+}
+
+fn find_descendant_call<'a>(node: Node<'a>, source: &'a [u8], method: &str) -> Option<Node<'a>> {
+    descendant_calls(node, source)
+        .into_iter()
+        .find(|call| call_method(*call, source) == Some(method))
+}
+
+fn call_method<'a>(node: Node<'a>, source: &'a [u8]) -> Option<&'a str> {
+    node.child_by_field_name("method")?.utf8_text(source).ok()
+}
+
+fn call_arguments<'a>(node: Node<'a>) -> Option<Node<'a>> {
+    node.child_by_field_name("arguments")
+}
+
+fn first_string_argument(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let arguments = call_arguments(node)?;
+    let mut cursor = arguments.walk();
+    for child in arguments.named_children(&mut cursor) {
+        match child.kind() {
+            "string" => return parse_string(child, source),
+            "pair" => {
+                let key = child.child_by_field_name("key")?;
+                if key.kind() == "string" {
+                    return parse_string(key, source);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn first_integer_argument(node: Node<'_>, source: &[u8]) -> Option<u32> {
+    let arguments = call_arguments(node)?;
+    let mut cursor = arguments.walk();
+    for child in arguments.named_children(&mut cursor) {
+        if child.kind() == "integer" {
+            return child.utf8_text(source).ok()?.parse::<u32>().ok();
+        }
+    }
+    None
+}
+
+fn dependency_name(node: Node<'_>, source: &[u8]) -> Option<String> {
+    first_string_argument(node, source)
+}
+
+fn dependency_tags(node: Node<'_>, source: &[u8]) -> Vec<String> {
+    let Some(arguments) = call_arguments(node) else {
+        return Vec::new();
+    };
+
+    symbol_values(arguments, source)
+}
+
+fn sha256_pairs(node: Node<'_>, source: &[u8]) -> Vec<(String, String)> {
+    let Some(arguments) = call_arguments(node) else {
+        return Vec::new();
+    };
+
+    let mut pairs = Vec::new();
+    let mut cursor = arguments.walk();
+    for child in arguments.named_children(&mut cursor) {
+        if child.kind() != "pair" {
+            continue;
+        }
+        let Some(key) = child.child_by_field_name("key") else {
+            continue;
+        };
+        let Some(value) = child.child_by_field_name("value") else {
+            continue;
+        };
+        let Some(tag) = symbol_key(key, source) else {
+            continue;
+        };
+        if !tag
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        {
+            continue;
+        }
+        let Some(sha) = parse_string(value, source).filter(|sha| is_sha256_hex(sha)) else {
+            continue;
+        };
+        pairs.push((tag, sha));
+    }
+
+    pairs
+}
+
+fn symbol_values(node: Node<'_>, source: &[u8]) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut stack = vec![node];
+
+    while let Some(current) = stack.pop() {
+        if let Some(value) = symbol_value(current, source) {
+            values.push(value);
+            continue;
+        }
+
+        let mut cursor = current.walk();
+        stack.extend(current.named_children(&mut cursor));
+    }
+
+    values
+}
+
+fn symbol_key(node: Node<'_>, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "hash_key_symbol" => node.utf8_text(source).ok().map(ToString::to_string),
+        "simple_symbol" | "symbol" => symbol_value(node, source),
+        _ => None,
+    }
+}
+
+fn symbol_value(node: Node<'_>, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "simple_symbol" | "symbol" => node
+            .utf8_text(source)
+            .ok()
+            .map(|value| value.trim_start_matches(':').to_string()),
+        _ => None,
+    }
+}
+
+fn parse_string(node: Node<'_>, source: &[u8]) -> Option<String> {
+    if node.kind() != "string" {
+        return None;
+    }
+
+    if let Some(content) = node.child_by_field_name("content")
+        && let Ok(value) = content.utf8_text(source)
+    {
+        return Some(value.to_string());
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "string_content" {
+            return child.utf8_text(source).ok().map(ToString::to_string);
+        }
+    }
+
+    Some(String::new())
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn parse_bottle(
+    spec: &TapFormulaRef,
+    parsed: &ParsedTapFormula<'_>,
+    body: Option<Node<'_>>,
+    stable: &str,
+    revision: u32,
+) -> Option<Bottle> {
+    let bottle_call = find_top_level_call(body?, parsed.source_bytes(), "bottle")?;
+
+    let root_url = parse_root_url(bottle_call, parsed.source_bytes())
         .unwrap_or_else(|| format!("https://ghcr.io/v2/{}/{}", spec.owner, spec.repo));
-    let rebuild = parse_rebuild(block).unwrap_or(0);
-    let files = parse_bottle_files(spec, &root_url, stable, revision, rebuild, block);
+    let rebuild = parse_rebuild(bottle_call, parsed.source_bytes()).unwrap_or(0);
+    let files = parse_bottle_files(
+        spec,
+        &root_url,
+        stable,
+        revision,
+        rebuild,
+        bottle_call,
+        parsed.source_bytes(),
+    );
 
     if files.is_empty() {
         return None;
@@ -324,46 +524,14 @@ fn empty_bottle() -> Bottle {
     }
 }
 
-fn extract_bottle_block(source: &str) -> Option<&str> {
-    let mut offset = 0usize;
-    let mut bottle_body_start: Option<usize> = None;
-    let mut depth = 0usize;
-
-    for line in source.split_inclusive('\n') {
-        let line_start = offset;
-        offset += line.len();
-        let trimmed = line.trim();
-
-        if bottle_body_start.is_none() {
-            if BOTTLE_START_RE.is_match(trimmed) {
-                bottle_body_start = Some(offset);
-                depth = 1;
-            }
-            continue;
-        }
-
-        let depth_before = depth;
-        update_depth(&mut depth, trimmed);
-        if depth_before > 0 && depth == 0 {
-            return bottle_body_start.map(|start| &source[start..line_start]);
-        }
-    }
-
-    None
+fn parse_root_url(bottle_call: Node<'_>, source: &[u8]) -> Option<String> {
+    find_descendant_call(bottle_call, source, "root_url")
+        .and_then(|call| first_string_argument(call, source))
 }
 
-fn parse_root_url(block: &str) -> Option<String> {
-    ROOT_URL_RE
-        .captures(block)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str().to_string())
-}
-
-fn parse_rebuild(block: &str) -> Option<u32> {
-    REBUILD_RE
-        .captures(block)
-        .and_then(|c| c.get(1))
-        .and_then(|m| m.as_str().parse::<u32>().ok())
+fn parse_rebuild(bottle_call: Node<'_>, source: &[u8]) -> Option<u32> {
+    find_descendant_call(bottle_call, source, "rebuild")
+        .and_then(|call| first_integer_argument(call, source))
 }
 
 fn parse_bottle_files(
@@ -372,28 +540,23 @@ fn parse_bottle_files(
     stable: &str,
     revision: u32,
     rebuild: u32,
-    block: &str,
+    bottle_call: Node<'_>,
+    source: &[u8],
 ) -> BTreeMap<String, BottleFile> {
     let mut files = BTreeMap::new();
 
-    for cap in BOTTLE_SHA_RE.captures_iter(block) {
-        let Some(tag) = cap.get(1).map(|m| m.as_str()) else {
-            continue;
-        };
-        let Some(sha) = cap.get(2).map(|m| m.as_str()) else {
-            continue;
-        };
-        if tag == "cellar" {
+    for call in descendant_calls(bottle_call, source) {
+        if call_method(call, source) != Some("sha256") {
             continue;
         }
-        let url = build_bottle_url(spec, root_url, stable, revision, rebuild, tag, sha);
-        files.insert(
-            tag.to_string(),
-            BottleFile {
-                url,
-                sha256: sha.to_string(),
-            },
-        );
+
+        for (tag, sha) in sha256_pairs(call, source) {
+            if tag == "cellar" {
+                continue;
+            }
+            let url = build_bottle_url(spec, root_url, stable, revision, rebuild, &tag, &sha);
+            files.insert(tag, BottleFile { url, sha256: sha });
+        }
     }
 
     files

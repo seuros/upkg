@@ -7,27 +7,19 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use futures_util::future::select_all;
-use rama::{
-    Service,
-    error::OpaqueError,
-    http::{
-        Body, BodyExtractExt, HeaderValue, Request, Response, StatusCode,
-        client::EasyHttpWebClient,
-        header::{
-            ACCEPT_RANGES, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, LOCATION, WWW_AUTHENTICATE,
-        },
-        service::client::HttpClientExt,
-    },
-    net::client::pool::http::HttpPooledConnectorConfig,
-    service::BoxService,
+use rama::http::{
+    BodyExtractExt, HeaderValue, Response, StatusCode,
+    header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, WWW_AUTHENTICATE},
+    service::client::HttpClientExt,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, Notify, RwLock, Semaphore, mpsc};
 
-use crate::core::checksum::finalize_sha256_hex;
-use crate::core::progress::InstallProgress;
-use crate::core::storage::blob::BlobCache;
+use crate::core::{
+    checksum::finalize_sha256_hex, progress::InstallProgress, storage::blob::BlobCache,
+};
+use crate::http_client::{self, RamaClient, RedirectError, RedirectHeaders};
 use crate::types::Error;
 
 const RACING_CONNECTIONS: usize = 3;
@@ -40,8 +32,6 @@ const GLOBAL_DOWNLOAD_CONCURRENCY: usize = 20;
 const MAX_CONCURRENT_CHUNKS: usize = 6;
 
 const MAX_CHUNK_RETRIES: u32 = 3;
-const MAX_REDIRECTS: usize = 10;
-
 fn calculate_chunk_size(file_size: u64) -> u64 {
     const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
     const MAX_CHUNK_SIZE: u64 = 20 * 1024 * 1024;
@@ -53,7 +43,7 @@ fn calculate_chunk_size(file_size: u64) -> u64 {
 }
 
 struct ChunkDownloadContext {
-    client: BoxService<Request, Response, OpaqueError>,
+    client: RamaClient,
     token_cache: TokenCache,
     url: String,
     progress: Option<DownloadProgressCallback>,
@@ -64,7 +54,7 @@ struct ChunkDownloadContext {
 
 struct ChunkedDownloadContext {
     blob_cache: BlobCache,
-    client: BoxService<Request, Response, OpaqueError>,
+    client: RamaClient,
     token_cache: TokenCache,
     url: String,
     expected_sha256: String,
@@ -119,23 +109,8 @@ struct CachedToken {
 
 type TokenCache = Arc<RwLock<HashMap<String, CachedToken>>>;
 
-fn build_rama_client() -> BoxService<Request, Response, OpaqueError> {
-    use rama::http::client::HttpClientService;
-
-    EasyHttpWebClient::connector_builder()
-        .with_default_transport_connector()
-        .without_tls_proxy_support()
-        .with_proxy_support()
-        .with_tls_support_using_rustls(None)
-        .with_default_http_connector()
-        .try_with_connection_pool::<HttpClientService<Body>>(HttpPooledConnectorConfig::default())
-        .expect("failed to build HTTP client with connection pool")
-        .build_client()
-        .boxed()
-}
-
 pub struct Downloader {
-    client: BoxService<Request, Response, OpaqueError>,
+    client: RamaClient,
     blob_cache: BlobCache,
     token_cache: TokenCache,
     global_semaphore: Option<Arc<Semaphore>>,
@@ -149,22 +124,15 @@ impl Downloader {
 
     pub fn with_semaphore(blob_cache: BlobCache, semaphore: Option<Arc<Semaphore>>) -> Self {
         Self {
-            client: build_rama_client(),
+            client: http_client::build_rama_client(),
             blob_cache,
             token_cache: Arc::new(RwLock::new(HashMap::new())),
             global_semaphore: semaphore,
         }
     }
 
-    fn create_isolated_client(&self) -> BoxService<Request, Response, OpaqueError> {
-        EasyHttpWebClient::connector_builder()
-            .with_default_transport_connector()
-            .without_tls_proxy_support()
-            .with_proxy_support()
-            .with_tls_support_using_rustls(None)
-            .with_default_http_connector()
-            .build_client()
-            .boxed()
+    fn create_isolated_client(&self) -> RamaClient {
+        http_client::build_isolated_rama_client()
     }
 
     pub fn remove_blob(&self, sha256: &str) -> bool {
@@ -417,7 +385,7 @@ impl Downloader {
 }
 
 async fn fetch_download_response_internal(
-    client: BoxService<Request, Response, OpaqueError>,
+    client: RamaClient,
     token_cache: TokenCache,
     url: String,
 ) -> Result<Response, Error> {
@@ -449,7 +417,7 @@ async fn fetch_download_response_internal(
 }
 
 async fn fetch_range_response_internal(
-    client: BoxService<Request, Response, OpaqueError>,
+    client: RamaClient,
     token_cache: TokenCache,
     url: String,
     range: String,
@@ -493,7 +461,7 @@ async fn get_cached_token_for_url_internal(token_cache: &TokenCache, url: &str) 
 }
 
 async fn handle_auth_challenge_internal(
-    client: &BoxService<Request, Response, OpaqueError>,
+    client: &RamaClient,
     token_cache: &TokenCache,
     url: &str,
     response: Response,
@@ -533,7 +501,7 @@ async fn handle_auth_challenge_internal(
 }
 
 async fn fetch_bearer_token_internal(
-    client: &BoxService<Request, Response, OpaqueError>,
+    client: &RamaClient,
     token_cache: &TokenCache,
     www_authenticate: &str,
 ) -> Result<String, Error> {
@@ -586,105 +554,64 @@ async fn fetch_bearer_token_internal(
     Ok(token_response.token)
 }
 
-fn resolve_redirect_url(current_url: &str, location: &str) -> Result<String, Error> {
-    if location.starts_with("http://") || location.starts_with("https://") {
-        return Ok(location.to_string());
-    }
-
-    let base = url::Url::parse(current_url).map_err(|e| Error::NetworkFailure {
-        message: format!("invalid redirect base URL '{current_url}': {e}"),
-    })?;
-    let joined = base.join(location).map_err(|e| Error::NetworkFailure {
-        message: format!("invalid redirect location '{location}': {e}"),
-    })?;
-    Ok(joined.to_string())
-}
-
-fn redirect_location(response: &Response) -> Result<Option<String>, Error> {
-    if !response.status().is_redirection() {
-        return Ok(None);
-    }
-
-    let Some(location) = response.headers().get(LOCATION) else {
-        return Err(Error::NetworkFailure {
-            message: format!("redirect ({}) without Location header", response.status()),
-        });
-    };
-
-    let location = location.to_str().map_err(|_| Error::NetworkFailure {
-        message: "redirect Location header contains invalid characters".to_string(),
-    })?;
-    Ok(Some(location.to_string()))
-}
-
 async fn send_get_with_redirects(
-    client: &BoxService<Request, Response, OpaqueError>,
+    client: &RamaClient,
     url: &str,
     authorization: Option<HeaderValue>,
     range: Option<String>,
 ) -> Result<Response, Error> {
-    let mut current_url = url.to_string();
-    let mut redirects = 0usize;
-
-    loop {
-        let mut request = client.get(&current_url);
-        if let Some(auth) = authorization.clone() {
-            request = request.header(AUTHORIZATION, auth);
-        }
-        if let Some(ref range_header) = range {
-            request = request.header("Range", range_header.as_str());
-        }
-
-        let response = request.send().await.map_err(|e| Error::NetworkFailure {
-            message: e.to_string(),
-        })?;
-
-        if let Some(location) = redirect_location(&response)? {
-            redirects += 1;
-            if redirects > MAX_REDIRECTS {
-                return Err(Error::NetworkFailure {
-                    message: format!("too many redirects while fetching {url}"),
-                });
-            }
-            current_url = resolve_redirect_url(&current_url, &location)?;
-            continue;
-        }
-
-        return Ok(response);
-    }
+    http_client::send_get_with_redirects(
+        client,
+        url,
+        RedirectHeaders {
+            authorization,
+            range,
+            user_agent: None,
+        },
+    )
+    .await
+    .map_err(map_redirect_error)
 }
 
 async fn send_head_with_redirects(
-    client: &BoxService<Request, Response, OpaqueError>,
+    client: &RamaClient,
     url: &str,
     authorization: Option<HeaderValue>,
 ) -> Result<Response, Error> {
-    let mut current_url = url.to_string();
-    let mut redirects = 0usize;
+    http_client::send_head_with_redirects(
+        client,
+        url,
+        RedirectHeaders {
+            authorization,
+            range: None,
+            user_agent: None,
+        },
+    )
+    .await
+    .map_err(map_redirect_error)
+}
 
-    loop {
-        let mut request = client.head(&current_url);
-        if let Some(auth) = authorization.clone() {
-            request = request.header(AUTHORIZATION, auth);
+fn map_redirect_error(error: RedirectError) -> Error {
+    let message = match error {
+        RedirectError::Request(message) => message,
+        RedirectError::MissingLocation(status) => {
+            format!("redirect ({status}) without Location header")
         }
-
-        let response = request.send().await.map_err(|e| Error::NetworkFailure {
-            message: e.to_string(),
-        })?;
-
-        if let Some(location) = redirect_location(&response)? {
-            redirects += 1;
-            if redirects > MAX_REDIRECTS {
-                return Err(Error::NetworkFailure {
-                    message: format!("too many redirects while fetching {url}"),
-                });
-            }
-            current_url = resolve_redirect_url(&current_url, &location)?;
-            continue;
+        RedirectError::InvalidLocationHeader => {
+            "redirect Location header contains invalid characters".to_string()
         }
+        RedirectError::TooManyRedirects { url } => {
+            format!("too many redirects while fetching {url}")
+        }
+        RedirectError::InvalidBaseUrl { url, source } => {
+            format!("invalid redirect base URL '{url}': {source}")
+        }
+        RedirectError::InvalidLocation { location, source } => {
+            format!("invalid redirect location '{location}': {source}")
+        }
+    };
 
-        return Ok(response);
-    }
+    Error::NetworkFailure { message }
 }
 
 struct ChunkRange {
@@ -1366,7 +1293,7 @@ mod tests {
 
     #[test]
     fn build_rama_client_does_not_panic() {
-        let _ = build_rama_client();
+        let _ = http_client::build_rama_client();
     }
 
     #[tokio::test]

@@ -5,6 +5,8 @@ mod cli;
 #[cfg(target_os = "macos")]
 mod core;
 mod error;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod http_client;
 #[cfg(target_os = "macos")]
 mod init;
 #[cfg(target_os = "macos")]
@@ -83,6 +85,7 @@ fn install(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<Exit
 
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = kind;
         execute_spec(backend, spec)
     }
 }
@@ -104,6 +107,7 @@ fn uninstall(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<Ex
 
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = kind;
         execute_spec(backend, spec)
     }
 }
@@ -125,6 +129,7 @@ fn upgrade(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<Exit
 
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = kind;
         execute_spec(backend, spec)
     }
 }

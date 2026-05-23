@@ -1,6 +1,7 @@
 use super::cask_ops::write_json_pretty;
 use super::*;
 use std::fs;
+use std::path::PathBuf;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -43,7 +44,17 @@ pub(super) fn get_test_bottle_tag() -> String {
         .unwrap_or_else(|| "all".to_string())
 }
 
+pub(super) struct TestInstallContext {
+    pub root: PathBuf,
+    pub prefix: PathBuf,
+    pub installer: Installer,
+}
+
 pub(super) fn new_test_installer(api_client: ApiClient, tmp: &TempDir) -> Installer {
+    new_test_context(api_client, tmp).installer
+}
+
+pub(super) fn new_test_context(api_client: ApiClient, tmp: &TempDir) -> TestInstallContext {
     let root = tmp.path().join("upkg");
     let prefix = tmp.path().join("homebrew");
     let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
@@ -51,7 +62,20 @@ pub(super) fn new_test_installer(api_client: ApiClient, tmp: &TempDir) -> Instal
     let cellar = Cellar::new(&root).unwrap();
     let linker = Linker::new(&prefix).unwrap();
 
-    Installer::new(api_client, blob_cache, store, cellar, linker, prefix)
+    let installer = Installer::new(
+        api_client,
+        blob_cache,
+        store,
+        cellar,
+        linker,
+        prefix.clone(),
+    );
+
+    TestInstallContext {
+        root,
+        prefix,
+        installer,
+    }
 }
 
 #[path = "tests/auto_targets.rs"]

@@ -1,11 +1,14 @@
 use crate::error::UpkgError;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-use rama::http::BodyExtractExt;
+use crate::http_client::{self, RamaClient, RedirectError, RedirectHeaders};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use rama::http::{BodyExtractExt, HeaderValue, StatusCode};
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 const REPO_OWNER: &str = "seuros";
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 const REPO_NAME: &str = "upkg";
-const MAX_REDIRECTS: usize = 10;
 
 pub fn run(dry_run: bool) -> Result<(), UpkgError> {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -40,7 +43,7 @@ fn run_unix(dry_run: bool) -> Result<(), UpkgError> {
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 async fn run_unix_async(dry_run: bool, target: ReleaseTarget) -> Result<(), UpkgError> {
-    let client = build_rama_client();
+    let client = http_client::build_rama_client();
     let release = fetch_latest_release(&client).await?;
     let latest_version = version_from_tag(&release.tag_name);
     let asset_name = release_asset_name(&latest_version, target);
@@ -102,25 +105,6 @@ async fn run_unix_async(dry_run: bool, target: ReleaseTarget) -> Result<(), Upkg
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn build_rama_client()
--> rama::service::BoxService<rama::http::Request, rama::http::Response, rama::error::OpaqueError> {
-    use rama::Service;
-    use rama::http::{Body, client::EasyHttpWebClient, client::HttpClientService};
-    use rama::net::client::pool::http::HttpPooledConnectorConfig;
-
-    EasyHttpWebClient::connector_builder()
-        .with_default_transport_connector()
-        .without_tls_proxy_support()
-        .with_proxy_support()
-        .with_tls_support_using_rustls(None)
-        .with_default_http_connector()
-        .try_with_connection_pool::<HttpClientService<Body>>(HttpPooledConnectorConfig::default())
-        .expect("failed to build HTTP client with connection pool")
-        .build_client()
-        .boxed()
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Debug, serde::Deserialize)]
 struct GitHubRelease {
     tag_name: String,
@@ -142,13 +126,7 @@ struct GitHubAsset {
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-async fn fetch_latest_release(
-    client: &rama::service::BoxService<
-        rama::http::Request,
-        rama::http::Response,
-        rama::error::OpaqueError,
-    >,
-) -> Result<GitHubRelease, UpkgError> {
+async fn fetch_latest_release(client: &RamaClient) -> Result<GitHubRelease, UpkgError> {
     let url = format!("https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest");
     let response = send_get_with_redirects(client, &url).await?;
     response
@@ -158,14 +136,7 @@ async fn fetch_latest_release(
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-async fn fetch_text(
-    client: &rama::service::BoxService<
-        rama::http::Request,
-        rama::http::Response,
-        rama::error::OpaqueError,
-    >,
-    url: &str,
-) -> Result<String, UpkgError> {
+async fn fetch_text(client: &RamaClient, url: &str) -> Result<String, UpkgError> {
     let response = send_get_with_redirects(client, url).await?;
     response
         .try_into_string()
@@ -175,78 +146,58 @@ async fn fetch_text(
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 async fn send_get_with_redirects(
-    client: &rama::service::BoxService<
-        rama::http::Request,
-        rama::http::Response,
-        rama::error::OpaqueError,
-    >,
+    client: &RamaClient,
     url: &str,
 ) -> Result<rama::http::Response, UpkgError> {
-    use rama::http::StatusCode;
-    use rama::http::service::client::HttpClientExt;
+    let response = http_client::send_get_with_redirects(
+        client,
+        url,
+        RedirectHeaders {
+            authorization: None,
+            range: None,
+            user_agent: Some(HeaderValue::from_static("upkg")),
+        },
+    )
+    .await
+    .map_err(map_redirect_error)?;
 
-    let mut current_url = url.to_string();
-    let mut redirects = 0usize;
-
-    loop {
-        let response = client
-            .get(&current_url)
-            .header("User-Agent", "upkg")
-            .send()
-            .await
-            .map_err(|e| UpkgError::SelfUpgrade(format!("request failed: {e}")))?;
-
-        if response.status().is_redirection() {
-            redirects += 1;
-            if redirects > MAX_REDIRECTS {
-                return Err(UpkgError::SelfUpgrade(format!(
-                    "too many redirects while fetching {url}"
-                )));
-            }
-            let Some(location) = response.headers().get("Location") else {
-                return Err(UpkgError::SelfUpgrade(format!(
-                    "redirect ({}) without Location header",
-                    response.status()
-                )));
-            };
-            let location = location.to_str().map_err(|_| {
-                UpkgError::SelfUpgrade("redirect Location header is not valid UTF-8".to_string())
-            })?;
-            current_url = resolve_redirect_url(&current_url, location)?;
-            continue;
-        }
-
-        if response.status() != StatusCode::OK {
-            return Err(UpkgError::SelfUpgrade(format!(
-                "request returned HTTP {}",
-                response.status()
-            )));
-        }
-
-        return Ok(response);
+    if response.status() != StatusCode::OK {
+        return Err(UpkgError::SelfUpgrade(format!(
+            "request returned HTTP {}",
+            response.status()
+        )));
     }
+
+    Ok(response)
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn resolve_redirect_url(current_url: &str, location: &str) -> Result<String, UpkgError> {
-    if location.starts_with("http://") || location.starts_with("https://") {
-        return Ok(location.to_string());
-    }
+fn map_redirect_error(error: RedirectError) -> UpkgError {
+    let message = match error {
+        RedirectError::Request(message) => format!("request failed: {message}"),
+        RedirectError::MissingLocation(status) => {
+            format!("redirect ({status}) without Location header")
+        }
+        RedirectError::InvalidLocationHeader => {
+            "redirect Location header is not valid UTF-8".to_string()
+        }
+        RedirectError::TooManyRedirects { url } => {
+            format!("too many redirects while fetching {url}")
+        }
+        RedirectError::InvalidBaseUrl { source, .. } => {
+            format!("invalid redirect base URL: {source}")
+        }
+        RedirectError::InvalidLocation { source, .. } => {
+            format!("invalid redirect location: {source}")
+        }
+    };
 
-    let base = url::Url::parse(current_url)
-        .map_err(|e| UpkgError::SelfUpgrade(format!("invalid redirect base URL: {e}")))?;
-    base.join(location)
-        .map(|url| url.to_string())
-        .map_err(|e| UpkgError::SelfUpgrade(format!("invalid redirect location: {e}")))
+    UpkgError::SelfUpgrade(message)
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 async fn download_to_file(
-    client: &rama::service::BoxService<
-        rama::http::Request,
-        rama::http::Response,
-        rama::error::OpaqueError,
-    >,
+    client: &RamaClient,
     url: &str,
     path: &std::path::Path,
     expected_sha256: &str,
@@ -297,6 +248,7 @@ fn extract_tar_gz(
     })
 }
 
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 fn checksum_for_asset(checksums: &str, asset_name: &str) -> Result<String, UpkgError> {
     for line in checksums.lines() {
         let mut parts = line.split_whitespace();
@@ -350,12 +302,14 @@ fn replace_current_binary(extracted_binary: &std::path::Path) -> Result<(), Upkg
     })
 }
 
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ReleaseTarget {
     triple: &'static str,
     archive: ArchiveKind,
 }
 
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArchiveKind {
     TarGz,
@@ -363,6 +317,7 @@ enum ArchiveKind {
     Zip,
 }
 
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 fn release_target() -> Option<ReleaseTarget> {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
@@ -408,6 +363,7 @@ fn release_target() -> Option<ReleaseTarget> {
     None
 }
 
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 fn release_asset_name(version: &str, target: ReleaseTarget) -> String {
     let extension = match target.archive {
         ArchiveKind::TarGz => "tar.gz",
@@ -421,6 +377,7 @@ fn release_asset_name(version: &str, target: ReleaseTarget) -> String {
     )
 }
 
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
 fn version_from_tag(tag_or_version: &str) -> String {
     tag_or_version
         .strip_prefix("upkg-v")
@@ -429,6 +386,7 @@ fn version_from_tag(tag_or_version: &str) -> String {
         .to_string()
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn binary_name() -> &'static str {
     #[cfg(windows)]
     {

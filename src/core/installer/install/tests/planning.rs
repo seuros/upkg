@@ -26,23 +26,11 @@ async fn plan_falls_back_to_source_when_no_bottle() {
         .mount(&mock_server)
         .await;
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client = ApiClient::with_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.clone(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let installer = ctx.installer;
 
     let plan = installer.plan(&["nobottle".to_string()]).await.unwrap();
 
@@ -98,23 +86,11 @@ async fn plan_prefers_bottle_over_source() {
         .mount(&mock_server)
         .await;
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client = ApiClient::with_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.clone(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let installer = ctx.installer;
 
     let plan = installer.plan(&["hasboth".to_string()]).await.unwrap();
 
@@ -166,23 +142,11 @@ async fn plan_skips_already_installed_same_version() {
         .mount(&mock_server)
         .await;
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client = ApiClient::with_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let mut installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.clone(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let mut installer = ctx.installer;
 
     installer
         .install(&["alreadythere".to_string()], true)
@@ -211,23 +175,11 @@ async fn plan_errors_when_no_bottle_and_no_source() {
         .mount(&mock_server)
         .await;
 
-    let root = tmp.path().join("upkg");
-    let prefix = tmp.path().join("homebrew");
-
     let api_client = ApiClient::with_base_url(mock_server.uri());
-    let blob_cache = BlobCache::new(&root.join("cache")).unwrap();
-    let store = Store::new(&root).unwrap();
-    let cellar = Cellar::new(&root).unwrap();
-    let linker = Linker::new(&prefix).unwrap();
-
-    let installer = Installer::new(
-        api_client,
-        blob_cache,
-        store,
-        cellar,
-        linker,
-        prefix.clone(),
-    );
+    let ctx = new_test_context(api_client, &tmp);
+    let root = ctx.root.clone();
+    let prefix = ctx.prefix.clone();
+    let installer = ctx.installer;
 
     let result = installer.plan(&["nothing".to_string()]).await;
     assert!(result.is_err());
