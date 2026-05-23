@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/seuros/upkg/compare/upkg-v0.5.1...upkg-v0.5.2) (2026-05-23)
+
+
+### Bug Fixes
+
+* use max_attempts field instead of builder method call ([8230ca5](https://github.com/seuros/upkg/commit/8230ca59beebe6e9e24ce08f5d39c475825b9203))
+
 ## [0.5.1](https://github.com/seuros/upkg/compare/upkg-v0.5.0...upkg-v0.5.1) (2026-05-23)
 
 
