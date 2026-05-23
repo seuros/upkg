@@ -76,7 +76,7 @@ impl Installer {
                 continue;
             }
 
-            match self.api_client.get_formula(normalized).await {
+            match self.fetch_formula_with_retry(normalized).await {
                 Ok(_) => formulas.push((original.clone(), normalized.clone())),
                 Err(Error::MissingFormula { .. }) => {
                     match self.api_client.get_cask(normalized).await {
@@ -96,6 +96,45 @@ impl Installer {
         }
 
         Ok(AutoInstallTargets { formulas, casks })
+    }
+
+    async fn fetch_formula_with_retry(&self, name: &str) -> Result<Formula, Error> {
+        use chrono_machines::backoff::BackoffStrategy;
+        use chrono_machines::ExponentialBackoff;
+
+        let backoff = ExponentialBackoff::new()
+            .base_delay_ms(200)
+            .multiplier(2.0)
+            .max_delay_ms(5_000)
+            .max_attempts(4);
+
+        let mut last_err = None;
+        for attempt in 0..backoff.max_attempts() {
+            match self.api_client.get_formula(name).await {
+                Ok(f) => return Ok(f),
+                Err(Error::NetworkFailure { .. }) if attempt + 1 < backoff.max_attempts() => {
+                    let delay_ms = {
+                        let mut rng = rand::rng();
+                        backoff.delay(attempt + 1, &mut rng).unwrap_or(1_000)
+                    };
+                    eprintln!(
+                        "    Network error fetching {name}, retrying in {delay_ms}ms (attempt {}/{})",
+                        attempt + 1,
+                        backoff.max_attempts()
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    last_err = None;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    break;
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| Error::NetworkFailure {
+            message: format!("failed to fetch {name} after retries"),
+        }))
     }
 
     async fn fetch_all_formulas(
@@ -125,7 +164,7 @@ impl Installer {
 
             let futures: Vec<_> = batch
                 .iter()
-                .map(|n| self.api_client.get_formula(n))
+                .map(|n| self.fetch_formula_with_retry(n))
                 .collect();
 
             let results = futures_util::future::join_all(futures).await;
