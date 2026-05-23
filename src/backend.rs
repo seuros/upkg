@@ -6,6 +6,7 @@ pub mod freebsd;
 pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub mod ravenports;
 #[cfg(target_os = "windows")]
 pub mod windows;
@@ -30,6 +31,7 @@ pub enum Backend {
     Windows(windows::WindowsManager),
     #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
     FreeBsd,
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     Ravenports,
 }
 
@@ -129,6 +131,7 @@ impl Backend {
             Self::Windows(manager) => manager.name(),
             #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
             Self::FreeBsd => "pkg",
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             Self::Ravenports => "rvn",
         }
     }
@@ -145,6 +148,7 @@ impl Backend {
             Self::Windows(manager) => manager.install_spec(packages),
             #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
             Self::FreeBsd => freebsd::install_spec(packages),
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             Self::Ravenports => ravenports::install_spec(packages),
         }
     }
@@ -161,6 +165,7 @@ impl Backend {
             Self::Windows(manager) => manager.uninstall_spec(packages),
             #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
             Self::FreeBsd => freebsd::uninstall_spec(packages),
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             Self::Ravenports => ravenports::uninstall_spec(packages),
         }
     }
@@ -177,6 +182,7 @@ impl Backend {
             Self::Windows(manager) => manager.upgrade_spec(packages),
             #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
             Self::FreeBsd => freebsd::upgrade_spec(packages),
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             Self::Ravenports => ravenports::upgrade_spec(packages),
         }
     }
