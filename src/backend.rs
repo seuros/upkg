@@ -1,11 +1,12 @@
 #[cfg(target_os = "android")]
 pub mod android;
-#[cfg(target_os = "freebsd")]
+#[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
 pub mod freebsd;
 #[cfg(target_os = "linux")]
 pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
+pub mod ravenports;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
@@ -27,8 +28,9 @@ pub enum Backend {
     Macos,
     #[cfg(target_os = "windows")]
     Windows(windows::WindowsManager),
-    #[cfg(target_os = "freebsd")]
+    #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
     FreeBsd,
+    Ravenports,
 }
 
 pub struct CommandSpec {
@@ -70,6 +72,13 @@ impl CommandSpec {
 
 impl Backend {
     pub fn detect() -> Result<Self, UpkgError> {
+        // Ravenports is cross-platform (DragonFlyBSD, FreeBSD, Linux, Solaris).
+        // Check it first so users who installed Ravenports get it regardless of OS.
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        if ravenports::is_available() {
+            return Ok(Self::Ravenports);
+        }
+
         #[cfg(target_os = "android")]
         {
             Ok(Self::Android(android::detect()?))
@@ -90,7 +99,7 @@ impl Backend {
             Ok(Self::Windows(windows::detect()?))
         }
 
-        #[cfg(target_os = "freebsd")]
+        #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
         {
             Ok(Self::FreeBsd)
         }
@@ -100,7 +109,8 @@ impl Backend {
             target_os = "linux",
             target_os = "macos",
             target_os = "windows",
-            target_os = "freebsd"
+            target_os = "freebsd",
+            target_os = "dragonfly"
         )))]
         {
             Err(UpkgError::Unsupported("unsupported operating system"))
@@ -117,8 +127,9 @@ impl Backend {
             Self::Macos => macos::name(),
             #[cfg(target_os = "windows")]
             Self::Windows(manager) => manager.name(),
-            #[cfg(target_os = "freebsd")]
+            #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
             Self::FreeBsd => "pkg",
+            Self::Ravenports => "rvn",
         }
     }
 
@@ -132,8 +143,9 @@ impl Backend {
             Self::Macos => macos::install_spec(packages),
             #[cfg(target_os = "windows")]
             Self::Windows(manager) => manager.install_spec(packages),
-            #[cfg(target_os = "freebsd")]
+            #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
             Self::FreeBsd => freebsd::install_spec(packages),
+            Self::Ravenports => ravenports::install_spec(packages),
         }
     }
 
@@ -147,8 +159,9 @@ impl Backend {
             Self::Macos => macos::uninstall_spec(packages),
             #[cfg(target_os = "windows")]
             Self::Windows(manager) => manager.uninstall_spec(packages),
-            #[cfg(target_os = "freebsd")]
+            #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
             Self::FreeBsd => freebsd::uninstall_spec(packages),
+            Self::Ravenports => ravenports::uninstall_spec(packages),
         }
     }
 
@@ -162,8 +175,9 @@ impl Backend {
             Self::Macos => macos::upgrade_spec(packages),
             #[cfg(target_os = "windows")]
             Self::Windows(manager) => manager.upgrade_spec(packages),
-            #[cfg(target_os = "freebsd")]
+            #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
             Self::FreeBsd => freebsd::upgrade_spec(packages),
+            Self::Ravenports => ravenports::upgrade_spec(packages),
         }
     }
 }

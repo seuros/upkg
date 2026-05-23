@@ -3,18 +3,7 @@ use std::fmt;
 #[derive(Debug)]
 pub enum UpkgError {
     Usage(&'static str),
-    #[cfg(any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "windows",
-        not(any(
-            target_os = "android",
-            target_os = "linux",
-            target_os = "macos",
-            target_os = "windows",
-            target_os = "freebsd"
-        ))
-    ))]
+    #[cfg(not(target_os = "macos"))]
     Unsupported(&'static str),
     Io(std::io::Error),
     SelfUpgrade(String),
@@ -31,18 +20,7 @@ impl fmt::Display for UpkgError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage(msg) => write!(f, "{msg}\n\nTry `upkg help`."),
-            #[cfg(any(
-                target_os = "android",
-                target_os = "linux",
-                target_os = "windows",
-                not(any(
-                    target_os = "android",
-                    target_os = "linux",
-                    target_os = "macos",
-                    target_os = "windows",
-                    target_os = "freebsd"
-                ))
-            ))]
+            #[cfg(not(target_os = "macos"))]
             Self::Unsupported(msg) => write!(f, "{msg}"),
             Self::Io(err) => write!(f, "{err}"),
             Self::SelfUpgrade(msg) => write!(f, "{msg}"),
@@ -88,18 +66,7 @@ mod tests {
         assert_eq!(err.to_string(), "cannot self-upgrade");
     }
 
-    #[cfg(any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "windows",
-        not(any(
-            target_os = "android",
-            target_os = "linux",
-            target_os = "macos",
-            target_os = "windows",
-            target_os = "freebsd"
-        ))
-    ))]
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn unsupported_error_displays_message() {
         let err = UpkgError::Unsupported("unsupported platform");
