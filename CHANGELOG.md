@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/seuros/upkg/compare/upkg-v0.5.0...upkg-v0.5.1) (2026-05-23)
+
+
+### Bug Fixes
+
+* add cfg gates to Ravenports backend to eliminate dead_code warnings ([9fda467](https://github.com/seuros/upkg/commit/9fda46719140e3389b310b071a5dab9c2406249d))
+* retry API formula fetches with exponential backoff and jitter ([d59c69f](https://github.com/seuros/upkg/commit/d59c69ff4694465f2d2818c4b834025ac758ac2e))
+
 ## [0.5.0](https://github.com/seuros/upkg/compare/upkg-v0.4.0...upkg-v0.5.0) (2026-05-23)
 
 
