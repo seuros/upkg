@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.0](https://github.com/seuros/upkg/compare/upkg-v0.4.0...upkg-v0.5.0) (2026-05-23)
+
+
+### Features
+
+* add Ravenports and DragonFlyBSD backend support ([ea422c7](https://github.com/seuros/upkg/commit/ea422c744dd9970c4e7ac4490172c83b177eaa6c))
+* auto-detect app casks ([b222332](https://github.com/seuros/upkg/commit/b222332c8a860d104115c0a7cf5d62b732e29dc7))
+* **list:** add installed package state db ([ce22e45](https://github.com/seuros/upkg/commit/ce22e4552462bb09644d53771a48d218ece8fc80))
+
+
+### Bug Fixes
+
+* **linker:** replace same-formula links on upgrade ([9584529](https://github.com/seuros/upkg/commit/958452938618704c5917a30a46bbad849dab5309))
+
 ## [0.4.0](https://github.com/seuros/upkg/compare/upkg-v0.3.0...upkg-v0.4.0) (2026-05-02)
 
 
