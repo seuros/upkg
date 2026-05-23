@@ -70,6 +70,29 @@ pub fn compatible_codenames(current_codename: Option<&'static str>) -> Vec<&'sta
     MACOS_CODENAMES_NEWEST_FIRST[pos..].to_vec()
 }
 
+/// Returns newer codenames ordered from closest-newer to newest.
+/// Used as fallback when no same-or-older bottle exists.
+fn newer_codenames(current_codename: Option<&'static str>) -> Vec<&'static str> {
+    let Some(codename) = current_codename else {
+        return Vec::new();
+    };
+
+    let Some(pos) = MACOS_CODENAMES_NEWEST_FIRST
+        .iter()
+        .position(|&tag| tag == codename)
+    else {
+        return Vec::new();
+    };
+
+    if pos == 0 {
+        return Vec::new();
+    }
+
+    let mut newer: Vec<&str> = MACOS_CODENAMES_NEWEST_FIRST[..pos].to_vec();
+    newer.reverse(); // closest-newer first
+    newer
+}
+
 pub fn select_bottle(formula: &Formula) -> Result<SelectedBottle, Error> {
     #[cfg(target_os = "macos")]
     let macos_codename = current_macos_codename();
@@ -232,6 +255,35 @@ fn select_bottle_with_codename(
             if tag.ends_with("_linux") {
                 return Ok(SelectedBottle {
                     tag: tag.clone(),
+                    url: file.url.clone(),
+                    sha256: file.sha256.clone(),
+                });
+            }
+        }
+    }
+
+    // Fallback: try closest newer bottle when no same-or-older bottle exists.
+    // Homebrew bottles built on newer macOS generally work on older versions.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        for codename in newer_codenames(macos_codename) {
+            let tag = format!("arm64_{codename}");
+            if let Some(file) = formula.bottle.stable.files.get(tag.as_str()) {
+                return Ok(SelectedBottle {
+                    tag,
+                    url: file.url.clone(),
+                    sha256: file.sha256.clone(),
+                });
+            }
+        }
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        for codename in newer_codenames(macos_codename) {
+            if let Some(file) = formula.bottle.stable.files.get(codename) {
+                return Ok(SelectedBottle {
+                    tag: codename.to_string(),
                     url: file.url.clone(),
                     sha256: file.sha256.clone(),
                 });
@@ -525,7 +577,56 @@ mod tests {
 
     #[test]
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    fn mojave_user_rejects_newer_bottles() {
+    fn monterey_falls_back_to_sonoma_bottle() {
+        let mut files = BTreeMap::new();
+        files.insert(
+            "sonoma".to_string(),
+            BottleFile {
+                url: "https://example.com/sonoma.tar.gz".to_string(),
+                sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_string(),
+            },
+        );
+
+        let formula = Formula {
+            name: "protobuf".to_string(),
+            versions: Versions {
+                stable: "35.0".to_string(),
+            },
+            dependencies: Vec::new(),
+            bottle: Bottle {
+                stable: BottleStable { files, rebuild: 0 },
+            },
+            revision: 0,
+            keg_only: KegOnly::default(),
+            build_dependencies: Vec::new(),
+            urls: None,
+            ruby_source_path: None,
+            ruby_source_checksum: None,
+            uses_from_macos: Vec::new(),
+            requirements: Vec::new(),
+            variations: None,
+        };
+
+        let selected = select_bottle_with_codename(&formula, Some("monterey")).unwrap();
+        assert_eq!(selected.tag, "sonoma");
+    }
+
+    #[test]
+    fn newer_codenames_returns_closest_first() {
+        let newer = newer_codenames(Some("monterey"));
+        assert_eq!(newer, vec!["ventura", "sonoma", "sequoia", "tahoe"]);
+    }
+
+    #[test]
+    fn newer_codenames_empty_for_newest() {
+        let newer = newer_codenames(Some("tahoe"));
+        assert!(newer.is_empty());
+    }
+
+    #[test]
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    fn mojave_falls_back_to_closest_newer_bottle() {
         let mut files = BTreeMap::new();
         files.insert(
             "big_sur".to_string(),
@@ -556,10 +657,8 @@ mod tests {
             variations: None,
         };
 
-        let err = select_bottle_with_codename(&formula, Some("mojave")).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::UnsupportedBottle { name } if name == "modern-only"
-        ));
+        // With newer-bottle fallback, mojave user gets the closest newer bottle (big_sur)
+        let selected = select_bottle_with_codename(&formula, Some("mojave")).unwrap();
+        assert_eq!(selected.tag, "big_sur");
     }
 }
