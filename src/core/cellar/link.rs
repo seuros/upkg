@@ -205,8 +205,13 @@ impl Linker {
                         fs::read_link(&dst_path).map_err(|e| Error::StoreCorruption {
                             message: e.to_string(),
                         })?;
+                    let resolved_target = if old_target.is_relative() {
+                        dst_path.parent().unwrap_or(Path::new("")).join(&old_target)
+                    } else {
+                        old_target
+                    };
                     let _ = fs::remove_file(&dst_path);
-                    Self::link_recursive(&old_target, &dst_path)?;
+                    Self::link_recursive(&resolved_target, &dst_path)?;
                 }
                 Self::link_recursive(&src_path, &dst_path)?;
                 continue;
