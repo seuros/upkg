@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.0](https://github.com/seuros/upkg/compare/upkg-v0.5.4...upkg-v0.6.0) (2026-05-24)
+
+
+### Features
+
+* add list command support for Linux and Ravenports backends ([d3b2d0f](https://github.com/seuros/upkg/commit/d3b2d0f0a1b44a59dfe959dbbc5136b9e6165965))
+* add list command support for Linux and Ravenports backends ([63e1b32](https://github.com/seuros/upkg/commit/63e1b32c95135c019879f97e1cde2bad220a0dfd))
+
+
+### Bug Fixes
+
+* harden install flow with retry, locking, privilege escalation, and Mach-O patching ([fb0660e](https://github.com/seuros/upkg/commit/fb0660e2f3591d9b6efad2d1f24f32e45039c1b7))
+
 ## [0.5.4](https://github.com/seuros/upkg/compare/upkg-v0.5.3...upkg-v0.5.4) (2026-05-24)
 
 
