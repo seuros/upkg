@@ -81,6 +81,14 @@ fn patch_text_file_strings(path: &Path, new_prefix: &str, new_cellar: &str) -> R
 }
 
 fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error> {
+    patch_macho_binary_strings_with_cellar(path, new_prefix, None)
+}
+
+fn patch_macho_binary_strings_with_cellar(
+    path: &Path,
+    new_prefix: &str,
+    new_cellar: Option<&str>,
+) -> Result<(), Error> {
     use std::io::{Read as _, Write as _};
 
     let metadata = fs::metadata(path).map_err(|e| Error::StoreCorruption {
@@ -103,6 +111,32 @@ fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error
 
     let original_contents = contents.clone();
     let mut patched = false;
+
+    // Build replacement pairs: (old_bytes, new_bytes)
+    let cellar_str = new_cellar
+        .map(String::from)
+        .unwrap_or_else(|| format!("{new_prefix}/Cellar"));
+    let placeholder_pairs: Vec<(&[u8], &[u8])> = vec![
+        (b"@@HOMEBREW_CELLAR@@" as &[u8], cellar_str.as_bytes()),
+        (b"@@HOMEBREW_PREFIX@@" as &[u8], new_prefix.as_bytes()),
+    ];
+
+    for (old_bytes, new_bytes) in &placeholder_pairs {
+        if new_bytes.len() > old_bytes.len() {
+            continue;
+        }
+        let mut i = 0;
+        while i + old_bytes.len() <= contents.len() {
+            if contents[i..i + old_bytes.len()] == **old_bytes {
+                contents[i..i + new_bytes.len()].copy_from_slice(new_bytes);
+                contents[i + new_bytes.len()..i + old_bytes.len()].fill(0);
+                patched = true;
+                i += old_bytes.len();
+            } else {
+                i += 1;
+            }
+        }
+    }
 
     for old_prefix in HOMEBREW_PREFIXES {
         if old_prefix == &new_prefix {
@@ -214,7 +248,9 @@ pub fn patch_homebrew_placeholders(
     let first_patch_error: Arc<Mutex<Option<Error>>> = Arc::new(Mutex::new(None));
 
     macho_files.par_iter().for_each(|path| {
-        if let Err(e) = patch_macho_binary_strings(path, &prefix_str) {
+        if let Err(e) =
+            patch_macho_binary_strings_with_cellar(path, &prefix_str, Some(&cellar_str))
+        {
             patch_failures.fetch_add(1, Ordering::Relaxed);
             if let Ok(mut guard) = first_patch_error.lock()
                 && guard.is_none()
