@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/seuros/upkg/compare/upkg-v0.6.0...upkg-v0.7.0) (2026-05-24)
+
+
+### Features
+
+* add list command support for Windows backend ([10b7547](https://github.com/seuros/upkg/commit/10b75472ee801db3799138ce0359358141d15bc4))
+
 ## [0.6.0](https://github.com/seuros/upkg/compare/upkg-v0.5.4...upkg-v0.6.0) (2026-05-24)
 
 
