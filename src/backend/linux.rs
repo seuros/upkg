@@ -131,16 +131,18 @@ impl LinuxManager {
             _ => CommandSpec::new("sudo", args),
         }
     }
-    
+
     pub fn list_spec(&self) -> CommandSpec {
-      match self {
-        Self::Apt => CommandSpec::new("dpkg", vec!["--get-selections".into()]),
-        Self::Dnf => CommandSpec::new("dnf", vec!["list".into(), "--installed".into()]),
-        Self::Yum => CommandSpec::new("yum", vec!["list".into(), "installed".into()]),
-        Self::Pacman => CommandSpec::new("pacman", vec!["-Q".into()]),
-        Self::Zypper => CommandSpec::new("zypper", vec!["se".into(), "--installed-only".into()]),
-        Self::Opkg => CommandSpec::new("opkg", vec!["list-installed".into()]),
-      }
+        match self {
+            Self::Apt => CommandSpec::new("dpkg", vec!["--get-selections".into()]),
+            Self::Dnf => CommandSpec::new("dnf", vec!["list".into(), "--installed".into()]),
+            Self::Yum => CommandSpec::new("yum", vec!["list".into(), "installed".into()]),
+            Self::Pacman => CommandSpec::new("pacman", vec!["-Q".into()]),
+            Self::Zypper => {
+                CommandSpec::new("zypper", vec!["se".into(), "--installed-only".into()])
+            }
+            Self::Opkg => CommandSpec::new("opkg", vec!["list-installed".into()]),
+        }
     }
 }
 

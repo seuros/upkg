@@ -65,6 +65,16 @@ impl WindowsManager {
             Self::Choco => CommandSpec::new("choco", args),
         }
     }
+
+    pub fn list_spec(&self) -> CommandSpec {
+        match self {
+            Self::Winget => CommandSpec::new("winget", vec!["list".to_string()]),
+            Self::Choco => CommandSpec::new(
+                "choco",
+                vec!["list".to_string(), "--local-only".to_string()],
+            ),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -115,6 +125,21 @@ mod tests {
         #[case] expected_args: Vec<&str>,
     ) {
         let spec = manager.uninstall_spec(&packages);
+        assert_eq!(spec.command(), expected_command);
+
+        let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
+        assert_eq!(args, expected_args);
+    }
+
+    #[rstest]
+    #[case(WindowsManager::Winget, "winget", vec!["list"])]
+    #[case(WindowsManager::Choco, "choco", vec!["list", "--local-only"])]
+    fn list_spec_generates_correct_commands(
+        #[case] manager: WindowsManager,
+        #[case] expected_command: &str,
+        #[case] expected_args: Vec<&str>,
+    ) {
+        let spec = manager.list_spec();
         assert_eq!(spec.command(), expected_command);
 
         let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
