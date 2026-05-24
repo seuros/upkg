@@ -34,6 +34,7 @@ pub enum RedirectError {
     },
 }
 
+#[cfg(target_os = "macos")]
 pub fn redirect_error_message(error: RedirectError) -> String {
     redirect_error_message_with_request_context(error, None)
 }
@@ -85,6 +86,7 @@ pub fn build_rama_client() -> RamaClient {
         .boxed()
 }
 
+#[cfg(target_os = "macos")]
 pub fn build_isolated_rama_client() -> RamaClient {
     EasyHttpWebClient::connector_builder()
         .with_default_transport_connector()
@@ -104,6 +106,7 @@ pub async fn send_get_with_redirects(
     send_with_redirects(client, url, headers, RequestMethod::Get).await
 }
 
+#[cfg(target_os = "macos")]
 pub async fn send_head_with_redirects(
     client: &RamaClient,
     url: &str,
@@ -113,6 +116,7 @@ pub async fn send_head_with_redirects(
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 enum RequestMethod {
     Get,
     Head,
