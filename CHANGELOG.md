@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/seuros/upkg/compare/upkg-v0.7.0...upkg-v0.7.1) (2026-05-24)
+
+
+### Bug Fixes
+
+* add missing list_spec for FreeBSD backend ([dfd27cc](https://github.com/seuros/upkg/commit/dfd27ccaa055f45aab288bd2e5e9a64d738c2eb8))
+
 ## [0.7.0](https://github.com/seuros/upkg/compare/upkg-v0.6.0...upkg-v0.7.0) (2026-05-24)
 
 
