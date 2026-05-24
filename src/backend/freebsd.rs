@@ -12,6 +12,10 @@ pub fn uninstall_spec(packages: &[String]) -> CommandSpec {
     CommandSpec::new("sudo", args)
 }
 
+pub fn list_spec() -> CommandSpec {
+    CommandSpec::new("pkg", vec!["info".to_string()])
+}
+
 pub fn upgrade_spec(packages: &[String]) -> CommandSpec {
     let mut args = vec!["pkg".to_string(), "upgrade".to_string(), "-y".to_string()];
     args.extend(packages.iter().cloned());
