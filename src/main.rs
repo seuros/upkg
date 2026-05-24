@@ -10,6 +10,8 @@ mod http_client;
 #[cfg(target_os = "macos")]
 mod init;
 #[cfg(target_os = "macos")]
+mod privilege_macos;
+#[cfg(target_os = "macos")]
 mod native;
 #[cfg(target_os = "macos")]
 mod native_cli;

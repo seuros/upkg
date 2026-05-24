@@ -80,6 +80,7 @@ fn patch_text_file_strings(path: &Path, new_prefix: &str, new_cellar: &str) -> R
     Ok(())
 }
 
+#[cfg(test)]
 fn patch_macho_binary_strings(path: &Path, new_prefix: &str) -> Result<(), Error> {
     patch_macho_binary_strings_with_cellar(path, new_prefix, None)
 }
@@ -125,13 +126,27 @@ fn patch_macho_binary_strings_with_cellar(
         if new_bytes.len() > old_bytes.len() {
             continue;
         }
+        let shrink = old_bytes.len() - new_bytes.len();
         let mut i = 0;
         while i + old_bytes.len() <= contents.len() {
             if contents[i..i + old_bytes.len()] == **old_bytes {
+                // Find the end of the containing C string (next null byte)
+                let str_end = contents[i + old_bytes.len()..]
+                    .iter()
+                    .position(|&b| b == 0)
+                    .map(|p| i + old_bytes.len() + p)
+                    .unwrap_or(contents.len());
+
+                // Write new prefix
                 contents[i..i + new_bytes.len()].copy_from_slice(new_bytes);
-                contents[i + new_bytes.len()..i + old_bytes.len()].fill(0);
+                // Shift suffix left to close the gap
+                contents.copy_within(i + old_bytes.len()..str_end, i + new_bytes.len());
+                // Null-pad the freed bytes at the end of the string field
+                let pad_start = str_end - shrink;
+                contents[pad_start..str_end].fill(0);
+
                 patched = true;
-                i += old_bytes.len();
+                i += new_bytes.len() + (str_end - i - old_bytes.len());
             } else {
                 i += 1;
             }
@@ -150,6 +165,7 @@ fn patch_macho_binary_strings_with_cellar(
             continue;
         }
 
+        let shrink = old_bytes.len() - new_bytes.len();
         let mut i = 0;
         while i + old_bytes.len() <= contents.len() {
             if contents[i..i + old_bytes.len()] == *old_bytes
@@ -158,11 +174,26 @@ fn patch_macho_binary_strings_with_cellar(
                     None | Some(0) | Some(b'/')
                 )
             {
+                // Find the end of the containing C string
+                let str_end = contents[i + old_bytes.len()..]
+                    .iter()
+                    .position(|&b| b == 0)
+                    .map(|p| i + old_bytes.len() + p)
+                    .unwrap_or(contents.len());
+
+                // Write new prefix
                 contents[i..i + new_bytes.len()].copy_from_slice(new_bytes);
-                contents[i + new_bytes.len()..i + old_bytes.len()].fill(0);
+                // Shift suffix left to close the gap
+                contents.copy_within(i + old_bytes.len()..str_end, i + new_bytes.len());
+                // Null-pad the freed bytes at the end
+                let pad_start = str_end - shrink;
+                contents[pad_start..str_end].fill(0);
+
                 patched = true;
+                i += new_bytes.len();
+            } else {
+                i += 1;
             }
-            i += 1;
         }
     }
 
@@ -214,7 +245,14 @@ pub fn patch_homebrew_placeholders(
     use regex::Regex;
     use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, Once};
+
+    static CLT_CHECK: Once = Once::new();
+    CLT_CHECK.call_once(|| {
+        if let Err(e) = crate::privilege_macos::ensure_xcode_clt() {
+            eprintln!("Warning: {e}");
+        }
+    });
 
     let prefix = cellar_dir.parent().unwrap_or(Path::new("/opt/homebrew"));
 

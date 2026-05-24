@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::path::Path;
 
 use crate::core::cellar::link::Linker;
@@ -39,6 +40,8 @@ pub fn create_installer(
         })?;
     }
 
+    let lock_file = acquire_global_lock(root)?;
+
     let api_client = ApiClient::new();
     let blob_cache = BlobCache::new(&root.join("cache")).map_err(|e| Error::StoreCorruption {
         message: format!("failed to create blob cache: {e}"),
@@ -64,7 +67,36 @@ pub fn create_installer(
         linker,
         state_db,
         prefix: prefix.to_path_buf(),
+        _lock: Some(lock_file),
     })
+}
+
+fn acquire_global_lock(root: &Path) -> Result<File, Error> {
+    use std::os::unix::io::AsRawFd;
+
+    let lock_path = root.join("locks").join("upkg.lock");
+    let lock_file = File::create(&lock_path).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to create global lock file: {e}"),
+    })?;
+
+    let fd = lock_file.as_raw_fd();
+
+    // Try non-blocking exclusive lock first
+    let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+    if ret != 0 {
+        eprintln!("    Waiting for another upkg process to finish...");
+        let ret = unsafe { libc::flock(fd, libc::LOCK_EX) };
+        if ret != 0 {
+            return Err(Error::StoreCorruption {
+                message: format!(
+                    "failed to acquire global lock: {}",
+                    std::io::Error::last_os_error()
+                ),
+            });
+        }
+    }
+
+    Ok(lock_file)
 }
 
 fn backfill_state_db_if_empty(state_db: &StateDb, prefix: &Path) -> Result<(), Error> {

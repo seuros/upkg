@@ -44,6 +44,7 @@ pub struct Installer {
     linker: Linker,
     state_db: StateDb,
     prefix: std::path::PathBuf,
+    _lock: Option<std::fs::File>,
 }
 
 #[derive(Debug)]
@@ -123,6 +124,7 @@ impl Installer {
             linker,
             state_db: StateDb::in_memory().expect("test state db"),
             prefix,
+            _lock: None,
         }
     }
 

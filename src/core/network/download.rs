@@ -298,12 +298,38 @@ impl Downloader {
                     return Ok(blob_cache.blob_path(&expected_sha256));
                 }
 
-                let response = fetch_download_response_internal(
-                    downloader_client.clone(),
-                    token_cache.clone(),
-                    url.clone(),
-                )
-                .await?;
+                let response = {
+                    let mut last_err = None;
+                    let mut resp = None;
+                    for attempt in 0..4u32 {
+                        if attempt > 0 {
+                            tokio::time::sleep(Duration::from_millis(200 * (1 << attempt))).await;
+                            if done.load(Ordering::Acquire) {
+                                return Err(Error::NetworkFailure {
+                                    message: "cancelled: another download finished first"
+                                        .to_string(),
+                                });
+                            }
+                        }
+                        match fetch_download_response_internal(
+                            downloader_client.clone(),
+                            token_cache.clone(),
+                            url.clone(),
+                        )
+                        .await
+                        {
+                            Ok(r) => {
+                                resp = Some(r);
+                                break;
+                            }
+                            Err(e) => last_err = Some(e),
+                        }
+                    }
+                    match resp {
+                        Some(r) => r,
+                        None => return Err(last_err.unwrap()),
+                    }
+                };
 
                 let _permit = tokio::select! {
                     permit = body_download_gate.acquire_owned() => permit.map_err(|_| Error::NetworkFailure {

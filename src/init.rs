@@ -8,6 +8,7 @@ pub enum InitError {
     Message(String),
 }
 
+
 const PREFIX_MANAGED_DIRS: &[&str] = &[
     "bin", "Cellar", "opt", "lib", "libexec", "include", "share", "etc",
 ];
@@ -85,31 +86,22 @@ pub fn run_init(root: &Path, prefix: &Path, no_modify_path: bool) -> Result<(), 
         if d.exists() {
             !is_writable(d)
         } else {
-            d.parent()
-                .map(|p| p.exists() && !is_writable(p))
-                .unwrap_or(true)
+            let mut ancestor = d.parent();
+            while let Some(p) = ancestor {
+                if p.exists() {
+                    return !is_writable(p);
+                }
+                ancestor = p.parent();
+            }
+            true
         }
     });
 
     if need_sudo {
         println!(
             "{}",
-            style("    Creating directories (requires sudo)...").dim()
+            style("    Creating directories (requires elevated privileges)...").dim()
         );
-
-        for dir in &dirs_to_create {
-            let status = Command::new("sudo")
-                .args(["mkdir", "-p", &dir.to_string_lossy()])
-                .status()
-                .map_err(|e| InitError::Message(format!("Failed to run sudo mkdir: {}", e)))?;
-
-            if !status.success() {
-                return Err(InitError::Message(format!(
-                    "Failed to create directory: {}",
-                    dir.display()
-                )));
-            }
-        }
 
         let user = Command::new("whoami")
             .output()
@@ -127,18 +119,23 @@ pub fn run_init(root: &Path, prefix: &Path, no_modify_path: bool) -> Result<(), 
         }
         chown_targets.extend(dirs_to_create.iter().cloned());
 
-        for target in chown_targets {
-            let status = Command::new("sudo")
-                .args(["chown", "-R", &user, &target.to_string_lossy()])
-                .status()
-                .map_err(|e| InitError::Message(format!("Failed to run sudo chown: {}", e)))?;
+        let mkdir_cmds: Vec<String> = dirs_to_create
+            .iter()
+            .map(|d| format!("mkdir -p '{}'", d.display()))
+            .collect();
+        let chown_cmds: Vec<String> = chown_targets
+            .iter()
+            .map(|t| format!("chown -R '{}' '{}'", user, t.display()))
+            .collect();
 
-            if !status.success() {
-                return Err(InitError::Message(format!(
-                    "Failed to set ownership on {}",
-                    target.display()
-                )));
-            }
+        let all_cmds = [mkdir_cmds, chown_cmds].concat().join(" && ");
+
+        let status = crate::privilege_macos::escalate_privilege(&all_cmds)
+            .map_err(InitError::Message)?;
+        if !status {
+            return Err(InitError::Message(
+                "Failed to create directories: privilege escalation denied".to_string(),
+            ));
         }
     } else {
         for dir in &dirs_to_create {
