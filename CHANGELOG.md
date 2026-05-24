@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/seuros/upkg/compare/upkg-v0.7.1...upkg-v0.7.2) (2026-05-24)
+
+
+### Bug Fixes
+
+* add cfg gates to silence dead_code warnings on Linux ([21dd6ca](https://github.com/seuros/upkg/commit/21dd6cab03d3deae6a6bda8cb66e1be457a1c010))
+
 ## [0.7.1](https://github.com/seuros/upkg/compare/upkg-v0.7.0...upkg-v0.7.1) (2026-05-24)
 
 
