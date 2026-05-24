@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.4](https://github.com/seuros/upkg/compare/upkg-v0.5.3...upkg-v0.5.4) (2026-05-24)
+
+
+### Bug Fixes
+
+* patch @@HOMEBREW_PREFIX@@ placeholders in Mach-O binaries without install_name_tool ([912488b](https://github.com/seuros/upkg/commit/912488b06adce6a86db1ae02b0c8280ead597fb9))
+* resolve relative symlink targets before recursive linking ([0a5baa6](https://github.com/seuros/upkg/commit/0a5baa61acc8b3adf302a92b7f0220d1a93f9c3b))
+
 ## [0.5.3](https://github.com/seuros/upkg/compare/upkg-v0.5.2...upkg-v0.5.3) (2026-05-24)
 
 
