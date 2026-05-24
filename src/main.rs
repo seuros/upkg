@@ -143,9 +143,9 @@ fn list() -> Result<ExitCode, UpkgError> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        Err(UpkgError::Unsupported(
-            "upkg list is not available on this platform yet",
-        ))
+        let backend = Backend::detect()?;
+        let spec = backend.list_spec();
+        execute_spec(backend, spec)
     }
 }
 

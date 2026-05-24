@@ -186,6 +186,19 @@ impl Backend {
             Self::Ravenports => ravenports::upgrade_spec(packages),
         }
     }
+
+    pub fn list_spec(&self) -> CommandSpec {
+        match self {
+            #[cfg(target_os = "android")]
+            Self::Android(manager) => manager.list_spec(),
+            #[cfg(target_os = "linux")]
+            Self::Linux(manager) => manager.list_spec(),
+            #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
+            Self::FreeBsd => freebsd::list_spec(),
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            Self::Ravenports => ravenports::list_spec(),
+        }
+    }
 }
 
 #[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
