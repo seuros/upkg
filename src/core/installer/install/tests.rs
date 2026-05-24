@@ -36,7 +36,7 @@ pub(super) fn sha256_hex(data: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(data);
-    crate::core::checksum::finalize_sha256_hex(hasher)
+    crate::checksum::finalize_sha256_hex(hasher)
 }
 
 pub(super) fn get_test_bottle_tag() -> String {

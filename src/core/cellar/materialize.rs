@@ -3,9 +3,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-#[cfg(target_os = "linux")]
-use crate::core::extraction::patch::linux::patch_placeholders;
-
 #[cfg(target_os = "macos")]
 use crate::core::extraction::patch::macos::{
     codesign_and_strip_xattrs, patch_homebrew_placeholders,
@@ -63,20 +60,6 @@ impl Cellar {
 
         #[cfg(target_os = "macos")]
         patch_homebrew_placeholders(&keg_path, &self.cellar_dir, name, version)?;
-
-        #[cfg(target_os = "linux")]
-        {
-            let prefix = self
-                .cellar_dir
-                .parent()
-                .ok_or_else(|| Error::StoreCorruption {
-                    message: format!(
-                        "Invalid cellar directory (no parent): {}",
-                        self.cellar_dir.display()
-                    ),
-                })?;
-            patch_placeholders(&keg_path, prefix, name, version)?;
-        }
 
         #[cfg(target_os = "macos")]
         codesign_and_strip_xattrs(&keg_path)?;
@@ -139,7 +122,7 @@ fn copy_dir_with_fallback(src: &Path, dst: &Path) -> Result<(), Error> {
 
 #[cfg(target_os = "macos")]
 fn try_clonefile_dir(src: &Path, dst: &Path) -> io::Result<()> {
-    use std::ffi::CString;
+    use std::ffi::{CString, c_char};
     use std::os::unix::ffi::OsStrExt;
 
     let src_cstr = CString::new(src.as_os_str().as_bytes())?;
@@ -148,8 +131,7 @@ fn try_clonefile_dir(src: &Path, dst: &Path) -> io::Result<()> {
     const CLONE_NOFOLLOW: u32 = 0x0001;
 
     unsafe extern "C" {
-        fn clonefile(src: *const libc::c_char, dst: *const libc::c_char, flags: u32)
-        -> libc::c_int;
+        fn clonefile(src: *const c_char, dst: *const c_char, flags: u32) -> i32;
     }
 
     let result = unsafe { clonefile(src_cstr.as_ptr(), dst_cstr.as_ptr(), CLONE_NOFOLLOW) };

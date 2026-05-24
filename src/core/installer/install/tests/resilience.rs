@@ -90,7 +90,7 @@ async fn preserves_successful_installs_when_one_package_fails() {
     let api_client = ApiClient::with_base_url(mock_server.uri());
     let ctx = new_test_context(api_client, &tmp);
     let root = ctx.root.clone();
-    let prefix = ctx.prefix.clone();
+    let _prefix = ctx.prefix.clone();
     let mut installer = ctx.installer;
 
     let result = installer
@@ -180,8 +180,8 @@ async fn parallel_api_fetching_with_deep_deps() {
 
     let api_client = ApiClient::with_base_url(mock_server.uri());
     let ctx = new_test_context(api_client, &tmp);
-    let root = ctx.root.clone();
-    let prefix = ctx.prefix.clone();
+    let _root = ctx.root.clone();
+    let _prefix = ctx.prefix.clone();
     let mut installer = ctx.installer;
 
     installer

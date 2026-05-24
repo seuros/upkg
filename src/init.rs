@@ -8,7 +8,6 @@ pub enum InitError {
     Message(String),
 }
 
-
 const PREFIX_MANAGED_DIRS: &[&str] = &[
     "bin", "Cellar", "opt", "lib", "libexec", "include", "share", "etc",
 ];
@@ -121,17 +120,18 @@ pub fn run_init(root: &Path, prefix: &Path, no_modify_path: bool) -> Result<(), 
 
         let mkdir_cmds: Vec<String> = dirs_to_create
             .iter()
-            .map(|d| format!("mkdir -p '{}'", d.display()))
-            .collect();
+            .map(|d| Ok(format!("mkdir -p {}", shell_quote_path(d)?)))
+            .collect::<Result<_, InitError>>()?;
+        let user_arg = shell_quote(&user)?;
         let chown_cmds: Vec<String> = chown_targets
             .iter()
-            .map(|t| format!("chown -R '{}' '{}'", user, t.display()))
-            .collect();
+            .map(|t| Ok(format!("chown -R {user_arg} {}", shell_quote_path(t)?)))
+            .collect::<Result<_, InitError>>()?;
 
         let all_cmds = [mkdir_cmds, chown_cmds].concat().join(" && ");
 
-        let status = crate::privilege_macos::escalate_privilege(&all_cmds)
-            .map_err(InitError::Message)?;
+        let status =
+            crate::privilege_macos::escalate_privilege(&all_cmds).map_err(InitError::Message)?;
         if !status {
             return Err(InitError::Message(
                 "Failed to create directories: privilege escalation denied".to_string(),
@@ -150,6 +150,19 @@ pub fn run_init(root: &Path, prefix: &Path, no_modify_path: bool) -> Result<(), 
     println!("{} Initialization complete!", style("==>").cyan().bold());
 
     Ok(())
+}
+
+fn shell_quote_path(path: &Path) -> Result<String, InitError> {
+    let value = path.to_str().ok_or_else(|| {
+        InitError::Message(format!("Path is not valid UTF-8: {}", path.display()))
+    })?;
+    shell_quote(value)
+}
+
+fn shell_quote(value: &str) -> Result<String, InitError> {
+    shlex::try_quote(value)
+        .map(|quoted| quoted.into_owned())
+        .map_err(|e| InitError::Message(format!("Value cannot be shell quoted: {e}")))
 }
 
 const UPKG_BLOCK_START: &str = "# >>> upkg >>>";
@@ -499,6 +512,13 @@ mod tests {
         let mut perms = fs::metadata(&readonly).unwrap().permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&readonly, perms).unwrap();
+    }
+
+    #[test]
+    fn shell_quote_round_trips_single_quotes() {
+        let quoted = shell_quote("owner's prefix").unwrap();
+        let words = shlex::split(&format!("cmd {quoted}")).unwrap();
+        assert_eq!(words, vec!["cmd", "owner's prefix"]);
     }
 
     #[test]

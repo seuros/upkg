@@ -16,10 +16,9 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, Notify, RwLock, Semaphore, mpsc};
 
-use crate::core::{
-    checksum::finalize_sha256_hex, progress::InstallProgress, storage::blob::BlobCache,
-};
-use crate::http_client::{self, RamaClient, RedirectError, RedirectHeaders};
+use crate::checksum::finalize_sha256_hex;
+use crate::core::{progress::InstallProgress, storage::blob::BlobCache};
+use crate::http_client::{self, RamaClient, RedirectHeaders};
 use crate::types::Error;
 
 const RACING_CONNECTIONS: usize = 3;
@@ -84,11 +83,13 @@ fn get_alternate_urls(primary_url: &str) -> Vec<String> {
 }
 
 fn transform_url_to_mirror(url: &str, mirror_domain: &str) -> Option<String> {
-    if url.contains("ghcr.io") {
-        Some(url.replace("ghcr.io", mirror_domain))
-    } else {
-        None
+    let mut parsed = url::Url::parse(url).ok()?;
+    if parsed.host_str()? != "ghcr.io" {
+        return None;
     }
+
+    parsed.set_host(Some(mirror_domain)).ok()?;
+    Some(parsed.to_string())
 }
 
 #[derive(Deserialize)]
@@ -617,27 +618,10 @@ async fn send_head_with_redirects(
     .map_err(map_redirect_error)
 }
 
-fn map_redirect_error(error: RedirectError) -> Error {
-    let message = match error {
-        RedirectError::Request(message) => message,
-        RedirectError::MissingLocation(status) => {
-            format!("redirect ({status}) without Location header")
-        }
-        RedirectError::InvalidLocationHeader => {
-            "redirect Location header contains invalid characters".to_string()
-        }
-        RedirectError::TooManyRedirects { url } => {
-            format!("too many redirects while fetching {url}")
-        }
-        RedirectError::InvalidBaseUrl { url, source } => {
-            format!("invalid redirect base URL '{url}': {source}")
-        }
-        RedirectError::InvalidLocation { location, source } => {
-            format!("invalid redirect location '{location}': {source}")
-        }
-    };
-
-    Error::NetworkFailure { message }
+fn map_redirect_error(error: http_client::RedirectError) -> Error {
+    Error::NetworkFailure {
+        message: http_client::redirect_error_message(error),
+    }
 }
 
 struct ChunkRange {
@@ -1082,10 +1066,15 @@ async fn download_response_internal(
 }
 
 fn extract_scope_for_url(url: &str) -> Option<String> {
-    let marker = "ghcr.io/v2/";
-    let start = url.find(marker)? + marker.len();
-    let remainder = &url[start..];
-    let mut parts = remainder.split('/');
+    let parsed = url::Url::parse(url).ok()?;
+    if parsed.host_str()? != "ghcr.io" {
+        return None;
+    }
+
+    let mut parts = parsed.path_segments()?;
+    if parts.next()? != "v2" {
+        return None;
+    }
     let owner = parts.next()?;
     let repo = parts.next()?;
     let formula = parts.next()?;

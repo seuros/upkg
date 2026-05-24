@@ -1,6 +1,10 @@
 #[cfg(target_os = "macos")]
 mod api;
+#[cfg(not(target_os = "macos"))]
 mod backend;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[path = "core/checksum.rs"]
+mod checksum;
 mod cli;
 #[cfg(target_os = "macos")]
 mod core;
@@ -10,11 +14,13 @@ mod http_client;
 #[cfg(target_os = "macos")]
 mod init;
 #[cfg(target_os = "macos")]
-mod privilege_macos;
-#[cfg(target_os = "macos")]
 mod native;
 #[cfg(target_os = "macos")]
 mod native_cli;
+#[cfg(target_os = "macos")]
+mod package_ref;
+#[cfg(target_os = "macos")]
+mod privilege_macos;
 mod self_upgrade;
 #[cfg(target_os = "macos")]
 mod types;
@@ -24,6 +30,7 @@ pub use types::*;
 
 use std::process::ExitCode;
 
+#[cfg(not(target_os = "macos"))]
 use backend::Backend;
 use cli::{Cli, CommandKind, PackageKind};
 use error::UpkgError;
@@ -71,67 +78,73 @@ fn run() -> Result<ExitCode, UpkgError> {
 }
 
 fn install(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<ExitCode, UpkgError> {
-    let backend = Backend::detect()?;
-    let spec = backend.install_spec(packages);
-
-    if dry_run {
-        return print_dry_run(&backend, &spec);
-    }
-
     #[cfg(target_os = "macos")]
     {
-        let _ = (backend, spec);
+        if dry_run {
+            native::print_install_dry_run(packages, kind)?;
+            return Ok(ExitCode::SUCCESS);
+        }
+
         native::install_native(packages, kind)?;
         Ok(ExitCode::SUCCESS)
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = kind;
+        reject_app_kind(kind)?;
+        let backend = Backend::detect()?;
+        let spec = backend.install_spec(packages);
+        if dry_run {
+            return print_dry_run(&backend, &spec);
+        }
         execute_spec(backend, spec)
     }
 }
 
 fn uninstall(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<ExitCode, UpkgError> {
-    let backend = Backend::detect()?;
-    let spec = backend.uninstall_spec(packages);
-
-    if dry_run {
-        return print_dry_run(&backend, &spec);
-    }
-
     #[cfg(target_os = "macos")]
     {
-        let _ = (backend, spec);
+        if dry_run {
+            native::print_uninstall_dry_run(packages, kind)?;
+            return Ok(ExitCode::SUCCESS);
+        }
+
         native::uninstall_native(packages, kind)?;
         Ok(ExitCode::SUCCESS)
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = kind;
+        reject_app_kind(kind)?;
+        let backend = Backend::detect()?;
+        let spec = backend.uninstall_spec(packages);
+        if dry_run {
+            return print_dry_run(&backend, &spec);
+        }
         execute_spec(backend, spec)
     }
 }
 
 fn upgrade(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<ExitCode, UpkgError> {
-    let backend = Backend::detect()?;
-    let spec = backend.upgrade_spec(packages);
-
-    if dry_run {
-        return print_dry_run(&backend, &spec);
-    }
-
     #[cfg(target_os = "macos")]
     {
-        let _ = (backend, spec);
+        if dry_run {
+            native::print_upgrade_dry_run(packages, kind)?;
+            return Ok(ExitCode::SUCCESS);
+        }
+
         native::upgrade_native(packages, kind)?;
         Ok(ExitCode::SUCCESS)
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = kind;
+        reject_app_kind(kind)?;
+        let backend = Backend::detect()?;
+        let spec = backend.upgrade_spec(packages);
+        if dry_run {
+            return print_dry_run(&backend, &spec);
+        }
         execute_spec(backend, spec)
     }
 }
@@ -151,6 +164,7 @@ fn list() -> Result<ExitCode, UpkgError> {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn print_dry_run(backend: &Backend, spec: &backend::CommandSpec) -> Result<ExitCode, UpkgError> {
     println!("backend: {}", backend.name());
     println!("dry-run: {}", spec.render());
@@ -160,6 +174,16 @@ fn print_dry_run(backend: &Backend, spec: &backend::CommandSpec) -> Result<ExitC
 fn self_upgrade(dry_run: bool) -> Result<ExitCode, UpkgError> {
     self_upgrade::run(dry_run)?;
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reject_app_kind(kind: PackageKind) -> Result<(), UpkgError> {
+    if kind == PackageKind::App {
+        return Err(UpkgError::Unsupported(
+            "--app is only available with the built-in macOS engine",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]

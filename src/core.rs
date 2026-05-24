@@ -2,8 +2,6 @@
 pub mod build;
 #[path = "core/cellar.rs"]
 pub mod cellar;
-#[path = "core/checksum.rs"]
-pub(crate) mod checksum;
 #[path = "core/extraction.rs"]
 pub mod extraction;
 #[path = "core/installer.rs"]

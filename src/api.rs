@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::core::installer::install::create_installer;
+use crate::package_ref::{is_cask_name, normalize_app_name};
 use crate::types::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,7 +145,7 @@ fn installed_formula_targets(
     let mut targets: Vec<String> = installed
         .into_iter()
         .map(|keg| keg.name)
-        .filter(|name| !name.starts_with("cask:"))
+        .filter(|name| !is_cask_name(name))
         .collect();
     targets.sort();
     targets.dedup();
@@ -152,36 +153,27 @@ fn installed_formula_targets(
 }
 
 fn default_prefix() -> PathBuf {
-    #[cfg(target_os = "macos")]
-    {
+    env_path("UPKG_PREFIX").unwrap_or_else(|| {
         if cfg!(target_arch = "aarch64") {
             PathBuf::from("/opt/homebrew")
         } else {
             PathBuf::from("/usr/local")
         }
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".upkg")
-            .join("prefix")
-    }
+    })
 }
 
 fn default_root() -> PathBuf {
-    #[cfg(target_os = "macos")]
-    {
-        default_prefix()
-    }
+    env_path("UPKG_ROOT").unwrap_or_else(default_prefix)
+}
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".upkg")
-    }
+fn env_path(name: &str) -> Option<PathBuf> {
+    env_path_value(std::env::var_os(name))
+}
+
+fn env_path_value(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    value
+        .filter(|value| !value.as_os_str().is_empty())
+        .map(PathBuf::from)
 }
 
 fn package_requests(
@@ -192,31 +184,7 @@ fn package_requests(
         PackageKindHint::Auto => Ok(packages.to_vec()),
         PackageKindHint::App => packages
             .iter()
-            .map(|package| {
-                let trimmed = package.trim();
-                if let Some(token) = trimmed.strip_prefix("cask:") {
-                    if token.is_empty() {
-                        return Err(Error::InvalidArgument {
-                            message: "cask token cannot be empty".to_string(),
-                        });
-                    }
-                    return Ok(trimmed.to_string());
-                }
-                if let Some((tap, token)) = trimmed.rsplit_once('/') {
-                    if token.is_empty() {
-                        return Err(Error::MissingFormula {
-                            name: trimmed.to_string(),
-                        });
-                    }
-                    if tap != "homebrew/cask" {
-                        return Err(Error::InvalidArgument {
-                            message: format!("'{package}' is not a supported app reference"),
-                        });
-                    }
-                    return Ok(format!("cask:{token}"));
-                }
-                Ok(format!("cask:{trimmed}"))
-            })
+            .map(|package| normalize_app_name(package))
             .collect(),
     }
 }
@@ -247,5 +215,19 @@ mod tests {
         ]);
 
         assert_eq!(targets, vec!["ripgrep".to_string()]);
+    }
+
+    #[test]
+    fn env_path_value_ignores_missing_and_empty_values() {
+        assert_eq!(env_path_value(None), None);
+        assert_eq!(env_path_value(Some(std::ffi::OsString::new())), None);
+    }
+
+    #[test]
+    fn env_path_value_accepts_non_empty_path() {
+        assert_eq!(
+            env_path_value(Some(std::ffi::OsString::from("/tmp/upkg-test"))),
+            Some(PathBuf::from("/tmp/upkg-test"))
+        );
     }
 }

@@ -1,20 +1,13 @@
-use crate::core::checksum::verify_sha256_bytes;
+use crate::checksum::verify_sha256_bytes;
 use crate::core::network::cache::{ApiCache, CacheEntry};
 use crate::core::network::tap_formula::{
     TapFormulaRef, parse_tap_formula_ref, parse_tap_formula_ruby,
 };
+use crate::http_client::{self, RamaClient};
+use crate::package_ref::cask_name;
 use crate::types::{Error, Formula};
 use futures_util::stream::{self, StreamExt};
-use rama::{
-    Service,
-    error::OpaqueError,
-    http::{
-        Body, BodyExtractExt, Request, Response, StatusCode, client::EasyHttpWebClient,
-        service::client::HttpClientExt,
-    },
-    net::client::pool::http::HttpPooledConnectorConfig,
-    service::BoxService,
-};
+use rama::http::{BodyExtractExt, StatusCode, service::client::HttpClientExt};
 
 const HOMEBREW_CORE_RAW_BASE: &str =
     "https://raw.githubusercontent.com/Homebrew/homebrew-core/main";
@@ -73,7 +66,7 @@ pub struct ApiClient {
     cask_base_url: String,
     tap_raw_base_url: String,
     tap_roots: Vec<std::path::PathBuf>,
-    client: BoxService<Request, Response, OpaqueError>,
+    client: RamaClient,
     cache: Option<ApiCache>,
 }
 
@@ -83,27 +76,12 @@ impl ApiClient {
     }
 
     pub fn with_base_url(base_url: String) -> Self {
-        use rama::http::client::HttpClientService;
-
-        let client = EasyHttpWebClient::connector_builder()
-            .with_default_transport_connector()
-            .without_tls_proxy_support()
-            .with_proxy_support()
-            .with_tls_support_using_rustls(None)
-            .with_default_http_connector()
-            .try_with_connection_pool::<HttpClientService<Body>>(
-                HttpPooledConnectorConfig::default(),
-            )
-            .expect("connection pool")
-            .build_client()
-            .boxed();
-
         Self {
             base_url,
             cask_base_url: "https://formulae.brew.sh/api/cask".to_string(),
             tap_raw_base_url: "https://raw.githubusercontent.com".to_string(),
             tap_roots: default_tap_roots(),
-            client,
+            client: http_client::build_rama_client(),
             cache: None,
         }
     }
@@ -336,7 +314,7 @@ impl ApiClient {
 
         if response.status() == StatusCode::NOT_FOUND {
             return Err(Error::MissingFormula {
-                name: format!("cask:{token}"),
+                name: cask_name(token),
             });
         }
 

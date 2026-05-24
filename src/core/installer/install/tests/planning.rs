@@ -28,8 +28,8 @@ async fn plan_falls_back_to_source_when_no_bottle() {
 
     let api_client = ApiClient::with_base_url(mock_server.uri());
     let ctx = new_test_context(api_client, &tmp);
-    let root = ctx.root.clone();
-    let prefix = ctx.prefix.clone();
+    let _root = ctx.root.clone();
+    let _prefix = ctx.prefix.clone();
     let installer = ctx.installer;
 
     let plan = installer.plan(&["nobottle".to_string()]).await.unwrap();
@@ -88,8 +88,8 @@ async fn plan_prefers_bottle_over_source() {
 
     let api_client = ApiClient::with_base_url(mock_server.uri());
     let ctx = new_test_context(api_client, &tmp);
-    let root = ctx.root.clone();
-    let prefix = ctx.prefix.clone();
+    let _root = ctx.root.clone();
+    let _prefix = ctx.prefix.clone();
     let installer = ctx.installer;
 
     let plan = installer.plan(&["hasboth".to_string()]).await.unwrap();
@@ -107,7 +107,7 @@ async fn plan_skips_already_installed_same_version() {
     let tmp = TempDir::new().unwrap();
     let tag = get_test_bottle_tag();
     let bottle = create_bottle_tarball("alreadythere");
-    let bottle_sha = crate::core::checksum::sha256_hex_bytes(&bottle);
+    let bottle_sha = crate::checksum::sha256_hex_bytes(&bottle);
 
     let formula_json = format!(
         r#"{{
@@ -144,8 +144,8 @@ async fn plan_skips_already_installed_same_version() {
 
     let api_client = ApiClient::with_base_url(mock_server.uri());
     let ctx = new_test_context(api_client, &tmp);
-    let root = ctx.root.clone();
-    let prefix = ctx.prefix.clone();
+    let _root = ctx.root.clone();
+    let _prefix = ctx.prefix.clone();
     let mut installer = ctx.installer;
 
     installer
@@ -177,8 +177,8 @@ async fn plan_errors_when_no_bottle_and_no_source() {
 
     let api_client = ApiClient::with_base_url(mock_server.uri());
     let ctx = new_test_context(api_client, &tmp);
-    let root = ctx.root.clone();
-    let prefix = ctx.prefix.clone();
+    let _root = ctx.root.clone();
+    let _prefix = ctx.prefix.clone();
     let installer = ctx.installer;
 
     let result = installer.plan(&["nothing".to_string()]).await;

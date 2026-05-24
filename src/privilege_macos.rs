@@ -7,9 +7,7 @@ pub fn escalate_privilege(shell_cmd: &str) -> Result<bool, String> {
             "do shell script \"{}\" with administrator privileges",
             shell_cmd.replace('\\', "\\\\").replace('"', "\\\"")
         );
-        let output = Command::new("osascript")
-            .args(["-e", &script])
-            .output();
+        let output = Command::new("osascript").args(["-e", &script]).output();
 
         if let Ok(output) = output {
             return Ok(output.status.success());
@@ -42,33 +40,10 @@ pub fn has_xcode_clt() -> bool {
         .unwrap_or(false)
 }
 
-pub fn ensure_xcode_clt() -> Result<(), String> {
-    if has_xcode_clt() {
-        return Ok(());
+pub fn warn_if_xcode_clt_missing() {
+    if !has_xcode_clt() {
+        eprintln!(
+            "    Warning: Xcode Command Line Tools not found; run `xcode-select --install` if Mach-O patching fails"
+        );
     }
-
-    eprintln!("    Xcode Command Line Tools not found, installing...");
-
-    let status = Command::new("xcode-select")
-        .arg("--install")
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map_err(|e| format!("Failed to run xcode-select --install: {e}"))?;
-
-    if !status.success() {
-        eprintln!("    Warning: could not trigger CLT install, some patching may be skipped");
-        return Ok(());
-    }
-
-    // Wait up to 10 minutes for the GUI installation to complete
-    for _ in 0..120 {
-        std::thread::sleep(std::time::Duration::from_secs(5));
-        if has_xcode_clt() {
-            eprintln!("    Xcode Command Line Tools installed successfully");
-            return Ok(());
-        }
-    }
-
-    eprintln!("    Warning: CLT install timed out, some patching may be skipped");
-    Ok(())
 }

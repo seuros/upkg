@@ -128,21 +128,9 @@ fn platform_bottle_candidates() -> Vec<String> {
         .collect()
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-fn platform_bottle_candidates() -> Vec<String> {
-    vec!["x86_64_linux".to_string()]
-}
-
-#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-fn platform_bottle_candidates() -> Vec<String> {
-    vec!["arm64_linux".to_string()]
-}
-
 #[cfg(not(any(
     all(target_os = "macos", target_arch = "aarch64"),
     all(target_os = "macos", target_arch = "x86_64"),
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "linux", target_arch = "aarch64"),
 )))]
 fn platform_bottle_candidates() -> Vec<String> {
     Vec::new()
@@ -189,28 +177,6 @@ fn select_bottle_with_codename(
         }
     }
 
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    {
-        if let Some(file) = formula.bottle.stable.files.get("x86_64_linux") {
-            return Ok(SelectedBottle {
-                tag: "x86_64_linux".to_string(),
-                url: file.url.clone(),
-                sha256: file.sha256.clone(),
-            });
-        }
-    }
-
-    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    {
-        if let Some(file) = formula.bottle.stable.files.get("arm64_linux") {
-            return Ok(SelectedBottle {
-                tag: "arm64_linux".to_string(),
-                url: file.url.clone(),
-                sha256: file.sha256.clone(),
-            });
-        }
-    }
-
     if let Some(file) = formula.bottle.stable.files.get("all") {
         return Ok(SelectedBottle {
             tag: "all".to_string(),
@@ -240,19 +206,6 @@ fn select_bottle_with_codename(
         let compatible = compatible_codenames(macos_codename);
         for (tag, file) in &formula.bottle.stable.files {
             if !tag.starts_with("arm64_") && compatible.contains(&tag.as_str()) {
-                return Ok(SelectedBottle {
-                    tag: tag.clone(),
-                    url: file.url.clone(),
-                    sha256: file.sha256.clone(),
-                });
-            }
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        for (tag, file) in &formula.bottle.stable.files {
-            if tag.ends_with("_linux") {
                 return Ok(SelectedBottle {
                     tag: tag.clone(),
                     url: file.url.clone(),
@@ -440,51 +393,6 @@ mod tests {
             err,
             Error::UnsupportedBottle { name } if name == "legacy"
         ));
-    }
-
-    #[test]
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    fn selects_linux_bottle() {
-        let mut files = BTreeMap::new();
-        files.insert(
-            "x86_64_linux".to_string(),
-            BottleFile {
-                url: "https://example.com/linux.tar.gz".to_string(),
-                sha256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-                    .to_string(),
-            },
-        );
-        files.insert(
-            "arm64_sonoma".to_string(),
-            BottleFile {
-                url: "https://example.com/macos.tar.gz".to_string(),
-                sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-                    .to_string(),
-            },
-        );
-
-        let formula = Formula {
-            name: "linux-only".to_string(),
-            versions: Versions {
-                stable: "0.1.0".to_string(),
-            },
-            dependencies: Vec::new(),
-            bottle: Bottle {
-                stable: BottleStable { files, rebuild: 0 },
-            },
-            revision: 0,
-            keg_only: KegOnly::default(),
-            build_dependencies: Vec::new(),
-            urls: None,
-            ruby_source_path: None,
-            ruby_source_checksum: None,
-            uses_from_macos: Vec::new(),
-            requirements: Vec::new(),
-            variations: None,
-        };
-
-        let selected = select_bottle(&formula).unwrap();
-        assert_eq!(selected.tag, "x86_64_linux");
     }
 
     #[test]

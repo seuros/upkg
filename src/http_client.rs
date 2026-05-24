@@ -1,6 +1,6 @@
 use rama::{
     Service,
-    error::OpaqueError,
+    error::extra::OpaqueError,
     http::{
         Body, HeaderValue, Request, Response, StatusCode,
         client::{EasyHttpWebClient, HttpClientService},
@@ -8,6 +8,7 @@ use rama::{
         service::client::HttpClientExt,
     },
     net::client::pool::http::HttpPooledConnectorConfig,
+    rt::Executor,
     service::BoxService,
 };
 
@@ -33,6 +34,37 @@ pub enum RedirectError {
     },
 }
 
+pub fn redirect_error_message(error: RedirectError) -> String {
+    redirect_error_message_with_request_context(error, None)
+}
+
+pub fn redirect_error_message_with_request_context(
+    error: RedirectError,
+    request_context: Option<&str>,
+) -> String {
+    match error {
+        RedirectError::Request(message) => match request_context {
+            Some(context) => format!("{context}: {message}"),
+            None => message,
+        },
+        RedirectError::MissingLocation(status) => {
+            format!("redirect ({status}) without Location header")
+        }
+        RedirectError::InvalidLocationHeader => {
+            "redirect Location header contains invalid characters".to_string()
+        }
+        RedirectError::TooManyRedirects { url } => {
+            format!("too many redirects while fetching {url}")
+        }
+        RedirectError::InvalidBaseUrl { url, source } => {
+            format!("invalid redirect base URL '{url}': {source}")
+        }
+        RedirectError::InvalidLocation { location, source } => {
+            format!("invalid redirect location '{location}': {source}")
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct RedirectHeaders {
     pub authorization: Option<HeaderValue>,
@@ -46,7 +78,7 @@ pub fn build_rama_client() -> RamaClient {
         .without_tls_proxy_support()
         .with_proxy_support()
         .with_tls_support_using_rustls(None)
-        .with_default_http_connector()
+        .with_default_http_connector(Executor::default())
         .try_with_connection_pool::<HttpClientService<Body>>(HttpPooledConnectorConfig::default())
         .expect("failed to build HTTP client with connection pool")
         .build_client()
@@ -59,7 +91,7 @@ pub fn build_isolated_rama_client() -> RamaClient {
         .without_tls_proxy_support()
         .with_proxy_support()
         .with_tls_support_using_rustls(None)
-        .with_default_http_connector()
+        .with_default_http_connector(Executor::default())
         .build_client()
         .boxed()
 }

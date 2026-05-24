@@ -1,6 +1,9 @@
-use crate::types::Error;
 use sha2::{Digest, Sha256};
 
+#[cfg(target_os = "macos")]
+use crate::types::Error;
+
+#[cfg(target_os = "macos")]
 pub fn verify_sha256_bytes(bytes: &[u8], expected_sha256: Option<&str>) -> Result<(), Error> {
     let Some(expected_sha256) = expected_sha256 else {
         return Ok(());
@@ -32,6 +35,7 @@ pub fn finalize_sha256_hex(hasher: Sha256) -> String {
     rendered
 }
 
+#[cfg(target_os = "macos")]
 fn normalize_sha256(input: &str) -> Result<String, Error> {
     let normalized = input.trim().to_lowercase();
 

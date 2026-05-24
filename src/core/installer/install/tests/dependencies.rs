@@ -85,8 +85,8 @@ async fn install_with_dependencies() {
 
     let api_client = ApiClient::with_base_url(mock_server.uri());
     let ctx = new_test_context(api_client, &tmp);
-    let root = ctx.root.clone();
-    let prefix = ctx.prefix.clone();
+    let _root = ctx.root.clone();
+    let _prefix = ctx.prefix.clone();
     let mut installer = ctx.installer;
 
     installer
@@ -159,8 +159,8 @@ end
     let api_client =
         ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
     let ctx = new_test_context(api_client, &tmp);
-    let root = ctx.root.clone();
-    let prefix = ctx.prefix.clone();
+    let _root = ctx.root.clone();
+    let _prefix = ctx.prefix.clone();
     let installer = ctx.installer;
     let plan = installer
         .plan(&["hashicorp/tap/terraform".to_string()])
@@ -218,7 +218,7 @@ end
         ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
     let ctx = new_test_context(api_client, &tmp);
     let root = ctx.root.clone();
-    let prefix = ctx.prefix.clone();
+    let _prefix = ctx.prefix.clone();
     let mut installer = ctx.installer;
 
     installer
@@ -281,8 +281,8 @@ async fn uninstalling_non_installed_tap_ref_does_not_remove_core_formula() {
 
     let api_client = ApiClient::with_base_url(mock_server.uri());
     let ctx = new_test_context(api_client, &tmp);
-    let root = ctx.root.clone();
-    let prefix = ctx.prefix.clone();
+    let _root = ctx.root.clone();
+    let _prefix = ctx.prefix.clone();
     let mut installer = ctx.installer;
     installer
         .install(&["terraform".to_string()], true)

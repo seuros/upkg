@@ -4,8 +4,6 @@ pub mod android;
 pub mod freebsd;
 #[cfg(target_os = "linux")]
 pub mod linux;
-#[cfg(target_os = "macos")]
-pub mod macos;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub mod ravenports;
 #[cfg(target_os = "windows")]
@@ -25,8 +23,6 @@ pub enum Backend {
     Android(android::AndroidManager),
     #[cfg(target_os = "linux")]
     Linux(linux::LinuxManager),
-    #[cfg(target_os = "macos")]
-    Macos,
     #[cfg(target_os = "windows")]
     Windows(windows::WindowsManager),
     #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
@@ -91,11 +87,6 @@ impl Backend {
             Ok(Self::Linux(linux::detect()?))
         }
 
-        #[cfg(target_os = "macos")]
-        {
-            Ok(Self::Macos)
-        }
-
         #[cfg(target_os = "windows")]
         {
             Ok(Self::Windows(windows::detect()?))
@@ -109,7 +100,6 @@ impl Backend {
         #[cfg(not(any(
             target_os = "android",
             target_os = "linux",
-            target_os = "macos",
             target_os = "windows",
             target_os = "freebsd",
             target_os = "dragonfly"
@@ -125,8 +115,6 @@ impl Backend {
             Self::Android(manager) => manager.name(),
             #[cfg(target_os = "linux")]
             Self::Linux(manager) => manager.name(),
-            #[cfg(target_os = "macos")]
-            Self::Macos => macos::name(),
             #[cfg(target_os = "windows")]
             Self::Windows(manager) => manager.name(),
             #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
@@ -142,8 +130,6 @@ impl Backend {
             Self::Android(manager) => manager.install_spec(packages),
             #[cfg(target_os = "linux")]
             Self::Linux(manager) => manager.install_spec(packages),
-            #[cfg(target_os = "macos")]
-            Self::Macos => macos::install_spec(packages),
             #[cfg(target_os = "windows")]
             Self::Windows(manager) => manager.install_spec(packages),
             #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
@@ -159,8 +145,6 @@ impl Backend {
             Self::Android(manager) => manager.uninstall_spec(packages),
             #[cfg(target_os = "linux")]
             Self::Linux(manager) => manager.uninstall_spec(packages),
-            #[cfg(target_os = "macos")]
-            Self::Macos => macos::uninstall_spec(packages),
             #[cfg(target_os = "windows")]
             Self::Windows(manager) => manager.uninstall_spec(packages),
             #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
@@ -176,8 +160,6 @@ impl Backend {
             Self::Android(manager) => manager.upgrade_spec(packages),
             #[cfg(target_os = "linux")]
             Self::Linux(manager) => manager.upgrade_spec(packages),
-            #[cfg(target_os = "macos")]
-            Self::Macos => macos::upgrade_spec(packages),
             #[cfg(target_os = "windows")]
             Self::Windows(manager) => manager.upgrade_spec(packages),
             #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]

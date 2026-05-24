@@ -9,6 +9,7 @@ use crate::core::storage::blob::BlobCache;
 use crate::core::storage::receipt::scan_installed;
 use crate::core::storage::state_db::{InstalledPackage, InstalledPackageKind, StateDb};
 use crate::core::storage::store::Store;
+use crate::package_ref::{cask_name, is_cask_name};
 use crate::types::Error;
 
 use super::Installer;
@@ -72,28 +73,27 @@ pub fn create_installer(
 }
 
 fn acquire_global_lock(root: &Path) -> Result<File, Error> {
-    use std::os::unix::io::AsRawFd;
+    let locks_dir = root.join("locks");
+    std::fs::create_dir_all(&locks_dir).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to create lock directory: {e}"),
+    })?;
 
-    let lock_path = root.join("locks").join("upkg.lock");
+    let lock_path = locks_dir.join("upkg.lock");
     let lock_file = File::create(&lock_path).map_err(|e| Error::StoreCorruption {
         message: format!("failed to create global lock file: {e}"),
     })?;
 
-    let fd = lock_file.as_raw_fd();
-
-    // Try non-blocking exclusive lock first
-    let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
-    if ret != 0 {
-        eprintln!("    Waiting for another upkg process to finish...");
-        let ret = unsafe { libc::flock(fd, libc::LOCK_EX) };
-        if ret != 0 {
+    if let Err(err) = lock_file.try_lock() {
+        let std::fs::TryLockError::WouldBlock = err else {
             return Err(Error::StoreCorruption {
-                message: format!(
-                    "failed to acquire global lock: {}",
-                    std::io::Error::last_os_error()
-                ),
+                message: format!("failed to acquire global lock: {err}"),
             });
-        }
+        };
+
+        eprintln!("    Waiting for another upkg process to finish...");
+        lock_file.lock().map_err(|e| Error::StoreCorruption {
+            message: format!("failed to acquire global lock: {e}"),
+        })?;
     }
 
     Ok(lock_file)
@@ -107,7 +107,7 @@ fn backfill_state_db_if_empty(state_db: &StateDb, prefix: &Path) -> Result<(), E
     let installed_at = current_timestamp();
     for keg in scan_installed(&prefix.join("Cellar"))? {
         state_db.record_installed(&InstalledPackage {
-            kind: if keg.name.starts_with("cask:") {
+            kind: if is_cask_name(&keg.name) {
                 InstalledPackageKind::App
             } else {
                 InstalledPackageKind::Formula
@@ -121,9 +121,10 @@ fn backfill_state_db_if_empty(state_db: &StateDb, prefix: &Path) -> Result<(), E
     }
 
     for (token, version) in scan_caskroom(prefix)? {
+        let name = cask_name(&token);
         state_db.record_installed(&InstalledPackage {
-            name: format!("cask:{token}"),
-            formula_name: format!("cask:{token}"),
+            name: name.clone(),
+            formula_name: name,
             version,
             store_key: String::new(),
             kind: InstalledPackageKind::App,

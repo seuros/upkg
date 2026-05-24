@@ -1,7 +1,9 @@
 use crate::error::UpkgError;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-use crate::http_client::{self, RamaClient, RedirectError, RedirectHeaders};
+use crate::checksum::finalize_sha256_hex;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use crate::http_client::{self, RamaClient, RedirectHeaders};
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use rama::http::{BodyExtractExt, HeaderValue, StatusCode};
 
@@ -172,27 +174,11 @@ async fn send_get_with_redirects(
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn map_redirect_error(error: RedirectError) -> UpkgError {
-    let message = match error {
-        RedirectError::Request(message) => format!("request failed: {message}"),
-        RedirectError::MissingLocation(status) => {
-            format!("redirect ({status}) without Location header")
-        }
-        RedirectError::InvalidLocationHeader => {
-            "redirect Location header is not valid UTF-8".to_string()
-        }
-        RedirectError::TooManyRedirects { url } => {
-            format!("too many redirects while fetching {url}")
-        }
-        RedirectError::InvalidBaseUrl { source, .. } => {
-            format!("invalid redirect base URL: {source}")
-        }
-        RedirectError::InvalidLocation { source, .. } => {
-            format!("invalid redirect location: {source}")
-        }
-    };
-
-    UpkgError::SelfUpgrade(message)
+fn map_redirect_error(error: http_client::RedirectError) -> UpkgError {
+    UpkgError::SelfUpgrade(http_client::redirect_error_message_with_request_context(
+        error,
+        Some("request failed"),
+    ))
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -217,11 +203,7 @@ async fn download_to_file(
         file.write_all(&chunk)?;
     }
 
-    let actual = hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let actual = finalize_sha256_hex(hasher);
     if actual != expected_sha256 {
         let _ = std::fs::remove_file(path);
         return Err(UpkgError::SelfUpgrade(format!(

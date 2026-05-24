@@ -249,9 +249,7 @@ pub fn patch_homebrew_placeholders(
 
     static CLT_CHECK: Once = Once::new();
     CLT_CHECK.call_once(|| {
-        if let Err(e) = crate::privilege_macos::ensure_xcode_clt() {
-            eprintln!("Warning: {e}");
-        }
+        crate::privilege_macos::warn_if_xcode_clt_missing();
     });
 
     let prefix = cellar_dir.parent().unwrap_or(Path::new("/opt/homebrew"));
@@ -286,8 +284,7 @@ pub fn patch_homebrew_placeholders(
     let first_patch_error: Arc<Mutex<Option<Error>>> = Arc::new(Mutex::new(None));
 
     macho_files.par_iter().for_each(|path| {
-        if let Err(e) =
-            patch_macho_binary_strings_with_cellar(path, &prefix_str, Some(&cellar_str))
+        if let Err(e) = patch_macho_binary_strings_with_cellar(path, &prefix_str, Some(&cellar_str))
         {
             patch_failures.fetch_add(1, Ordering::Relaxed);
             if let Ok(mut guard) = first_patch_error.lock()

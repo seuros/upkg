@@ -1,3 +1,4 @@
+use crate::package_ref::cask_name;
 use crate::types::Error;
 use serde_json::Value;
 
@@ -70,7 +71,7 @@ pub fn resolve_cask(token: &str, cask: &Value) -> Result<ResolvedCask, Error> {
     }
 
     Ok(ResolvedCask {
-        install_name: format!("cask:{token}"),
+        install_name: cask_name(token),
         token: token.to_string(),
         version,
         url,
@@ -92,36 +93,10 @@ fn required_string(value: &Value, field: &str) -> Result<String, Error> {
 }
 
 fn select_platform_variation(cask: &Value) -> Option<&Value> {
-    #[cfg(target_os = "macos")]
-    {
-        let variations = cask.get("variations")?;
-        variations.get(current_macos_variation_key())
-    }
-
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    {
-        let variations = cask.get("variations")?;
-        ["x86_64_linux", "arm64_linux"]
-            .iter()
-            .find_map(|key| variations.get(*key))
-    }
-
-    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    {
-        let variations = cask.get("variations")?;
-        ["arm64_linux", "x86_64_linux"]
-            .iter()
-            .find_map(|key| variations.get(*key))
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = cask;
-        None
-    }
+    let variations = cask.get("variations")?;
+    variations.get(current_macos_variation_key())
 }
 
-#[cfg(target_os = "macos")]
 fn current_macos_variation_key() -> String {
     crate::types::formula::bottle::current_platform_bottle_tag().unwrap_or_else(|| {
         #[cfg(target_arch = "aarch64")]
@@ -364,29 +339,26 @@ mod tests {
 
     #[test]
     fn resolve_cask_uses_platform_variation_url_and_sha() {
-        let cask = serde_json::json!({
+        let mut cask = serde_json::json!({
             "token": "test",
             "version": "1.0.0",
             "url": "https://example.com/darwin.zip",
             "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "artifacts": [{ "binary": [["op"]] }],
-            "variations": {
-                "x86_64_linux": {
-                    "url": "https://example.com/linux.zip",
-                    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                }
-            }
+            "variations": {}
+        });
+        let variation_key = current_macos_variation_key();
+        cask["variations"][variation_key.as_str()] = serde_json::json!({
+            "url": "https://example.com/macos.zip",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         });
 
-        let _resolved = resolve_cask("test", &cask).unwrap();
-        #[cfg(target_os = "linux")]
-        {
-            assert_eq!(_resolved.url, "https://example.com/linux.zip");
-            assert_eq!(
-                _resolved.sha256,
-                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-            );
-        }
+        let resolved = resolve_cask("test", &cask).unwrap();
+        assert_eq!(resolved.url, "https://example.com/macos.zip");
+        assert_eq!(
+            resolved.sha256,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
     }
 
     #[test]

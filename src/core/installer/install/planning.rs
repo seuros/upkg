@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::core::storage::receipt::find_installed;
+use crate::package_ref::cask_name;
 use crate::types::{BuildPlan, Error, Formula, InstallMethod, resolve_closure, select_bottle};
 
 use super::{AutoInstallTargets, InstallPlan, Installer, PlannedInstall};
@@ -81,7 +82,7 @@ impl Installer {
                 Err(Error::MissingFormula { .. }) => {
                     match self.api_client.get_cask(normalized).await {
                         Ok(_) => {
-                            casks.push((original.clone(), format!("cask:{normalized}")));
+                            casks.push((original.clone(), cask_name(normalized)));
                         }
                         Err(Error::MissingFormula { .. }) => {
                             return Err(Error::MissingFormula {
@@ -99,8 +100,8 @@ impl Installer {
     }
 
     async fn fetch_formula_with_retry(&self, name: &str) -> Result<Formula, Error> {
-        use chrono_machines::backoff::BackoffStrategy;
         use chrono_machines::ExponentialBackoff;
+        use chrono_machines::backoff::BackoffStrategy;
 
         let backoff = ExponentialBackoff::new()
             .base_delay_ms(200)

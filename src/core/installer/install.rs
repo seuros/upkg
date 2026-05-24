@@ -31,6 +31,7 @@ use crate::core::storage::receipt::{
 };
 use crate::core::storage::state_db::{InstalledPackage, InstalledPackageKind, StateDb};
 use crate::core::storage::store::Store;
+use crate::package_ref::{cask_name, cask_token, is_cask_name};
 
 use crate::types::{Error, Formula, InstallMethod, formula_token};
 
@@ -98,7 +99,7 @@ impl Installer {
             formula_name: receipt.formula_name.clone(),
             version: receipt.version.clone(),
             store_key: receipt.store_key.clone(),
-            kind: if receipt.install_name.starts_with("cask:") {
+            kind: if is_cask_name(&receipt.install_name) {
                 InstalledPackageKind::App
             } else {
                 InstalledPackageKind::Formula
@@ -130,10 +131,8 @@ impl Installer {
 
     #[cfg(test)]
     pub async fn install(&mut self, names: &[String], link: bool) -> Result<ExecuteResult, Error> {
-        let (casks, formulas): (Vec<_>, Vec<_>) = names
-            .iter()
-            .cloned()
-            .partition(|name| name.starts_with("cask:"));
+        let (casks, formulas): (Vec<_>, Vec<_>) =
+            names.iter().cloned().partition(|name| is_cask_name(name));
 
         let mut installed = 0usize;
 
@@ -156,9 +155,7 @@ impl Installer {
     ) -> Result<ExecuteResult, Error> {
         let mut installed = 0usize;
         for name in names {
-            let token = name
-                .strip_prefix("cask:")
-                .expect("install_casks expects cask: prefixed names");
+            let token = cask_token(name).expect("install_casks expects cask: prefixed names");
             self.install_single_cask(token, link).await?;
             installed += 1;
         }
@@ -166,7 +163,7 @@ impl Installer {
     }
 
     pub fn uninstall(&mut self, name: &str) -> Result<(), Error> {
-        if let Some(token) = name.strip_prefix("cask:") {
+        if let Some(token) = cask_token(name) {
             return self.uninstall_cask(token);
         }
 
@@ -189,7 +186,7 @@ impl Installer {
         let caskroom_path = self.prefix.join("Caskroom").join(token);
         if !caskroom_path.exists() {
             return Err(Error::NotInstalled {
-                name: format!("cask:{token}"),
+                name: cask_name(token),
             });
         }
 
@@ -230,7 +227,7 @@ impl Installer {
                 caskroom_path.display()
             ),
         })?;
-        self.state_db.remove_installed(&format!("cask:{token}"))?;
+        self.state_db.remove_installed(&cask_name(token))?;
 
         Ok(())
     }

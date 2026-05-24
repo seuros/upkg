@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::native_cli::utils::{explain_install_failure, normalize_formula_name};
+use crate::package_ref::{is_cask_name, normalize_app_name};
 
 pub async fn execute(
     installer: &mut crate::core::installer::install::Installer,
@@ -30,7 +31,7 @@ pub async fn execute(
         };
         match result {
             Ok(name) => {
-                if name.starts_with("cask:") {
+                if is_cask_name(&name) {
                     cask_names.push(name);
                 } else {
                     formula_names.push((formula.clone(), name));
@@ -267,19 +268,6 @@ pub async fn execute(
     );
 
     Ok(())
-}
-
-fn normalize_app_name(name: &str) -> Result<String, crate::types::Error> {
-    let normalized = normalize_formula_name(name)?;
-    if normalized.starts_with("cask:") {
-        return Ok(normalized);
-    }
-    if normalized.contains('/') {
-        return Err(crate::types::Error::InvalidArgument {
-            message: format!("'{name}' is not a supported app reference"),
-        });
-    }
-    Ok(format!("cask:{normalized}"))
 }
 
 pub(crate) fn failure_context_for_error(

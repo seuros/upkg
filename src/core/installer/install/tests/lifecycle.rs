@@ -180,7 +180,7 @@ async fn gc_removes_unreferenced_store_entries() {
     let api_client = ApiClient::with_base_url(mock_server.uri());
     let ctx = new_test_context(api_client, &tmp);
     let root = ctx.root.clone();
-    let prefix = ctx.prefix.clone();
+    let _prefix = ctx.prefix.clone();
     let mut installer = ctx.installer;
 
     installer
@@ -248,7 +248,7 @@ async fn gc_does_not_remove_referenced_store_entries() {
     let api_client = ApiClient::with_base_url(mock_server.uri());
     let ctx = new_test_context(api_client, &tmp);
     let root = ctx.root.clone();
-    let prefix = ctx.prefix.clone();
+    let _prefix = ctx.prefix.clone();
     let mut installer = ctx.installer;
 
     installer

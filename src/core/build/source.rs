@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use crate::types::Error;
 use tokio::fs;
 
-use crate::core::checksum::verify_sha256_bytes;
+use crate::checksum::verify_sha256_bytes;
 use crate::core::extraction::extract::extract_tarball;
-use crate::http_client::{self, RamaClient, RedirectError, RedirectHeaders};
+use crate::http_client::{self, RamaClient, RedirectHeaders};
 use rama::http::{Response, body::util::BodyExt};
 
 pub async fn download_and_extract_source(
@@ -98,27 +98,13 @@ async fn send_get_with_redirects(client: &RamaClient, url: &str) -> Result<Respo
         .map_err(map_redirect_error)
 }
 
-fn map_redirect_error(error: RedirectError) -> Error {
-    let message = match error {
-        RedirectError::Request(message) => format!("failed to download source: {message}"),
-        RedirectError::MissingLocation(status) => {
-            format!("redirect ({status}) without Location header")
-        }
-        RedirectError::InvalidLocationHeader => {
-            "redirect Location header contains invalid characters".to_string()
-        }
-        RedirectError::TooManyRedirects { url } => {
-            format!("too many redirects while fetching {url}")
-        }
-        RedirectError::InvalidBaseUrl { url, source } => {
-            format!("invalid redirect base URL '{url}': {source}")
-        }
-        RedirectError::InvalidLocation { location, source } => {
-            format!("invalid redirect location '{location}': {source}")
-        }
-    };
-
-    Error::NetworkFailure { message }
+fn map_redirect_error(error: http_client::RedirectError) -> Error {
+    Error::NetworkFailure {
+        message: http_client::redirect_error_message_with_request_context(
+            error,
+            Some("failed to download source"),
+        ),
+    }
 }
 
 async fn verify_checksum(path: &Path, expected: Option<&str>, url: &str) -> Result<(), Error> {

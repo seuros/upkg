@@ -15,7 +15,7 @@ That's it. Same command on Debian, Fedora, Arch, openSUSE, OpenWrt, Termux, Free
 ## What it actually does
 
 - One command surface: `upkg install`, `upkg uninstall`, `upkg upgrade`.
-- Routes to the native package manager underneath.
+- Routes to the platform package manager where that is the right boundary, with a built-in Homebrew-compatible engine on macOS.
 - Keeps the names people already know — no new catalog, no parallel universe.
 - Stays out of your way for anything advanced. Use `apt`, `dnf`, `pacman`, `pkg` directly when you need to.
 
