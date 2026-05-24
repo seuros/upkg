@@ -25,6 +25,10 @@ pub fn upgrade_spec(packages: &[String]) -> CommandSpec {
     CommandSpec::new(RVN_PATH, args)
 }
 
+pub fn list_spec() -> CommandSpec {
+    CommandSpec::new(RVN_PATH, vec!["info".to_string(), "-a".to_string()])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
