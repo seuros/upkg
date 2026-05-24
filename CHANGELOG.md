@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.3](https://github.com/seuros/upkg/compare/upkg-v0.5.2...upkg-v0.5.3) (2026-05-24)
+
+
+### Bug Fixes
+
+* fall back to closest newer bottle when no same-or-older bottle exists ([cdf3926](https://github.com/seuros/upkg/commit/cdf392637648b241d70c61353463352178d5aa7d))
+
 ## [0.5.2](https://github.com/seuros/upkg/compare/upkg-v0.5.1...upkg-v0.5.2) (2026-05-23)
 
 
