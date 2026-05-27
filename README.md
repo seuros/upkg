@@ -60,6 +60,18 @@ App installs are written in the Homebrew-compatible cask layout, so `brew
 info --cask <name>` can detect them. Supported cask artifacts currently include
 apps, manpages, and bash/fish/zsh completions.
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/seuros/upkg/master/install.sh | sh
+```
+
+Or specify a custom install directory:
+
+```bash
+UPKG_INSTALL_DIR=~/.local/bin curl -fsSL https://raw.githubusercontent.com/seuros/upkg/master/install.sh | sh
+```
+
 ## Usage
 
 ```bash
