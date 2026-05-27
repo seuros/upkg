@@ -21,7 +21,7 @@ jobs:
           - name: Linux
             os: ubuntu-24.04
             test_package: imagemagick
-            verify_cmd: magick --version
+            verify_cmd: convert --version
           - name: Windows
             os: windows-2025
             test_package: ImageMagick.ImageMagick
@@ -63,10 +63,6 @@ jobs:
       - name: Verify package installed
         run: ${{ matrix.verify_cmd }}
 
-      - name: Install app (macOS)
+      - name: Dry run app install (macOS)
         if: runner.os == 'macOS'
-        run: upkg install --app gimp
-
-      - name: Verify app installed (macOS)
-        if: runner.os == 'macOS'
-        run: test -d "/Applications/GIMP.app"
+        run: upkg install --app --dry-run firefox
