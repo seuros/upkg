@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0](https://github.com/seuros/upkg/compare/upkg-v0.7.2...upkg-v0.8.0) (2026-05-27)
+
+
+### Features
+
+* add CI test and manual integration workflows ([4a3a3f5](https://github.com/seuros/upkg/commit/4a3a3f54ad34b38315c79f0f4d696c8569904961))
+
+
+### Bug Fixes
+
+* pin CI toolchain to MSRV 1.95 ([686d7d4](https://github.com/seuros/upkg/commit/686d7d45476edab80018dd96404dd3a8dc3ae783))
+* update all dependencies to latest compatible versions ([f15a00d](https://github.com/seuros/upkg/commit/f15a00d4f9d14eb6ba4a5517326282d2c8e11519))
+* use convert for Linux imagemagick verify, dry-run --app on macOS ([42bae12](https://github.com/seuros/upkg/commit/42bae12d327301580c4eb4da1244ed0b2ad11c0b))
+* use imagemagick for integration tests, add macOS --app test ([#17](https://github.com/seuros/upkg/issues/17)) ([4587962](https://github.com/seuros/upkg/commit/4587962d9abc3692c47bd1095f13644478f05e3d))
+
 ## [0.7.2](https://github.com/seuros/upkg/compare/upkg-v0.7.1...upkg-v0.7.2) (2026-05-24)
 
 
