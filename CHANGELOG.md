@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/seuros/upkg/compare/upkg-v0.8.0...upkg-v0.8.1) (2026-05-27)
+
+
+### Bug Fixes
+
+* handle flat binary/app artifact shape in cask parser ([f29f004](https://github.com/seuros/upkg/commit/f29f004fcef553d3850e4f684e807c3f7364fea5))
+
 ## [0.8.0](https://github.com/seuros/upkg/compare/upkg-v0.7.2...upkg-v0.8.0) (2026-05-27)
 
 
