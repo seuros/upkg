@@ -29,7 +29,12 @@ impl WindowsManager {
 
     pub fn install_spec(&self, packages: &[String]) -> CommandSpec {
         let mut args: Vec<String> = match self {
-            Self::Winget => vec!["install".into(), "--silent".into()],
+            Self::Winget => vec![
+                "install".into(),
+                "--silent".into(),
+                "--accept-source-agreements".into(),
+                "--accept-package-agreements".into(),
+            ],
             Self::Choco => vec!["install".into(), "-y".into()],
         };
         args.extend(packages.iter().cloned());
@@ -42,7 +47,11 @@ impl WindowsManager {
 
     pub fn uninstall_spec(&self, packages: &[String]) -> CommandSpec {
         let mut args: Vec<String> = match self {
-            Self::Winget => vec!["uninstall".into(), "--silent".into()],
+            Self::Winget => vec![
+                "uninstall".into(),
+                "--silent".into(),
+                "--accept-source-agreements".into(),
+            ],
             Self::Choco => vec!["uninstall".into(), "-y".into()],
         };
         args.extend(packages.iter().cloned());
@@ -55,7 +64,12 @@ impl WindowsManager {
 
     pub fn upgrade_spec(&self, packages: &[String]) -> CommandSpec {
         let mut args: Vec<String> = match self {
-            Self::Winget => vec!["upgrade".into(), "--silent".into()],
+            Self::Winget => vec![
+                "upgrade".into(),
+                "--silent".into(),
+                "--accept-source-agreements".into(),
+                "--accept-package-agreements".into(),
+            ],
             Self::Choco => vec!["upgrade".into(), "-y".into()],
         };
         args.extend(packages.iter().cloned());
@@ -90,7 +104,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case(WindowsManager::Winget, vec!["git".into()], "winget", vec!["install", "--silent", "git"])]
+    #[case(WindowsManager::Winget, vec!["git".into()], "winget", vec!["install", "--silent", "--accept-source-agreements", "--accept-package-agreements", "git"])]
     #[case(WindowsManager::Choco, vec!["curl".into()], "choco", vec!["install", "-y", "curl"])]
     fn install_spec_generates_correct_commands(
         #[case] manager: WindowsManager,
@@ -112,11 +126,11 @@ mod tests {
         let spec = manager.install_spec(&packages);
 
         let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-        assert_eq!(args, vec!["install", "--silent", "nodejs", "python", "git"]);
+        assert_eq!(args, vec!["install", "--silent", "--accept-source-agreements", "--accept-package-agreements", "nodejs", "python", "git"]);
     }
 
     #[rstest]
-    #[case(WindowsManager::Winget, vec!["git".into()], "winget", vec!["uninstall", "--silent", "git"])]
+    #[case(WindowsManager::Winget, vec!["git".into()], "winget", vec!["uninstall", "--silent", "--accept-source-agreements", "git"])]
     #[case(WindowsManager::Choco, vec!["curl".into()], "choco", vec!["uninstall", "-y", "curl"])]
     fn uninstall_spec_generates_correct_commands(
         #[case] manager: WindowsManager,
