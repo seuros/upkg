@@ -19,7 +19,7 @@ pub fn verify_sha256_bytes(bytes: &[u8], expected_sha256: Option<&str>) -> Resul
     Ok(())
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub fn sha256_hex_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
