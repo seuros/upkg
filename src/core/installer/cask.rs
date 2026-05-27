@@ -118,9 +118,14 @@ fn parse_binary_artifacts(cask: &Value) -> Result<Vec<CaskBinary>, Error> {
             continue;
         };
 
-        for entry in entries {
-            let (source, target) = parse_binary_entry(entry)?;
+        if is_flat_artifact_entry(entries) {
+            let (source, target) = parse_binary_entry(&Value::Array(entries.clone()))?;
             binaries.push(CaskBinary { source, target });
+        } else {
+            for entry in entries {
+                let (source, target) = parse_binary_entry(entry)?;
+                binaries.push(CaskBinary { source, target });
+            }
         }
     }
 
@@ -135,9 +140,14 @@ fn parse_app_artifacts(cask: &Value) -> Result<Vec<CaskApp>, Error> {
             continue;
         };
 
-        for entry in entries {
-            let (source, target) = parse_binary_entry(entry)?;
+        if is_flat_artifact_entry(entries) {
+            let (source, target) = parse_binary_entry(&Value::Array(entries.clone()))?;
             apps.push(CaskApp { source, target });
+        } else {
+            for entry in entries {
+                let (source, target) = parse_binary_entry(entry)?;
+                apps.push(CaskApp { source, target });
+            }
         }
     }
 
@@ -207,6 +217,12 @@ fn parse_linked_artifact_entries(
             })
         })
         .collect()
+}
+
+fn is_flat_artifact_entry(entries: &[Value]) -> bool {
+    entries.len() == 2
+        && entries[0].is_string()
+        && entries[1].is_object()
 }
 
 fn parse_binary_entry(entry: &Value) -> Result<(String, String), Error> {
@@ -434,6 +450,74 @@ mod tests {
                 "share/zsh/site-functions/_ghostty"
             ]
         );
+    }
+
+    #[test]
+    fn resolve_cask_parses_flat_binary_artifact() {
+        let cask = serde_json::json!({
+            "token": "gimp",
+            "version": "3.2.4",
+            "url": "https://example.com/gimp.dmg",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifacts": [
+                { "app": ["GIMP.app"] },
+                { "binary": [
+                    "$HOMEBREW_PREFIX/Caskroom/gimp/3.2.4/gimp.wrapper.sh",
+                    { "target": "gimp" }
+                ]}
+            ]
+        });
+
+        let resolved = resolve_cask("gimp", &cask).unwrap();
+        assert_eq!(resolved.apps.len(), 1);
+        assert_eq!(resolved.apps[0].source, "GIMP.app");
+        assert_eq!(resolved.binaries.len(), 1);
+        assert_eq!(
+            resolved.binaries[0].source,
+            "$HOMEBREW_PREFIX/Caskroom/gimp/3.2.4/gimp.wrapper.sh"
+        );
+        assert_eq!(resolved.binaries[0].target, "gimp");
+    }
+
+    #[test]
+    fn resolve_cask_parses_flat_app_artifact_with_target() {
+        let cask = serde_json::json!({
+            "token": "test",
+            "version": "1.0.0",
+            "url": "https://example.com/test.dmg",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifacts": [{
+                "app": ["MyApp.app", { "target": "Custom.app" }]
+            }]
+        });
+
+        let resolved = resolve_cask("test", &cask).unwrap();
+        assert_eq!(resolved.apps.len(), 1);
+        assert_eq!(resolved.apps[0].source, "MyApp.app");
+        assert_eq!(resolved.apps[0].target, "Custom.app");
+    }
+
+    #[test]
+    fn resolve_cask_parses_multiple_binary_entries() {
+        let cask = serde_json::json!({
+            "token": "test",
+            "version": "1.0.0",
+            "url": "https://example.com/test.zip",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifacts": [{
+                "binary": [
+                    ["bin/tool"],
+                    ["bin/tool2", {"target": "tool-two"}]
+                ]
+            }]
+        });
+
+        let resolved = resolve_cask("test", &cask).unwrap();
+        assert_eq!(resolved.binaries.len(), 2);
+        assert_eq!(resolved.binaries[0].source, "bin/tool");
+        assert_eq!(resolved.binaries[0].target, "tool");
+        assert_eq!(resolved.binaries[1].source, "bin/tool2");
+        assert_eq!(resolved.binaries[1].target, "tool-two");
     }
 
     #[test]
