@@ -16,13 +16,16 @@ jobs:
         include:
           - name: macOS
             os: macos-15
-            test_package: jq
+            test_package: imagemagick
+            verify_cmd: magick --version
           - name: Linux
             os: ubuntu-24.04
-            test_package: jq
+            test_package: imagemagick
+            verify_cmd: magick --version
           - name: Windows
             os: windows-2025
-            test_package: jqlang.jq
+            test_package: ImageMagick.ImageMagick
+            verify_cmd: magick --version
 
     steps:
       - uses: actions/checkout@v6
@@ -58,4 +61,12 @@ jobs:
         run: upkg install ${{ matrix.test_package }}
 
       - name: Verify package installed
-        run: jq --version
+        run: ${{ matrix.verify_cmd }}
+
+      - name: Install app (macOS)
+        if: runner.os == 'macOS'
+        run: upkg install --app gimp
+
+      - name: Verify app installed (macOS)
+        if: runner.os == 'macOS'
+        run: test -d "/Applications/GIMP.app"
