@@ -1,0 +1,61 @@
+name: Integration
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  smoke-test:
+    name: Smoke test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-15
+            test_package: jq
+          - name: Linux
+            os: ubuntu-24.04
+            test_package: jq
+          - name: Windows
+            os: windows-2025
+            test_package: jqlang.jq
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release -p upkg
+
+      - name: Install binary (Unix)
+        if: runner.os != 'Windows'
+        run: cp target/release/upkg /usr/local/bin/upkg
+
+      - name: Install binary (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Copy-Item target\release\upkg.exe -Destination "$env:USERPROFILE\upkg.exe"
+          echo "$env:USERPROFILE" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+
+      - name: Smoke test
+        run: |
+          upkg --help
+          upkg --version
+
+      - name: Dry run install
+        run: upkg install --dry-run ${{ matrix.test_package }}
+
+      - name: Install package
+        run: upkg install ${{ matrix.test_package }}
+
+      - name: Verify package installed
+        run: jq --version
