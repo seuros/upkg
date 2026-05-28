@@ -31,6 +31,7 @@ pub enum Backend {
     Ravenports,
 }
 
+#[derive(Debug)]
 pub struct CommandSpec {
     program: String,
     args: Vec<String>,
