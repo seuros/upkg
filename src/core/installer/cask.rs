@@ -220,9 +220,7 @@ fn parse_linked_artifact_entries(
 }
 
 fn is_flat_artifact_entry(entries: &[Value]) -> bool {
-    entries.len() == 2
-        && entries[0].is_string()
-        && entries[1].is_object()
+    entries.len() == 2 && entries[0].is_string() && entries[1].is_object()
 }
 
 fn parse_binary_entry(entry: &Value) -> Result<(String, String), Error> {

@@ -80,6 +80,26 @@ impl WindowsManager {
         }
     }
 
+    pub fn search_spec(&self, query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
+        Ok(match self {
+            Self::Winget => {
+                let mut args = vec!["search".to_string()];
+                if exact {
+                    args.push("-e".to_string());
+                }
+                args.push(query.to_string());
+                CommandSpec::new("winget", args)
+            }
+            Self::Choco => {
+                let mut args = vec!["search".to_string(), query.to_string()];
+                if exact {
+                    args.push("-e".to_string());
+                }
+                CommandSpec::new("choco", args)
+            }
+        })
+    }
+
     pub fn list_spec(&self) -> CommandSpec {
         match self {
             Self::Winget => CommandSpec::new("winget", vec!["list".to_string()]),
@@ -126,7 +146,18 @@ mod tests {
         let spec = manager.install_spec(&packages);
 
         let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-        assert_eq!(args, vec!["install", "--silent", "--accept-source-agreements", "--accept-package-agreements", "nodejs", "python", "git"]);
+        assert_eq!(
+            args,
+            vec![
+                "install",
+                "--silent",
+                "--accept-source-agreements",
+                "--accept-package-agreements",
+                "nodejs",
+                "python",
+                "git"
+            ]
+        );
     }
 
     #[rstest]
@@ -141,6 +172,23 @@ mod tests {
         let spec = manager.uninstall_spec(&packages);
         assert_eq!(spec.command(), expected_command);
 
+        let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
+        assert_eq!(args, expected_args);
+    }
+
+    #[rstest]
+    #[case(WindowsManager::Winget, false, "winget", vec!["search", "ripgrep"])]
+    #[case(WindowsManager::Winget, true, "winget", vec!["search", "-e", "ripgrep"])]
+    #[case(WindowsManager::Choco, false, "choco", vec!["search", "ripgrep"])]
+    #[case(WindowsManager::Choco, true, "choco", vec!["search", "ripgrep", "-e"])]
+    fn search_spec_generates_correct_commands(
+        #[case] manager: WindowsManager,
+        #[case] exact: bool,
+        #[case] expected_command: &str,
+        #[case] expected_args: Vec<&str>,
+    ) {
+        let spec = manager.search_spec("ripgrep", exact).unwrap();
+        assert_eq!(spec.command(), expected_command);
         let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
         assert_eq!(args, expected_args);
     }

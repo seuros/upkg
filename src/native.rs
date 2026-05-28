@@ -74,6 +74,36 @@ fn print_dry_run(
     Ok(())
 }
 
+pub fn search_native(
+    query: &str,
+    exact: bool,
+    kind: crate::cli::PackageKind,
+    refresh: bool,
+) -> Result<(), UpkgError> {
+    let options = crate::api::SearchOptions {
+        package_kind: match kind {
+            crate::cli::PackageKind::Auto => crate::api::PackageKindHint::Auto,
+            crate::cli::PackageKind::App => crate::api::PackageKindHint::App,
+        },
+        exact,
+        refresh,
+        ..crate::api::SearchOptions::default()
+    };
+
+    let hits = crate::api::search(query, &options).map_err(UpkgError::Native)?;
+
+    for hit in hits {
+        let label = match hit.kind {
+            crate::api::SearchKind::Formula => "formula",
+            crate::api::SearchKind::Cask => "app",
+        };
+        let desc = hit.desc.as_deref().unwrap_or("");
+        println!("{label}\t{}\t{}\t{}", hit.name, hit.version, desc);
+    }
+
+    Ok(())
+}
+
 pub fn list_native() -> Result<(), UpkgError> {
     let options = crate::api::InstallOptions::default();
     let installed = crate::api::list(&options).map_err(UpkgError::Native)?;

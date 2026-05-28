@@ -29,6 +29,12 @@ pub enum CommandKind {
         kind: PackageKind,
     },
     List,
+    Search {
+        query: String,
+        exact: bool,
+        kind: PackageKind,
+        refresh: bool,
+    },
     Help,
     Version,
     SelfUpgrade {
@@ -48,6 +54,7 @@ impl Cli {
             "uninstall" | "remove" | "rm" => Self::parse_uninstall(values),
             "upgrade" | "update" => Self::parse_upgrade(values),
             "list" | "ls" => Self::parse_list(values),
+            "search" | "s" => Self::parse_search(values),
             "--self-upgrade" | "self-upgrade" => Self::parse_self_upgrade(values),
             "help" | "--help" | "-h" => Ok(Self {
                 command: CommandKind::Help,
@@ -158,8 +165,45 @@ impl Cli {
         })
     }
 
+    fn parse_search(values: Vec<String>) -> Result<Self, UpkgError> {
+        let mut exact = false;
+        let mut kind = PackageKind::Auto;
+        let mut refresh = false;
+        let mut query_tokens: Vec<String> = Vec::new();
+        let mut positional_only = false;
+
+        for arg in values.into_iter().skip(1) {
+            if positional_only {
+                query_tokens.push(arg);
+                continue;
+            }
+            match arg.as_str() {
+                "--" => positional_only = true,
+                "--exact" | "-e" => exact = true,
+                "--app" => kind = PackageKind::App,
+                "--refresh" => refresh = true,
+                _ => query_tokens.push(arg),
+            }
+        }
+
+        if query_tokens.is_empty() {
+            return Err(UpkgError::Usage("search requires a query"));
+        }
+
+        let query = query_tokens.join(" ");
+
+        Ok(Self {
+            command: CommandKind::Search {
+                query,
+                exact,
+                kind,
+                refresh,
+            },
+        })
+    }
+
     pub fn help_text() -> &'static str {
-        "upkg - unified package manager frontend\n\nUSAGE:\n  upkg install [--app] [--dry-run] <package> [package...]\n  upkg uninstall [--app] [--dry-run] <package> [package...]\n  upkg upgrade [--app] [--dry-run] [package...]\n  upkg list\n  upkg --self-upgrade [--dry-run]\n  upkg --version\n\nEXAMPLES:\n  upkg install curl git\n  upkg install --app ghostty\n  upkg uninstall jq\n  upkg upgrade\n  upkg upgrade --dry-run neovim\n  upkg list\n  upkg --self-upgrade\n"
+        "upkg - unified package manager frontend\n\nUSAGE:\n  upkg install [--app] [--dry-run] <package> [package...]\n  upkg uninstall [--app] [--dry-run] <package> [package...]\n  upkg upgrade [--app] [--dry-run] [package...]\n  upkg list\n  upkg search [--app] [--exact] [--refresh] <query...>\n  upkg --self-upgrade [--dry-run]\n  upkg --version\n\nEXAMPLES:\n  upkg install curl git\n  upkg install --app ghostty\n  upkg uninstall jq\n  upkg upgrade\n  upkg upgrade --dry-run neovim\n  upkg list\n  upkg search ripgrep\n  upkg search --app ghostty\n  upkg search --exact git\n  upkg --self-upgrade\n"
     }
 }
 
@@ -301,6 +345,99 @@ mod tests {
 
         match cli.command {
             CommandKind::SelfUpgrade { dry_run } => assert!(!dry_run),
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parse_search_simple() {
+        let cli =
+            Cli::parse(["search", "ripgrep"].into_iter().map(str::to_string)).expect("parse ok");
+
+        match cli.command {
+            CommandKind::Search {
+                query,
+                exact,
+                kind,
+                refresh,
+            } => {
+                assert_eq!(query, "ripgrep");
+                assert!(!exact);
+                assert!(!refresh);
+                assert_eq!(kind, PackageKind::Auto);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parse_search_joins_multi_word_query() {
+        let cli = Cli::parse(
+            ["search", "visual", "studio", "code"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .expect("parse ok");
+
+        match cli.command {
+            CommandKind::Search { query, .. } => assert_eq!(query, "visual studio code"),
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parse_search_alias_and_flags() {
+        let cli = Cli::parse(
+            ["s", "--app", "--exact", "--refresh", "ghostty"]
+                .into_iter()
+                .map(str::to_string),
+        )
+        .expect("parse ok");
+
+        match cli.command {
+            CommandKind::Search {
+                query,
+                exact,
+                kind,
+                refresh,
+            } => {
+                assert_eq!(query, "ghostty");
+                assert!(exact);
+                assert!(refresh);
+                assert_eq!(kind, PackageKind::App);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parse_search_double_dash_passes_through_flag_like_queries() {
+        let cli = Cli::parse(["search", "--", "--exact"].into_iter().map(str::to_string))
+            .expect("parse ok");
+
+        match cli.command {
+            CommandKind::Search { query, exact, .. } => {
+                assert_eq!(query, "--exact");
+                assert!(!exact);
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parse_search_requires_query() {
+        let err = Cli::parse(["search"].into_iter().map(str::to_string))
+            .expect_err("search needs a query");
+        assert!(err.to_string().contains("search requires a query"));
+    }
+
+    #[test]
+    fn parse_search_short_exact_flag() {
+        let cli =
+            Cli::parse(["search", "-e", "git"].into_iter().map(str::to_string)).expect("parse ok");
+
+        match cli.command {
+            CommandKind::Search { exact, .. } => assert!(exact),
             _ => panic!("unexpected command"),
         }
     }

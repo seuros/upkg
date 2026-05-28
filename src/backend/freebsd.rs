@@ -1,4 +1,5 @@
 use crate::backend::CommandSpec;
+use crate::error::UpkgError;
 
 pub fn install_spec(packages: &[String]) -> CommandSpec {
     let mut args = vec!["pkg".to_string(), "install".to_string(), "-y".to_string()];
@@ -20,6 +21,15 @@ pub fn upgrade_spec(packages: &[String]) -> CommandSpec {
     let mut args = vec!["pkg".to_string(), "upgrade".to_string(), "-y".to_string()];
     args.extend(packages.iter().cloned());
     CommandSpec::new("sudo", args)
+}
+
+pub fn search_spec(query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
+    let mut args = vec!["search".to_string()];
+    if exact {
+        args.push("-e".to_string());
+    }
+    args.push(query.to_string());
+    Ok(CommandSpec::new("pkg", args))
 }
 
 #[cfg(test)]
@@ -63,6 +73,21 @@ mod tests {
         assert_eq!(spec.command(), "sudo");
         let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
         assert_eq!(args, vec!["pkg", "delete", "-y", "git"]);
+    }
+
+    #[test]
+    fn search_spec_non_exact() {
+        let spec = search_spec("ripgrep", false).unwrap();
+        assert_eq!(spec.command(), "pkg");
+        let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
+        assert_eq!(args, vec!["search", "ripgrep"]);
+    }
+
+    #[test]
+    fn search_spec_exact_uses_dash_e() {
+        let spec = search_spec("git", true).unwrap();
+        let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
+        assert_eq!(args, vec!["search", "-e", "git"]);
     }
 
     #[test]

@@ -54,6 +54,20 @@ impl AndroidManager {
         }
     }
 
+    pub fn search_spec(&self, query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
+        if exact {
+            return Err(UpkgError::Unsupported(match self {
+                Self::Pkg => "--exact is not supported by pkg search (Termux)",
+                Self::Apt => "--exact is not supported by apt search",
+            }));
+        }
+        let args = vec!["search".into(), query.to_string()];
+        Ok(match self {
+            Self::Pkg => CommandSpec::new("pkg", args),
+            Self::Apt => CommandSpec::new("apt", args),
+        })
+    }
+
     pub fn upgrade_spec(&self, packages: &[String]) -> CommandSpec {
         let mut args: Vec<String> = match self {
             Self::Pkg => vec!["upgrade".into(), "-y".into()],
@@ -126,6 +140,28 @@ mod tests {
 
         let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
         assert_eq!(args, expected_args);
+    }
+
+    #[rstest]
+    #[case(AndroidManager::Pkg, "pkg", vec!["search", "ripgrep"])]
+    #[case(AndroidManager::Apt, "apt", vec!["search", "ripgrep"])]
+    fn search_spec_non_exact(
+        #[case] manager: AndroidManager,
+        #[case] expected_command: &str,
+        #[case] expected_args: Vec<&str>,
+    ) {
+        let spec = manager.search_spec("ripgrep", false).unwrap();
+        assert_eq!(spec.command(), expected_command);
+        let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
+        assert_eq!(args, expected_args);
+    }
+
+    #[rstest]
+    #[case(AndroidManager::Pkg)]
+    #[case(AndroidManager::Apt)]
+    fn search_spec_rejects_exact(#[case] manager: AndroidManager) {
+        let err = manager.search_spec("git", true).expect_err("should reject");
+        assert!(matches!(err, UpkgError::Unsupported(_)));
     }
 
     #[test]

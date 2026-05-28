@@ -83,9 +83,48 @@ upkg uninstall htop
 upkg uninstall --app ghostty
 upkg upgrade
 upkg list
+upkg search ripgrep
+upkg search --app ghostty
+upkg search --exact git
 upkg --self-upgrade
 upkg help
 ```
+
+## Search
+
+`upkg search <query>` routes to the platform's native search:
+
+| Platform | Runs |
+|---|---|
+| Debian/Ubuntu | `apt search` |
+| Fedora/RHEL | `dnf search` |
+| Arch | `pacman -Ss` |
+| openSUSE | `zypper search` |
+| OpenWrt | `opkg find` |
+| FreeBSD | `pkg search` |
+| Android (Termux) | `pkg search` |
+| Windows | `winget search` / `choco search` |
+| macOS | built-in search against the Homebrew JSON index |
+
+Output passes through verbatim on native backends so you get the
+formatting you're used to. On macOS the engine prints a uniform
+tab-separated line: `kind<TAB>name<TAB>version<TAB>description`.
+
+Flags:
+
+- `--app` — on macOS, restrict to casks. No-op (and rejected as
+  `Unsupported`) on other platforms.
+- `--exact`, `-e` — exact name match. Maps to `pkg/winget/choco/rvn -e`
+  and to an anchored `^…$` regex for `pacman`/`opkg`. Returns an
+  `Unsupported` error on managers without an exact mode
+  (`apt`/`dnf`/`yum`/`zypper`).
+- `--refresh` — macOS only. Forces revalidation of the cached Homebrew
+  index instead of using the on-disk copy (default TTL 12 hours).
+
+The macOS index lives at `<root>/cache/homebrew-search/` and is
+revalidated with `If-None-Match` / `If-Modified-Since`. If the network
+or server fails, a stale cached copy is used and a warning is printed
+to stderr.
 
 ## Build
 

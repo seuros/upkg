@@ -169,6 +169,21 @@ impl Backend {
         }
     }
 
+    pub fn search_spec(&self, query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
+        match self {
+            #[cfg(target_os = "android")]
+            Self::Android(manager) => manager.search_spec(query, exact),
+            #[cfg(target_os = "linux")]
+            Self::Linux(manager) => manager.search_spec(query, exact),
+            #[cfg(target_os = "windows")]
+            Self::Windows(manager) => manager.search_spec(query, exact),
+            #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
+            Self::FreeBsd => freebsd::search_spec(query, exact),
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            Self::Ravenports => ravenports::search_spec(query, exact),
+        }
+    }
+
     pub fn list_spec(&self) -> CommandSpec {
         match self {
             #[cfg(target_os = "android")]

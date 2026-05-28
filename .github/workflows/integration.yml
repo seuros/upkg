@@ -63,6 +63,9 @@ jobs:
       - name: Verify package installed
         run: ${{ matrix.verify_cmd }}
 
+      - name: Search package
+        run: upkg search ${{ matrix.test_package }}
+
       - name: Dry run app install (macOS)
         if: runner.os == 'macOS'
         run: upkg install --app --dry-run firefox

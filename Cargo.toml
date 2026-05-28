@@ -14,6 +14,7 @@ flate2 = "1.1.8"
 tar = "0.4.44"
 sha2 = "0.11.0"
 url = "2.5.8"
+regex = "1.12.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 console = "0.16.2"
@@ -25,7 +26,6 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 futures-util = "0.3.31"
 rayon = "1.11.0"
-regex = "1.12.2"
 walkdir = "2.5.0"
 tree-sitter = "0.26.8"
 tree-sitter-ruby = "0.23.1"

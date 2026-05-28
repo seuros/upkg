@@ -1,4 +1,5 @@
 use crate::backend::CommandSpec;
+use crate::error::UpkgError;
 use std::path::Path;
 
 const RVN_PATH: &str = "/raven/sbin/rvn";
@@ -27,6 +28,15 @@ pub fn upgrade_spec(packages: &[String]) -> CommandSpec {
 
 pub fn list_spec() -> CommandSpec {
     CommandSpec::new(RVN_PATH, vec!["info".to_string(), "-a".to_string()])
+}
+
+pub fn search_spec(query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
+    let mut args = vec!["search".to_string()];
+    if exact {
+        args.push("-e".to_string());
+    }
+    args.push(query.to_string());
+    Ok(CommandSpec::new(RVN_PATH, args))
 }
 
 #[cfg(test)]
@@ -70,6 +80,21 @@ mod tests {
         assert_eq!(spec.command(), RVN_PATH);
         let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
         assert_eq!(args, vec!["remove", "-y", "git"]);
+    }
+
+    #[test]
+    fn search_spec_non_exact() {
+        let spec = search_spec("ripgrep", false).unwrap();
+        assert_eq!(spec.command(), RVN_PATH);
+        let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
+        assert_eq!(args, vec!["search", "ripgrep"]);
+    }
+
+    #[test]
+    fn search_spec_exact() {
+        let spec = search_spec("git", true).unwrap();
+        let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
+        assert_eq!(args, vec!["search", "-e", "git"]);
     }
 
     #[test]

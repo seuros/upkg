@@ -70,6 +70,15 @@ pub struct ApiClient {
     cache: Option<ApiCache>,
 }
 
+const INDEX_TTL_SECONDS: u64 = 12 * 3600;
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct IndexMeta {
+    etag: Option<String>,
+    last_modified: Option<String>,
+    fetched_at: u64,
+}
+
 impl ApiClient {
     pub fn new() -> Self {
         Self::with_base_url("https://formulae.brew.sh/api/formula".to_string())
@@ -301,6 +310,143 @@ impl ApiClient {
         Ok(formula)
     }
 
+    pub async fn fetch_formula_index(
+        &self,
+        cache_dir: &std::path::Path,
+        refresh: bool,
+    ) -> Result<String, Error> {
+        let url = format!("{}.json", self.base_url.trim_end_matches('/'));
+        self.fetch_index(&url, cache_dir, "formula", refresh).await
+    }
+
+    pub async fn fetch_cask_index(
+        &self,
+        cache_dir: &std::path::Path,
+        refresh: bool,
+    ) -> Result<String, Error> {
+        let url = format!("{}.json", self.cask_base_url.trim_end_matches('/'));
+        self.fetch_index(&url, cache_dir, "cask", refresh).await
+    }
+
+    async fn fetch_index(
+        &self,
+        url: &str,
+        cache_dir: &std::path::Path,
+        slug: &str,
+        refresh: bool,
+    ) -> Result<String, Error> {
+        std::fs::create_dir_all(cache_dir).map_err(|e| Error::FileError {
+            message: format!("failed to create search cache dir: {e}"),
+        })?;
+
+        let body_path = cache_dir.join(format!("{slug}.json"));
+        let meta_path = cache_dir.join(format!("{slug}.meta.json"));
+
+        let meta = load_index_meta(&meta_path);
+        let cached_body = if body_path.exists() {
+            std::fs::read_to_string(&body_path).ok()
+        } else {
+            None
+        };
+
+        if !refresh
+            && let (Some(meta), Some(body)) = (meta.as_ref(), cached_body.as_ref())
+            && index_is_fresh(meta.fetched_at)
+        {
+            return Ok(body.clone());
+        }
+
+        let mut request = self.client.get(url);
+        if let Some(meta) = meta.as_ref() {
+            if let Some(etag) = meta.etag.as_deref() {
+                request = request.header("If-None-Match", etag);
+            }
+            if let Some(last_modified) = meta.last_modified.as_deref() {
+                request = request.header("If-Modified-Since", last_modified);
+            }
+        }
+
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(e) => {
+                if let Some(body) = cached_body {
+                    eprintln!("warning: using stale cached {slug} index (network: {})", e);
+                    return Ok(body);
+                }
+                return Err(Error::NetworkFailure {
+                    message: format!("failed to fetch {slug} index: {e}"),
+                });
+            }
+        };
+
+        if response.status() == StatusCode::NOT_MODIFIED {
+            if let Some(body) = cached_body {
+                let mut updated = meta.unwrap_or_default();
+                updated.fetched_at = now_secs();
+                save_index_meta(&meta_path, &updated);
+                return Ok(body);
+            }
+            return Err(Error::NetworkFailure {
+                message: format!("{slug} index returned 304 but no cached body exists"),
+            });
+        }
+
+        if !response.status().is_success() {
+            if let Some(body) = cached_body {
+                eprintln!(
+                    "warning: using stale cached {slug} index (server: HTTP {})",
+                    response.status()
+                );
+                return Ok(body);
+            }
+            return Err(Error::NetworkFailure {
+                message: format!("{slug} index returned HTTP {}", response.status()),
+            });
+        }
+
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        let last_modified = response
+            .headers()
+            .get("last-modified")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let body = response
+            .try_into_string()
+            .await
+            .map_err(|e| Error::NetworkFailure {
+                message: format!("failed to read {slug} index body: {e}"),
+            })?;
+
+        let pid = std::process::id();
+        let tid = std::thread::current().id();
+        let tmp_path = cache_dir.join(format!("{slug}.json.{pid}.{tid:?}.part"));
+        std::fs::write(&tmp_path, &body).map_err(|e| Error::FileError {
+            message: format!("failed to write {slug} index part: {e}"),
+        })?;
+        if let Err(e) = std::fs::rename(&tmp_path, &body_path) {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(Error::FileError {
+                message: format!("failed to commit {slug} index: {e}"),
+            });
+        }
+
+        save_index_meta(
+            &meta_path,
+            &IndexMeta {
+                etag,
+                last_modified,
+                fetched_at: now_secs(),
+            },
+        );
+
+        Ok(body)
+    }
+
     pub async fn get_cask(&self, token: &str) -> Result<serde_json::Value, Error> {
         let url = format!("{}/{}.json", self.cask_base_url, token);
         let response = self
@@ -474,6 +620,29 @@ impl ApiClient {
         }
 
         Ok(None)
+    }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn index_is_fresh(fetched_at: u64) -> bool {
+    let now = now_secs();
+    now >= fetched_at && now - fetched_at < INDEX_TTL_SECONDS
+}
+
+fn load_index_meta(meta_path: &std::path::Path) -> Option<IndexMeta> {
+    let body = std::fs::read_to_string(meta_path).ok()?;
+    serde_json::from_str(&body).ok()
+}
+
+fn save_index_meta(meta_path: &std::path::Path, meta: &IndexMeta) {
+    if let Ok(body) = serde_json::to_string(meta) {
+        let _ = std::fs::write(meta_path, body);
     }
 }
 
@@ -1197,5 +1366,224 @@ end
         let cask = client.get_cask("iterm2").await.unwrap();
         assert_eq!(cask["token"], "iterm2");
         assert_eq!(cask["version"], "3.5.0");
+    }
+
+    fn write_stale_meta(cache_dir: &std::path::Path, slug: &str, etag: Option<&str>) {
+        let meta = IndexMeta {
+            etag: etag.map(|s| s.to_string()),
+            last_modified: Some("Wed, 01 Jan 2020 00:00:00 GMT".to_string()),
+            fetched_at: 0,
+        };
+        std::fs::write(
+            cache_dir.join(format!("{slug}.meta.json")),
+            serde_json::to_string(&meta).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn fetch_index_writes_body_and_meta_on_fresh_200() {
+        let mock_server = MockServer::start().await;
+        let cache_dir = tempdir().unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/formula.json"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("[]")
+                    .insert_header("etag", "\"abc123\"")
+                    .insert_header("last-modified", "Wed, 21 Oct 2026 07:28:00 GMT"),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let client = ApiClient::new();
+        let url = format!("{}/formula.json", mock_server.uri());
+        let body = client
+            .fetch_index(&url, cache_dir.path(), "formula", false)
+            .await
+            .unwrap();
+
+        assert_eq!(body, "[]");
+        assert!(cache_dir.path().join("formula.json").exists());
+        let meta_raw = std::fs::read_to_string(cache_dir.path().join("formula.meta.json")).unwrap();
+        let meta: IndexMeta = serde_json::from_str(&meta_raw).unwrap();
+        assert_eq!(meta.etag.as_deref(), Some("\"abc123\""));
+        assert_eq!(
+            meta.last_modified.as_deref(),
+            Some("Wed, 21 Oct 2026 07:28:00 GMT")
+        );
+        assert!(meta.fetched_at > 0);
+    }
+
+    #[tokio::test]
+    async fn fetch_index_uses_cache_when_fresh_no_network() {
+        let mock_server = MockServer::start().await;
+        let cache_dir = tempdir().unwrap();
+
+        std::fs::write(cache_dir.path().join("formula.json"), "[\"cached\"]").unwrap();
+        let meta = IndexMeta {
+            etag: Some("\"old\"".to_string()),
+            last_modified: None,
+            fetched_at: now_secs(),
+        };
+        std::fs::write(
+            cache_dir.path().join("formula.meta.json"),
+            serde_json::to_string(&meta).unwrap(),
+        )
+        .unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/formula.json"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&mock_server)
+            .await;
+
+        let client = ApiClient::new();
+        let url = format!("{}/formula.json", mock_server.uri());
+        let body = client
+            .fetch_index(&url, cache_dir.path(), "formula", false)
+            .await
+            .unwrap();
+
+        assert_eq!(body, "[\"cached\"]");
+    }
+
+    #[tokio::test]
+    async fn fetch_index_revalidates_with_304_when_stale() {
+        let mock_server = MockServer::start().await;
+        let cache_dir = tempdir().unwrap();
+
+        std::fs::write(cache_dir.path().join("formula.json"), "[\"cached\"]").unwrap();
+        write_stale_meta(cache_dir.path(), "formula", Some("\"etag-v1\""));
+
+        Mock::given(method("GET"))
+            .and(path("/formula.json"))
+            .and(header("if-none-match", "\"etag-v1\""))
+            .respond_with(ResponseTemplate::new(304))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let client = ApiClient::new();
+        let url = format!("{}/formula.json", mock_server.uri());
+        let body = client
+            .fetch_index(&url, cache_dir.path(), "formula", false)
+            .await
+            .unwrap();
+
+        assert_eq!(body, "[\"cached\"]");
+        let meta_raw = std::fs::read_to_string(cache_dir.path().join("formula.meta.json")).unwrap();
+        let meta: IndexMeta = serde_json::from_str(&meta_raw).unwrap();
+        assert!(
+            meta.fetched_at > 0,
+            "fetched_at should be refreshed after 304"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_index_refresh_forces_revalidation_even_when_fresh() {
+        let mock_server = MockServer::start().await;
+        let cache_dir = tempdir().unwrap();
+
+        std::fs::write(cache_dir.path().join("formula.json"), "[\"old\"]").unwrap();
+        let meta = IndexMeta {
+            etag: Some("\"etag-v1\"".to_string()),
+            last_modified: None,
+            fetched_at: now_secs(),
+        };
+        std::fs::write(
+            cache_dir.path().join("formula.meta.json"),
+            serde_json::to_string(&meta).unwrap(),
+        )
+        .unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/formula.json"))
+            .and(header("if-none-match", "\"etag-v1\""))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("[\"new\"]")
+                    .insert_header("etag", "\"etag-v2\""),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let client = ApiClient::new();
+        let url = format!("{}/formula.json", mock_server.uri());
+        let body = client
+            .fetch_index(&url, cache_dir.path(), "formula", true)
+            .await
+            .unwrap();
+
+        assert_eq!(body, "[\"new\"]");
+        let meta_raw = std::fs::read_to_string(cache_dir.path().join("formula.meta.json")).unwrap();
+        let meta: IndexMeta = serde_json::from_str(&meta_raw).unwrap();
+        assert_eq!(meta.etag.as_deref(), Some("\"etag-v2\""));
+    }
+
+    #[tokio::test]
+    async fn fetch_index_returns_stale_on_server_error() {
+        let mock_server = MockServer::start().await;
+        let cache_dir = tempdir().unwrap();
+
+        std::fs::write(cache_dir.path().join("formula.json"), "[\"cached\"]").unwrap();
+        write_stale_meta(cache_dir.path(), "formula", None);
+
+        Mock::given(method("GET"))
+            .and(path("/formula.json"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&mock_server)
+            .await;
+
+        let client = ApiClient::new();
+        let url = format!("{}/formula.json", mock_server.uri());
+        let body = client
+            .fetch_index(&url, cache_dir.path(), "formula", false)
+            .await
+            .unwrap();
+
+        assert_eq!(body, "[\"cached\"]");
+    }
+
+    #[tokio::test]
+    async fn fetch_index_server_error_without_cache_returns_network_error() {
+        let mock_server = MockServer::start().await;
+        let cache_dir = tempdir().unwrap();
+
+        Mock::given(method("GET"))
+            .and(path("/formula.json"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&mock_server)
+            .await;
+
+        let client = ApiClient::new();
+        let url = format!("{}/formula.json", mock_server.uri());
+        let err = client
+            .fetch_index(&url, cache_dir.path(), "formula", false)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::NetworkFailure { .. }));
+    }
+
+    #[tokio::test]
+    async fn fetch_index_stale_on_network_failure() {
+        let cache_dir = tempdir().unwrap();
+        std::fs::write(cache_dir.path().join("formula.json"), "[\"cached\"]").unwrap();
+        write_stale_meta(cache_dir.path(), "formula", None);
+
+        // Point at an unreachable port to force a connection failure.
+        let client = ApiClient::new();
+        let url = "http://127.0.0.1:1/formula.json";
+        let body = client
+            .fetch_index(url, cache_dir.path(), "formula", false)
+            .await
+            .unwrap();
+
+        assert_eq!(body, "[\"cached\"]");
     }
 }

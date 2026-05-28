@@ -12,6 +12,27 @@ pub enum LinuxManager {
     Opkg,
 }
 
+fn reject_exact_if(exact: bool, manager: &'static str) -> Result<(), UpkgError> {
+    if exact {
+        return Err(UpkgError::Unsupported(match manager {
+            "apt" => "--exact is not supported by apt search",
+            "dnf" => "--exact is not supported by dnf search",
+            "yum" => "--exact is not supported by yum search",
+            "zypper" => "--exact is not supported by zypper search",
+            _ => "--exact is not supported by this backend",
+        }));
+    }
+    Ok(())
+}
+
+fn anchor_if_exact(query: &str, exact: bool) -> String {
+    if exact {
+        format!("^{}$", regex::escape(query))
+    } else {
+        query.to_string()
+    }
+}
+
 pub fn detect() -> Result<LinuxManager, UpkgError> {
     let os_release = fs::read_to_string("/etc/os-release")?;
 
@@ -129,6 +150,47 @@ impl LinuxManager {
         match self {
             Self::Opkg => CommandSpec::new("opkg", args),
             _ => CommandSpec::new("sudo", args),
+        }
+    }
+
+    pub fn search_spec(&self, query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
+        match self {
+            Self::Apt => {
+                reject_exact_if(exact, "apt")?;
+                Ok(CommandSpec::new(
+                    "apt",
+                    vec!["search".into(), query.to_string()],
+                ))
+            }
+            Self::Dnf => {
+                reject_exact_if(exact, "dnf")?;
+                Ok(CommandSpec::new(
+                    "dnf",
+                    vec!["search".into(), query.to_string()],
+                ))
+            }
+            Self::Yum => {
+                reject_exact_if(exact, "yum")?;
+                Ok(CommandSpec::new(
+                    "yum",
+                    vec!["search".into(), query.to_string()],
+                ))
+            }
+            Self::Zypper => {
+                reject_exact_if(exact, "zypper")?;
+                Ok(CommandSpec::new(
+                    "zypper",
+                    vec!["search".into(), query.to_string()],
+                ))
+            }
+            Self::Pacman => Ok(CommandSpec::new(
+                "pacman",
+                vec!["-Ss".into(), anchor_if_exact(query, exact)],
+            )),
+            Self::Opkg => Ok(CommandSpec::new(
+                "opkg",
+                vec!["find".into(), anchor_if_exact(query, exact)],
+            )),
         }
     }
 
@@ -255,6 +317,62 @@ mod tests {
 
         let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
         assert_eq!(args, expected_args);
+    }
+
+    #[rstest]
+    #[case(LinuxManager::Apt, "ripgrep", "apt", vec!["search", "ripgrep"])]
+    #[case(LinuxManager::Dnf, "ripgrep", "dnf", vec!["search", "ripgrep"])]
+    #[case(LinuxManager::Yum, "ripgrep", "yum", vec!["search", "ripgrep"])]
+    #[case(LinuxManager::Zypper, "ripgrep", "zypper", vec!["search", "ripgrep"])]
+    #[case(LinuxManager::Pacman, "ripgrep", "pacman", vec!["-Ss", "ripgrep"])]
+    #[case(LinuxManager::Opkg, "ripgrep", "opkg", vec!["find", "ripgrep"])]
+    fn search_spec_non_exact(
+        #[case] manager: LinuxManager,
+        #[case] query: &str,
+        #[case] expected_command: &str,
+        #[case] expected_args: Vec<&str>,
+    ) {
+        let spec = manager.search_spec(query, false).expect("search ok");
+        assert_eq!(spec.command(), expected_command);
+        let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
+        assert_eq!(args, expected_args);
+    }
+
+    #[test]
+    fn search_spec_no_sudo_wrapper() {
+        let spec = LinuxManager::Apt.search_spec("git", false).unwrap();
+        assert_ne!(spec.command(), "sudo");
+    }
+
+    #[rstest]
+    #[case(LinuxManager::Apt)]
+    #[case(LinuxManager::Dnf)]
+    #[case(LinuxManager::Yum)]
+    #[case(LinuxManager::Zypper)]
+    fn search_spec_rejects_exact_on_unsupported_managers(#[case] manager: LinuxManager) {
+        let err = manager.search_spec("git", true).expect_err("should reject");
+        assert!(matches!(err, UpkgError::Unsupported(_)));
+    }
+
+    #[test]
+    fn search_spec_pacman_anchors_exact_query() {
+        let spec = LinuxManager::Pacman.search_spec("git", true).unwrap();
+        let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
+        assert_eq!(args, vec!["-Ss", "^git$"]);
+    }
+
+    #[test]
+    fn search_spec_opkg_anchors_exact_query() {
+        let spec = LinuxManager::Opkg.search_spec("git", true).unwrap();
+        let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
+        assert_eq!(args, vec!["find", "^git$"]);
+    }
+
+    #[test]
+    fn search_spec_pacman_escapes_regex_metacharacters_in_exact() {
+        let spec = LinuxManager::Pacman.search_spec("c++.tools", true).unwrap();
+        let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
+        assert_eq!(args, vec!["-Ss", r"^c\+\+\.tools$"]);
     }
 
     #[test]

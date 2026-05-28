@@ -65,6 +65,12 @@ fn run() -> Result<ExitCode, UpkgError> {
             kind,
         } => upgrade(&packages, dry_run, kind),
         CommandKind::List => list(),
+        CommandKind::Search {
+            query,
+            exact,
+            kind,
+            refresh,
+        } => search(&query, exact, kind, refresh),
         CommandKind::Help => {
             println!("{}", Cli::help_text());
             Ok(ExitCode::SUCCESS)
@@ -164,6 +170,32 @@ fn list() -> Result<ExitCode, UpkgError> {
     }
 }
 
+fn search(
+    query: &str,
+    exact: bool,
+    kind: PackageKind,
+    refresh: bool,
+) -> Result<ExitCode, UpkgError> {
+    #[cfg(target_os = "macos")]
+    {
+        native::search_native(query, exact, kind, refresh)?;
+        Ok(ExitCode::SUCCESS)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        if refresh {
+            return Err(UpkgError::Unsupported(
+                "--refresh is only meaningful with the built-in macOS engine",
+            ));
+        }
+        reject_app_kind(kind)?;
+        let backend = Backend::detect()?;
+        let spec = backend.search_spec(query, exact)?;
+        execute_search_spec(spec)
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 fn print_dry_run(backend: &Backend, spec: &backend::CommandSpec) -> Result<ExitCode, UpkgError> {
     println!("backend: {}", backend.name());
@@ -196,5 +228,16 @@ fn execute_spec(backend: Backend, spec: backend::CommandSpec) -> Result<ExitCode
             command: backend.name().to_string(),
             code: status.code().unwrap_or(1),
         })
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn execute_search_spec(spec: backend::CommandSpec) -> Result<ExitCode, UpkgError> {
+    let status = spec.into_command().status()?;
+    let code = status.code().unwrap_or(1);
+    if status.success() {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::from(code as u8))
     }
 }
