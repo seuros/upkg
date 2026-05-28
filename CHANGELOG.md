@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/seuros/upkg/compare/upkg-v0.9.0...upkg-v0.9.1) (2026-05-28)
+
+
+### Bug Fixes
+
+* derive Debug on CommandSpec for test expect_err ([51ffb68](https://github.com/seuros/upkg/commit/51ffb6812f67f9f55786ab9bb44aa9022362175b))
+
 ## [0.9.0](https://github.com/seuros/upkg/compare/upkg-v0.8.1...upkg-v0.9.0) (2026-05-28)
 
 
