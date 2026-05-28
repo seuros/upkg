@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/seuros/upkg/compare/upkg-v0.8.1...upkg-v0.9.0) (2026-05-28)
+
+
+### Features
+
+* **search:** add `upkg search` command across all backends ([7a553fa](https://github.com/seuros/upkg/commit/7a553fa2295ad57a5decb97eb5216aa8e9032e72))
+
 ## [0.8.1](https://github.com/seuros/upkg/compare/upkg-v0.8.0...upkg-v0.8.1) (2026-05-27)
 
 
