@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.10.0](https://github.com/seuros/upkg/compare/upkg-v0.9.1...upkg-v0.10.0) (2026-06-13)
+
+
+### Features
+
+* add installer PATH setup ([ff38a0e](https://github.com/seuros/upkg/commit/ff38a0e4c88959a26d82a070436e9874994241f5))
+* add upkg shaman health check ([1454bdc](https://github.com/seuros/upkg/commit/1454bdc909c8fb520f6eab596aff6a36aa659b68))
+* **cask:** support pkg artifacts ([d2b6761](https://github.com/seuros/upkg/commit/d2b67610bbf0cae568254b8b4173446c07b077a5))
+
+
+### Bug Fixes
+
+* **cask:** detect dmg blobs without file extension ([f0991d9](https://github.com/seuros/upkg/commit/f0991d9189f42a22c676f6a1b65d1af40627cd11))
+
 ## [0.9.1](https://github.com/seuros/upkg/compare/upkg-v0.9.0...upkg-v0.9.1) (2026-05-28)
 
 
