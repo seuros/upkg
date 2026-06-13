@@ -58,6 +58,15 @@ main() {
     say "extracting to $INSTALL_DIR"
     tar xzf "$tmpdir/$archive" -C "$tmpdir"
 
+    if [ ! -d "$INSTALL_DIR" ]; then
+        if mkdir -p "$INSTALL_DIR" 2>/dev/null; then
+            :
+        else
+            say "elevated permissions required to create $INSTALL_DIR"
+            sudo mkdir -p "$INSTALL_DIR"
+        fi
+    fi
+
     if [ -w "$INSTALL_DIR" ]; then
         install -m 755 "$tmpdir/$BINARY" "$INSTALL_DIR/$BINARY"
     else
@@ -69,8 +78,7 @@ main() {
 
     if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
         say ""
-        say "WARNING: $INSTALL_DIR is not in your PATH"
-        say "add it with:  export PATH=\"$INSTALL_DIR:\$PATH\""
+        add_to_path "$INSTALL_DIR"
     fi
 }
 
@@ -87,6 +95,80 @@ say() {
 err() {
     say "error: $1" >&2
     exit 1
+}
+
+add_to_path() {
+    dir="$1"
+
+    if [ "${UPKG_NO_MODIFY_PATH:-}" = "1" ]; then
+        say "WARNING: $dir is not in your PATH"
+        say "add it with:  export PATH=\"$dir:\$PATH\""
+        return
+    fi
+
+    if [ -z "${HOME:-}" ]; then
+        say "WARNING: $dir is not in your PATH"
+        say "add it with:  export PATH=\"$dir:\$PATH\""
+        return
+    fi
+
+    profile="$(profile_file)"
+    shell_name="${SHELL:-}"
+    shell_name="${shell_name##*/}"
+    marker="# upkg PATH"
+
+    if [ -f "$profile" ] && grep -Fq "$marker" "$profile" && grep -Fq "$dir" "$profile"; then
+        say "$dir is already configured in $profile"
+    else
+        profile_dir="${profile%/*}"
+        [ -d "$profile_dir" ] || mkdir -p "$profile_dir" || {
+            say "WARNING: $dir is not in your PATH"
+            say "failed to create $profile_dir"
+            say "add it with:  export PATH=\"$dir:\$PATH\""
+            return
+        }
+
+        {
+            printf '\n%s\n' "$marker"
+            case "$shell_name" in
+                fish)
+                    printf 'if not contains "%s" $PATH\n' "$dir"
+                    printf '    set -gx PATH "%s" $PATH\n' "$dir"
+                    printf 'end\n'
+                    ;;
+                *)
+                    printf 'case ":$PATH:" in\n'
+                    printf '    *":%s:"*) ;;\n' "$dir"
+                    printf '    *) export PATH="%s:$PATH" ;;\n' "$dir"
+                    printf 'esac\n'
+                    ;;
+            esac
+        } >> "$profile" || {
+            say "WARNING: $dir is not in your PATH"
+            say "failed to update $profile"
+            say "add it with:  export PATH=\"$dir:\$PATH\""
+            return
+        }
+
+        say "added $dir to PATH in $profile"
+    fi
+
+    case "$shell_name" in
+        fish) say "restart your shell to use $BINARY from anywhere" ;;
+        *)    say "restart your shell or run:  . \"$profile\"" ;;
+    esac
+}
+
+profile_file() {
+    shell_name="${SHELL:-}"
+    shell_name="${shell_name##*/}"
+
+    case "$shell_name" in
+        zsh)  printf '%s\n' "$HOME/.zshrc" ;;
+        bash) printf '%s\n' "$HOME/.bashrc" ;;
+        fish) printf '%s\n' "$HOME/.config/fish/config.fish" ;;
+        *)    printf '%s\n' "$HOME/.profile" ;;
+    esac
 }
 
 main "$@"

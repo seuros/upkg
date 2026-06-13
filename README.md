@@ -69,8 +69,12 @@ curl -fsSL https://raw.githubusercontent.com/seuros/upkg/master/install.sh | sh
 Or specify a custom install directory:
 
 ```bash
-UPKG_INSTALL_DIR=~/.local/bin curl -fsSL https://raw.githubusercontent.com/seuros/upkg/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/seuros/upkg/master/install.sh | UPKG_INSTALL_DIR="$HOME/.local/bin" sh
 ```
+
+If the install directory is not already in `PATH`, the installer adds it to
+your shell profile (`.zshrc`, `.bashrc`, fish config, or `.profile`). Restart
+your shell after install. Set `UPKG_NO_MODIFY_PATH=1` to skip this.
 
 ## Usage
 
