@@ -22,6 +22,7 @@ mod package_ref;
 #[cfg(target_os = "macos")]
 mod privilege_macos;
 mod self_upgrade;
+mod shaman;
 #[cfg(target_os = "macos")]
 mod types;
 
@@ -80,6 +81,7 @@ fn run() -> Result<ExitCode, UpkgError> {
             Ok(ExitCode::SUCCESS)
         }
         CommandKind::SelfUpgrade { dry_run } => self_upgrade(dry_run),
+        CommandKind::Shaman => shaman(),
     }
 }
 
@@ -206,6 +208,14 @@ fn print_dry_run(backend: &Backend, spec: &backend::CommandSpec) -> Result<ExitC
 fn self_upgrade(dry_run: bool) -> Result<ExitCode, UpkgError> {
     self_upgrade::run(dry_run)?;
     Ok(ExitCode::SUCCESS)
+}
+
+fn shaman() -> Result<ExitCode, UpkgError> {
+    if shaman::run() {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::from(1))
+    }
 }
 
 #[cfg(not(target_os = "macos"))]

@@ -40,6 +40,7 @@ pub enum CommandKind {
     SelfUpgrade {
         dry_run: bool,
     },
+    Shaman,
 }
 
 impl Cli {
@@ -55,6 +56,7 @@ impl Cli {
             "upgrade" | "update" => Self::parse_upgrade(values),
             "list" | "ls" => Self::parse_list(values),
             "search" | "s" => Self::parse_search(values),
+            "shaman" | "doctor" => Self::parse_shaman(values),
             "--self-upgrade" | "self-upgrade" => Self::parse_self_upgrade(values),
             "help" | "--help" | "-h" => Ok(Self {
                 command: CommandKind::Help,
@@ -155,6 +157,16 @@ impl Cli {
         })
     }
 
+    fn parse_shaman(values: Vec<String>) -> Result<Self, UpkgError> {
+        if values.len() != 1 {
+            return Err(UpkgError::Usage("shaman does not accept arguments yet"));
+        }
+
+        Ok(Self {
+            command: CommandKind::Shaman,
+        })
+    }
+
     fn parse_list(values: Vec<String>) -> Result<Self, UpkgError> {
         if values.len() != 1 {
             return Err(UpkgError::Usage("list does not accept arguments yet"));
@@ -203,7 +215,7 @@ impl Cli {
     }
 
     pub fn help_text() -> &'static str {
-        "upkg - unified package manager frontend\n\nUSAGE:\n  upkg install [--app] [--dry-run] <package> [package...]\n  upkg uninstall [--app] [--dry-run] <package> [package...]\n  upkg upgrade [--app] [--dry-run] [package...]\n  upkg list\n  upkg search [--app] [--exact] [--refresh] <query...>\n  upkg --self-upgrade [--dry-run]\n  upkg --version\n\nEXAMPLES:\n  upkg install curl git\n  upkg install --app ghostty\n  upkg uninstall jq\n  upkg upgrade\n  upkg upgrade --dry-run neovim\n  upkg list\n  upkg search ripgrep\n  upkg search --app ghostty\n  upkg search --exact git\n  upkg --self-upgrade\n"
+        "upkg - unified package manager frontend\n\nUSAGE:\n  upkg install [--app] [--dry-run] <package> [package...]\n  upkg uninstall [--app] [--dry-run] <package> [package...]\n  upkg upgrade [--app] [--dry-run] [package...]\n  upkg list\n  upkg search [--app] [--exact] [--refresh] <query...>\n  upkg shaman\n  upkg doctor\n  upkg --self-upgrade [--dry-run]\n  upkg --version\n\nEXAMPLES:\n  upkg install curl git\n  upkg install --app ghostty\n  upkg uninstall jq\n  upkg upgrade\n  upkg upgrade --dry-run neovim\n  upkg list\n  upkg search ripgrep\n  upkg search --app ghostty\n  upkg search --exact git\n  upkg shaman\n  upkg doctor\n  upkg --self-upgrade\n"
     }
 }
 
@@ -302,6 +314,24 @@ mod tests {
             Cli::parse(["list"].into_iter().map(str::to_string)).expect("parse should succeed");
 
         assert!(matches!(cli.command, CommandKind::List));
+    }
+
+    #[test]
+    fn parse_shaman_and_doctor_alias() {
+        let doctor =
+            Cli::parse(["doctor"].into_iter().map(str::to_string)).expect("parse should succeed");
+        assert!(matches!(doctor.command, CommandKind::Shaman));
+
+        let shaman =
+            Cli::parse(["shaman"].into_iter().map(str::to_string)).expect("parse should succeed");
+        assert!(matches!(shaman.command, CommandKind::Shaman));
+    }
+
+    #[test]
+    fn parse_shaman_rejects_arguments() {
+        let err = Cli::parse(["shaman", "--verbose"].into_iter().map(str::to_string))
+            .expect_err("shaman should reject arguments");
+        assert!(err.to_string().contains("shaman does not accept arguments"));
     }
 
     #[test]
