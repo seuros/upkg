@@ -15,6 +15,17 @@ pub struct CaskApp {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaskPkg {
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaskUninstall {
+    pub pkgutil: Vec<String>,
+    pub delete: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CaskLinkedArtifactKind {
     Manpage,
     BashCompletion,
@@ -38,6 +49,8 @@ pub struct ResolvedCask {
     pub sha256: String,
     pub binaries: Vec<CaskBinary>,
     pub apps: Vec<CaskApp>,
+    pub pkgs: Vec<CaskPkg>,
+    pub uninstall: CaskUninstall,
     pub linked_artifacts: Vec<CaskLinkedArtifact>,
 }
 
@@ -63,10 +76,14 @@ pub fn resolve_cask(token: &str, cask: &Value) -> Result<ResolvedCask, Error> {
 
     let binaries = parse_binary_artifacts(cask)?;
     let apps = parse_app_artifacts(cask)?;
+    let pkgs = parse_pkg_artifacts(cask)?;
+    let uninstall = parse_uninstall_artifacts(cask)?;
     let linked_artifacts = parse_linked_artifacts(cask)?;
-    if binaries.is_empty() && apps.is_empty() {
+    if binaries.is_empty() && apps.is_empty() && pkgs.is_empty() {
         return Err(Error::InvalidArgument {
-            message: format!("cask '{token}' does not expose supported app or binary artifacts"),
+            message: format!(
+                "cask '{token}' does not expose supported app, pkg, or binary artifacts"
+            ),
         });
     }
 
@@ -78,6 +95,8 @@ pub fn resolve_cask(token: &str, cask: &Value) -> Result<ResolvedCask, Error> {
         sha256,
         binaries,
         apps,
+        pkgs,
+        uninstall,
         linked_artifacts,
     })
 }
@@ -152,6 +171,67 @@ fn parse_app_artifacts(cask: &Value) -> Result<Vec<CaskApp>, Error> {
     }
 
     Ok(apps)
+}
+
+fn parse_pkg_artifacts(cask: &Value) -> Result<Vec<CaskPkg>, Error> {
+    let mut pkgs = Vec::new();
+
+    for artifact in artifacts(cask)? {
+        let Some(entries) = artifact.get("pkg").and_then(Value::as_array) else {
+            continue;
+        };
+
+        if let Some(source) = entries.first().and_then(Value::as_str) {
+            pkgs.push(CaskPkg {
+                source: source.to_string(),
+            });
+            continue;
+        }
+
+        for entry in entries {
+            let Some(source) = entry.as_str() else {
+                continue;
+            };
+            pkgs.push(CaskPkg {
+                source: source.to_string(),
+            });
+        }
+    }
+
+    Ok(pkgs)
+}
+
+fn parse_uninstall_artifacts(cask: &Value) -> Result<CaskUninstall, Error> {
+    let mut uninstall = CaskUninstall {
+        pkgutil: Vec::new(),
+        delete: Vec::new(),
+    };
+
+    for artifact in artifacts(cask)? {
+        let Some(entries) = artifact.get("uninstall").and_then(Value::as_array) else {
+            continue;
+        };
+
+        for entry in entries {
+            let Some(obj) = entry.as_object() else {
+                continue;
+            };
+            extend_string_or_strings(obj.get("pkgutil"), &mut uninstall.pkgutil);
+            extend_string_or_strings(obj.get("delete"), &mut uninstall.delete);
+        }
+    }
+
+    Ok(uninstall)
+}
+
+fn extend_string_or_strings(value: Option<&Value>, out: &mut Vec<String>) {
+    match value {
+        Some(Value::String(s)) => out.push(s.clone()),
+        Some(Value::Array(values)) => {
+            out.extend(values.iter().filter_map(Value::as_str).map(str::to_string))
+        }
+        _ => {}
+    }
 }
 
 fn parse_linked_artifacts(cask: &Value) -> Result<Vec<CaskLinkedArtifact>, Error> {
@@ -413,6 +493,58 @@ mod tests {
         assert_eq!(resolved.apps.len(), 1);
         assert_eq!(resolved.apps[0].source, "Ghostty.app");
         assert_eq!(resolved.apps[0].target, "Ghostty.app");
+    }
+
+    #[test]
+    fn resolve_cask_parses_pkg_artifacts_and_uninstall_directives() {
+        let cask = serde_json::json!({
+            "token": "test-pkg",
+            "version": "1.0.0",
+            "url": "https://example.com/Test.dmg",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifacts": [
+                { "uninstall": [{
+                    "pkgutil": ["com.example.test", "com.example.helper"],
+                    "delete": ["/Library/Application Support/Test"]
+                }] },
+                { "pkg": ["Test Installer.pkg"] }
+            ]
+        });
+
+        let resolved = resolve_cask("test-pkg", &cask).unwrap();
+
+        assert!(resolved.apps.is_empty());
+        assert!(resolved.binaries.is_empty());
+        assert_eq!(resolved.pkgs.len(), 1);
+        assert_eq!(resolved.pkgs[0].source, "Test Installer.pkg");
+        assert_eq!(
+            resolved.uninstall.pkgutil,
+            vec!["com.example.test", "com.example.helper"]
+        );
+        assert_eq!(
+            resolved.uninstall.delete,
+            vec!["/Library/Application Support/Test"]
+        );
+    }
+
+    #[test]
+    fn resolve_cask_parses_string_pkgutil_uninstall_directive() {
+        let cask = serde_json::json!({
+            "token": "test-pkg",
+            "version": "1.0.0",
+            "url": "https://example.com/Test.pkg",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifacts": [
+                { "uninstall": [{ "pkgutil": "com.example.*" }] },
+                { "pkg": ["Test.pkg", { "allow_untrusted": true }] }
+            ]
+        });
+
+        let resolved = resolve_cask("test-pkg", &cask).unwrap();
+
+        assert_eq!(resolved.pkgs.len(), 1);
+        assert_eq!(resolved.pkgs[0].source, "Test.pkg");
+        assert_eq!(resolved.uninstall.pkgutil, vec!["com.example.*"]);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -120,6 +121,389 @@ pub(super) fn stage_cask_binaries(
     }
 
     Ok(())
+}
+
+pub(super) fn install_cask_pkgs(
+    source_root: &Path,
+    blob_path: &Path,
+    cask: &crate::core::installer::cask::ResolvedCask,
+) -> Result<(), Error> {
+    for pkg in &cask.pkgs {
+        let source = resolve_cask_source_path(source_root, cask, &pkg.source)?;
+        let pkg_path = if source.exists() {
+            source
+        } else if is_pkg(blob_path) {
+            blob_path.to_path_buf()
+        } else {
+            return Err(Error::InvalidArgument {
+                message: format!(
+                    "cask '{}' pkg source '{}' not found",
+                    cask.token, pkg.source
+                ),
+            });
+        };
+
+        install_pkg(&pkg_path)?;
+    }
+
+    Ok(())
+}
+
+pub(super) fn uninstall_cask_pkgs(
+    cask: &crate::core::installer::cask::ResolvedCask,
+) -> Result<(), Error> {
+    for pattern in &cask.uninstall.pkgutil {
+        for pkg_id in pkgutil_ids(pattern)? {
+            remove_pkgutil_files(&pkg_id)?;
+            forget_pkgutil_id(&pkg_id)?;
+        }
+    }
+
+    for target in &cask.uninstall.delete {
+        remove_cask_delete_target(target)?;
+    }
+
+    Ok(())
+}
+
+fn install_pkg(path: &Path) -> Result<(), Error> {
+    let installer_path = prepare_installer_pkg_path(path)?;
+    let output = Command::new("/usr/sbin/installer")
+        .args(["-pkg"])
+        .arg(&installer_path.path)
+        .args(["-target", "/"])
+        .output()
+        .map_err(|e| Error::ExecutionError {
+            message: format!("failed to run installer: {e}"),
+        })?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let command = format!(
+        "/usr/sbin/installer -pkg {} -target /",
+        shell_quote_path(&installer_path.path)?
+    );
+    if crate::privilege_macos::escalate_privilege(&command).map_err(|e| Error::ExecutionError {
+        message: format!("failed to request installer privileges: {e}"),
+    })? {
+        return Ok(());
+    }
+
+    Err(Error::ExecutionError {
+        message: format!(
+            "failed to install pkg '{}': {}",
+            path.display(),
+            command_output_message(&output)
+        ),
+    })
+}
+
+pub(in crate::core::installer::install) struct PreparedInstallerPkgPath {
+    pub(in crate::core::installer::install) path: PathBuf,
+    temp_dir: Option<PathBuf>,
+}
+
+impl Drop for PreparedInstallerPkgPath {
+    fn drop(&mut self) {
+        if let Some(temp_dir) = &self.temp_dir {
+            let _ = fs::remove_dir_all(temp_dir);
+        }
+    }
+}
+
+pub(in crate::core::installer::install) fn prepare_installer_pkg_path(
+    path: &Path,
+) -> Result<PreparedInstallerPkgPath, Error> {
+    if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("pkg"))
+        .unwrap_or(false)
+    {
+        return Ok(PreparedInstallerPkgPath {
+            path: path.to_path_buf(),
+            temp_dir: None,
+        });
+    }
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "upkg-pkg-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    fs::create_dir_all(&temp_dir).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to create pkg installer temp dir: {e}"),
+    })?;
+
+    let installer_path = temp_dir.join(
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or("package")
+            .to_string()
+            + ".pkg",
+    );
+
+    if std::os::unix::fs::symlink(path, &installer_path).is_err() {
+        fs::copy(path, &installer_path).map_err(|e| Error::StoreCorruption {
+            message: format!(
+                "failed to prepare pkg '{}' for installer: {e}",
+                path.display()
+            ),
+        })?;
+    }
+
+    Ok(PreparedInstallerPkgPath {
+        path: installer_path,
+        temp_dir: Some(temp_dir),
+    })
+}
+
+fn command_output_message(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = stderr.trim();
+    let stdout = stdout.trim();
+    match (stderr.is_empty(), stdout.is_empty()) {
+        (false, false) => format!("{stderr}\n{stdout}"),
+        (false, true) => stderr.to_string(),
+        (true, false) => stdout.to_string(),
+        (true, true) => format!("exit status {}", output.status),
+    }
+}
+
+pub(super) fn is_pkg(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("pkg"))
+        .unwrap_or(false)
+        || has_xar_magic(path).unwrap_or(false)
+}
+
+fn has_xar_magic(path: &Path) -> std::io::Result<bool> {
+    let mut file = fs::File::open(path)?;
+    let mut magic = [0; 4];
+    file.read_exact(&mut magic)?;
+    Ok(&magic == b"xar!")
+}
+
+fn pkgutil_ids(pattern: &str) -> Result<Vec<String>, Error> {
+    let output = Command::new("/usr/sbin/pkgutil")
+        .arg(format!("--pkgs={pattern}"))
+        .output()
+        .map_err(|e| Error::ExecutionError {
+            message: format!("failed to run pkgutil --pkgs: {e}"),
+        })?;
+
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let ids: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+
+    Ok(ids)
+}
+
+fn remove_pkgutil_files(pkg_id: &str) -> Result<(), Error> {
+    let Some(location) = pkgutil_location(pkg_id)? else {
+        return Ok(());
+    };
+
+    let output = Command::new("/usr/sbin/pkgutil")
+        .args(["--files", pkg_id])
+        .output()
+        .map_err(|e| Error::ExecutionError {
+            message: format!("failed to run pkgutil --files for '{pkg_id}': {e}"),
+        })?;
+
+    if !output.status.success() {
+        return Ok(());
+    }
+
+    for rel in String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let path = location.join(rel);
+        if !path.exists() && !path.is_symlink() {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&path).map_err(|e| Error::StoreCorruption {
+            message: format!("failed to read pkgutil path '{}': {e}", path.display()),
+        })?;
+        if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            continue;
+        }
+        remove_path_or_escalate(&path)?;
+    }
+
+    Ok(())
+}
+
+fn pkgutil_location(pkg_id: &str) -> Result<Option<PathBuf>, Error> {
+    let output = Command::new("/usr/sbin/pkgutil")
+        .args(["--pkg-info", pkg_id])
+        .output()
+        .map_err(|e| Error::ExecutionError {
+            message: format!("failed to run pkgutil --pkg-info for '{pkg_id}': {e}"),
+        })?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Some(location) = line.strip_prefix("location: ") else {
+            continue;
+        };
+        let location = location.trim();
+        if location.is_empty() {
+            return Ok(Some(PathBuf::from("/")));
+        }
+        let location = PathBuf::from(location);
+        return Ok(Some(if location.is_absolute() {
+            location
+        } else {
+            PathBuf::from("/").join(location)
+        }));
+    }
+
+    Ok(Some(PathBuf::from("/")))
+}
+
+fn forget_pkgutil_id(pkg_id: &str) -> Result<(), Error> {
+    let output = Command::new("/usr/sbin/pkgutil")
+        .args(["--forget", pkg_id])
+        .output()
+        .map_err(|e| Error::ExecutionError {
+            message: format!("failed to run pkgutil --forget for '{pkg_id}': {e}"),
+        })?;
+
+    if output.status.success() && !pkgutil_id_exists(pkg_id)? {
+        Ok(())
+    } else if crate::privilege_macos::escalate_privilege(&format!(
+        "/usr/sbin/pkgutil --forget {}",
+        shell_quote(pkg_id)?
+    ))
+    .map_err(|e| Error::ExecutionError {
+        message: format!("failed to request pkgutil privileges for '{pkg_id}': {e}"),
+    })? {
+        if pkgutil_id_exists(pkg_id)? {
+            Err(Error::ExecutionError {
+                message: format!("pkgutil receipt '{pkg_id}' still exists after privileged forget"),
+            })
+        } else {
+            Ok(())
+        }
+    } else {
+        Err(Error::ExecutionError {
+            message: format!(
+                "failed to forget pkgutil receipt '{}': {}",
+                pkg_id,
+                command_output_message(&output)
+            ),
+        })
+    }
+}
+
+fn pkgutil_id_exists(pkg_id: &str) -> Result<bool, Error> {
+    let output = Command::new("/usr/sbin/pkgutil")
+        .args(["--pkg-info", pkg_id])
+        .output()
+        .map_err(|e| Error::ExecutionError {
+            message: format!("failed to run pkgutil --pkg-info for '{pkg_id}': {e}"),
+        })?;
+    Ok(output.status.success())
+}
+
+fn remove_cask_delete_target(target: &str) -> Result<(), Error> {
+    if target.contains('*') || target.contains('?') || target.contains('[') {
+        let command = format!(
+            "/bin/zsh -f -c {} -- {}",
+            shell_quote(
+                "setopt NULL_GLOB; for pattern in \"$@\"; do for path in ${(~)pattern}; do rm -rf -- \"$path\"; done; done"
+            )?,
+            shell_quote(target)?
+        );
+        let output = Command::new("/bin/zsh")
+            .args([
+                "-f",
+                "-c",
+                "setopt NULL_GLOB; for pattern in \"$@\"; do for path in ${(~)pattern}; do rm -rf -- \"$path\"; done; done",
+                "--",
+            ])
+            .arg(target)
+            .output()
+            .map_err(|e| Error::ExecutionError {
+                message: format!("failed to remove cask delete target '{target}': {e}"),
+            })?;
+        return if output.status.success() {
+            Ok(())
+        } else if crate::privilege_macos::escalate_privilege(&command).map_err(|e| {
+            Error::ExecutionError {
+                message: format!("failed to request delete privileges for '{target}': {e}"),
+            }
+        })? {
+            Ok(())
+        } else {
+            Err(Error::ExecutionError {
+                message: format!(
+                    "failed to remove cask delete target '{}': {}",
+                    target,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            })
+        };
+    }
+
+    remove_path_or_escalate(Path::new(target))
+}
+
+fn remove_path_or_escalate(path: &Path) -> Result<(), Error> {
+    match remove_path_if_exists(path) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let command = format!("rm -rf -- {}", shell_quote_path(path)?);
+            if crate::privilege_macos::escalate_privilege(&command).map_err(|e| {
+                Error::ExecutionError {
+                    message: format!(
+                        "failed to request delete privileges for '{}': {e}",
+                        path.display()
+                    ),
+                }
+            })? {
+                Ok(())
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+fn shell_quote_path(path: &Path) -> Result<String, Error> {
+    let value = path.to_str().ok_or_else(|| Error::InvalidArgument {
+        message: format!("path is not valid UTF-8: {}", path.display()),
+    })?;
+    shell_quote(value)
+}
+
+fn shell_quote(value: &str) -> Result<String, Error> {
+    shlex::try_quote(value)
+        .map(|quoted| quoted.into_owned())
+        .map_err(|e| Error::InvalidArgument {
+            message: format!("value cannot be shell quoted: {e}"),
+        })
 }
 
 fn resolve_cask_source_path(

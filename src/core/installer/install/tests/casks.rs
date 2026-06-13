@@ -23,6 +23,11 @@ fn stage_cask_apps_moves_app_and_leaves_caskroom_symlink() {
             source: "Ghostty.app".to_string(),
             target: "Ghostty.app".to_string(),
         }],
+        pkgs: Vec::new(),
+        uninstall: crate::core::installer::cask::CaskUninstall {
+            pkgutil: Vec::new(),
+            delete: Vec::new(),
+        },
         linked_artifacts: Vec::new(),
     };
 
@@ -61,6 +66,8 @@ fn stage_cask_linked_artifacts_links_appdir_sources_into_prefix() {
             sha256: "abc".to_string(),
             binaries: Vec::new(),
             apps: Vec::new(),
+            pkgs: Vec::new(),
+            uninstall: crate::core::installer::cask::CaskUninstall { pkgutil: Vec::new(), delete: Vec::new() },
             linked_artifacts: vec![
                 crate::core::installer::cask::CaskLinkedArtifact {
                     kind: crate::core::installer::cask::CaskLinkedArtifactKind::Manpage,
@@ -86,6 +93,71 @@ fn stage_cask_linked_artifacts_links_appdir_sources_into_prefix() {
         fs::read_link(prefix.join("etc/bash_completion.d/ghostty")).unwrap(),
         app_resources.join("bash-completion/completions/ghostty.bash")
     );
+}
+
+#[test]
+fn cask_ops_detects_flat_pkg_by_xar_magic_even_with_hidden_cache_extension() {
+    let tmp = TempDir::new().unwrap();
+    let blob_path = tmp.path().join("sha256.tar.gz");
+    fs::write(&blob_path, b"xar!\0\0\0\0").unwrap();
+
+    assert!(is_pkg(&blob_path));
+}
+
+#[test]
+fn cask_ops_prepares_hidden_extension_pkg_with_pkg_suffix() {
+    let tmp = TempDir::new().unwrap();
+    let blob_path = tmp.path().join("sha256.tar.gz");
+    fs::write(&blob_path, b"xar!\0\0\0\0").unwrap();
+
+    let prepared = prepare_installer_pkg_path(&blob_path).unwrap();
+
+    assert_eq!(
+        prepared.path.extension().and_then(|ext| ext.to_str()),
+        Some("pkg")
+    );
+    assert!(prepared.path.exists());
+}
+
+#[test]
+fn write_cask_metadata_includes_pkg_uninstall_artifacts() {
+    let tmp = TempDir::new().unwrap();
+    let caskroom_path = tmp.path().join("Caskroom/test-pkg");
+    let cask = crate::core::installer::cask::ResolvedCask {
+        install_name: "cask:test-pkg".to_string(),
+        token: "test-pkg".to_string(),
+        version: "1.0.0".to_string(),
+        url: "https://example.com/Test.pkg".to_string(),
+        sha256: "abc".to_string(),
+        binaries: Vec::new(),
+        apps: Vec::new(),
+        pkgs: vec![crate::core::installer::cask::CaskPkg {
+            source: "Test.pkg".to_string(),
+        }],
+        uninstall: crate::core::installer::cask::CaskUninstall {
+            pkgutil: vec!["com.example.test".to_string()],
+            delete: vec!["/Library/Application Support/Test".to_string()],
+        },
+        linked_artifacts: Vec::new(),
+    };
+    let cask_json = serde_json::json!({
+        "token": "test-pkg",
+        "version": "1.0.0",
+        "url": "https://example.com/Test.pkg",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "artifacts": [
+            { "uninstall": [{ "pkgutil": "com.example.test", "delete": ["/Library/Application Support/Test"] }] },
+            { "pkg": ["Test.pkg"] }
+        ]
+    });
+
+    write_brew_cask_metadata(&caskroom_path, &cask, &cask_json).unwrap();
+
+    let receipt = fs::read_to_string(caskroom_path.join(".metadata/INSTALL_RECEIPT.json")).unwrap();
+    assert!(receipt.contains("\"pkg\""));
+    assert!(receipt.contains("Test.pkg"));
+    assert!(receipt.contains("\"pkgutil\""));
+    assert!(receipt.contains("com.example.test"));
 }
 
 #[test]

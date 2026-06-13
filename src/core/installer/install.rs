@@ -13,9 +13,10 @@ mod planning;
 mod source_ops;
 
 use cask_ops::{
-    FailedInstallGuard, cask_app_dir, cask_versions, load_latest_cask_metadata_json,
-    remove_cask_linked_artifacts, remove_path_if_exists, stage_cask_apps, stage_cask_binaries,
-    stage_cask_linked_artifacts, with_cask_source_root, write_brew_cask_metadata,
+    FailedInstallGuard, cask_app_dir, cask_versions, install_cask_pkgs, is_pkg,
+    load_latest_cask_metadata_json, remove_cask_linked_artifacts, remove_path_if_exists,
+    stage_cask_apps, stage_cask_binaries, stage_cask_linked_artifacts, uninstall_cask_pkgs,
+    with_cask_source_root, write_brew_cask_metadata,
 };
 pub use factory::create_installer;
 
@@ -34,6 +35,9 @@ use crate::core::storage::store::Store;
 use crate::package_ref::{cask_name, cask_token, is_cask_name};
 
 use crate::types::{Error, Formula, InstallMethod, formula_token};
+
+#[cfg(test)]
+pub(in crate::core::installer::install) use cask_ops::prepare_installer_pkg_path;
 
 const MAX_CORRUPTION_RETRIES: usize = 3;
 
@@ -193,6 +197,7 @@ impl Installer {
         if let Some(cask_json) = load_latest_cask_metadata_json(&caskroom_path, token)? {
             let cask = resolve_cask(token, &cask_json)?;
             remove_cask_linked_artifacts(&self.prefix, &cask)?;
+            uninstall_cask_pkgs(&cask)?;
         }
 
         for version_dir in cask_versions(&caskroom_path)? {
@@ -313,8 +318,8 @@ impl Installer {
             )
             .await?;
 
-        if !cask.apps.is_empty() {
-            self.install_cask_apps(&cask, &cask_json, &blob_path)?;
+        if !cask.apps.is_empty() || !cask.pkgs.is_empty() {
+            self.install_cask_artifacts(&cask, &cask_json, &blob_path)?;
             return Ok(());
         }
 
@@ -347,7 +352,7 @@ impl Installer {
         Ok(())
     }
 
-    fn install_cask_apps(
+    fn install_cask_artifacts(
         &self,
         cask: &crate::core::installer::cask::ResolvedCask,
         cask_json: &serde_json::Value,
@@ -360,10 +365,21 @@ impl Installer {
             message: format!("failed to create cask staging directory: {e}"),
         })?;
 
-        with_cask_source_root(&self.store, cask, blob_path, |source_root| {
-            stage_cask_apps(source_root, &staged_path, &self.prefix, cask)?;
-            stage_cask_linked_artifacts(source_root, &self.prefix, cask)
-        })?;
+        if !cask.pkgs.is_empty() && cask.apps.is_empty() && is_pkg(blob_path) {
+            let source_root = blob_path.parent().unwrap_or_else(|| Path::new("."));
+            install_cask_pkgs(source_root, blob_path, cask)?;
+        } else {
+            with_cask_source_root(&self.store, cask, blob_path, |source_root| {
+                if !cask.apps.is_empty() {
+                    stage_cask_apps(source_root, &staged_path, &self.prefix, cask)?;
+                    stage_cask_linked_artifacts(source_root, &self.prefix, cask)?;
+                }
+                if !cask.pkgs.is_empty() {
+                    install_cask_pkgs(source_root, blob_path, cask)?;
+                }
+                Ok(())
+            })?;
+        }
 
         write_brew_cask_metadata(&caskroom_path, cask, cask_json)?;
         self.record_installed_package(&InstallReceipt {

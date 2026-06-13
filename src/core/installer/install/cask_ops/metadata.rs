@@ -99,6 +99,20 @@ fn brew_cask_uninstall_artifacts(
     cask.apps
         .iter()
         .map(|app| serde_json::json!({ "app": [app.target] }))
+        .chain(
+            cask.pkgs
+                .iter()
+                .map(|pkg| serde_json::json!({ "pkg": [pkg.source] })),
+        )
+        .chain(
+            std::iter::once(serde_json::json!({
+                "uninstall": [{
+                    "pkgutil": cask.uninstall.pkgutil.clone(),
+                    "delete": cask.uninstall.delete.clone()
+                }]
+            }))
+            .filter(|_| !cask.uninstall.pkgutil.is_empty() || !cask.uninstall.delete.is_empty()),
+        )
         .chain(cask.linked_artifacts.iter().map(|artifact| {
             let key = match &artifact.kind {
                 CaskLinkedArtifactKind::Manpage => "manpage",
