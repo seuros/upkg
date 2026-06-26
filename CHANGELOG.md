@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/seuros/upkg/compare/upkg-v0.10.0...upkg-v0.11.0) (2026-06-26)
+
+
+### Features
+
+* divergent-name alias catalog ([cc2fa52](https://github.com/seuros/upkg/commit/cc2fa52f6e7b3b71b12817fa7b3316899f08fee2))
+
 ## [0.10.0](https://github.com/seuros/upkg/compare/upkg-v0.9.1...upkg-v0.10.0) (2026-06-13)
 
 
