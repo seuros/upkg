@@ -1,0 +1,53 @@
+# upkg alias catalog: DIVERGENT NAMES ONLY.
+#
+# This is NOT a registry. upkg already passes package names through to the
+# native package manager verbatim, so a name that is IDENTICAL on every
+# backend never belongs here. If `foo` is `foo` on apt, dnf, pacman and pkg,
+# leave it out; adding it would turn this file into a parallel universe of
+# every package on earth, which is exactly what upkg refuses to be.
+#
+# An entry earns its place ONLY when the same upstream software ships under
+# DIFFERENT names across managers, classically the `-dev` / `-devel` /
+# bundled-into-X split for development headers (libpq-dev vs libpq-devel vs
+# postgresql-libs).
+#
+# Contributions are welcome. Rules:
+#   1. Every entry names one `upstream` so a reviewer can confirm all the
+#      per-manager names are the SAME project. This is the anti-typo-squat
+#      anchor: without a verifiable upstream identity, the entry is noise.
+#   2. Do NOT use an LLM to bulk-generate aliases. Each entry must be
+#      human-verified against the upstream and the distro package pages.
+#      Unverified bulk PRs will be rejected on sight.
+#   3. Exact match only. Lookups are by the literal canonical key; there is
+#      no fuzzy matching, on purpose.
+#
+# Backend keys: apt, dnf, yum, pacman, zypper, opkg, freebsd, rvn, termux,
+# winget, choco. Omit a key when you cannot verify that manager's name;
+# upkg falls through to the canonical name verbatim.
+
+[libpq-dev]
+upstream = "https://www.postgresql.org"
+apt = "libpq-dev"
+dnf = "libpq-devel"
+pacman = "postgresql-libs"
+
+[libssl-dev]
+upstream = "https://www.openssl.org"
+apt = "libssl-dev"
+dnf = "openssl-devel"
+pacman = "openssl"
+zypper = "libopenssl-devel"
+
+[zlib1g-dev]
+upstream = "https://www.zlib.net"
+apt = "zlib1g-dev"
+dnf = "zlib-devel"
+pacman = "zlib"
+zypper = "zlib-devel"
+
+[libffi-dev]
+upstream = "https://sourceware.org/libffi"
+apt = "libffi-dev"
+dnf = "libffi-devel"
+pacman = "libffi"
+zypper = "libffi-devel"

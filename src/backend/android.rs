@@ -28,6 +28,15 @@ impl AndroidManager {
         }
     }
 
+    /// Alias-catalog key. Termux `pkg` ships Debian-style names, so it gets its
+    /// own key rather than colliding with FreeBSD's `pkg`.
+    pub fn catalog_key(&self) -> &'static str {
+        match self {
+            Self::Pkg => "termux",
+            Self::Apt => "apt",
+        }
+    }
+
     pub fn install_spec(&self, packages: &[String]) -> CommandSpec {
         let mut args: Vec<String> = match self {
             Self::Pkg => vec!["install".into(), "-y".into()],

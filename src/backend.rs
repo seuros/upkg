@@ -1,5 +1,6 @@
 #[cfg(target_os = "android")]
 pub mod android;
+pub mod catalog;
 #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
 pub mod freebsd;
 #[cfg(target_os = "linux")]
@@ -125,48 +126,71 @@ impl Backend {
         }
     }
 
-    pub fn install_spec(&self, packages: &[String]) -> CommandSpec {
+    /// Stable key used to look the backend up in the alias catalog.
+    ///
+    /// Distinct from `name()` only where the binary name would collide: Termux
+    /// `pkg` uses Debian-style names while FreeBSD `pkg` does not, so they get
+    /// separate keys (`termux` vs `freebsd`).
+    pub fn catalog_key(&self) -> &'static str {
         match self {
             #[cfg(target_os = "android")]
-            Self::Android(manager) => manager.install_spec(packages),
+            Self::Android(manager) => manager.catalog_key(),
             #[cfg(target_os = "linux")]
-            Self::Linux(manager) => manager.install_spec(packages),
+            Self::Linux(manager) => manager.name(),
             #[cfg(target_os = "windows")]
-            Self::Windows(manager) => manager.install_spec(packages),
+            Self::Windows(manager) => manager.name(),
             #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
-            Self::FreeBsd => freebsd::install_spec(packages),
+            Self::FreeBsd => "freebsd",
             #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-            Self::Ravenports => ravenports::install_spec(packages),
+            Self::Ravenports => "rvn",
+        }
+    }
+
+    pub fn install_spec(&self, packages: &[String]) -> CommandSpec {
+        let packages = catalog::resolve(self.catalog_key(), packages);
+        match self {
+            #[cfg(target_os = "android")]
+            Self::Android(manager) => manager.install_spec(&packages),
+            #[cfg(target_os = "linux")]
+            Self::Linux(manager) => manager.install_spec(&packages),
+            #[cfg(target_os = "windows")]
+            Self::Windows(manager) => manager.install_spec(&packages),
+            #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
+            Self::FreeBsd => freebsd::install_spec(&packages),
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            Self::Ravenports => ravenports::install_spec(&packages),
         }
     }
 
     pub fn uninstall_spec(&self, packages: &[String]) -> CommandSpec {
+        let packages = catalog::resolve(self.catalog_key(), packages);
         match self {
             #[cfg(target_os = "android")]
-            Self::Android(manager) => manager.uninstall_spec(packages),
+            Self::Android(manager) => manager.uninstall_spec(&packages),
             #[cfg(target_os = "linux")]
-            Self::Linux(manager) => manager.uninstall_spec(packages),
+            Self::Linux(manager) => manager.uninstall_spec(&packages),
             #[cfg(target_os = "windows")]
-            Self::Windows(manager) => manager.uninstall_spec(packages),
+            Self::Windows(manager) => manager.uninstall_spec(&packages),
             #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
-            Self::FreeBsd => freebsd::uninstall_spec(packages),
+            Self::FreeBsd => freebsd::uninstall_spec(&packages),
             #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-            Self::Ravenports => ravenports::uninstall_spec(packages),
+            Self::Ravenports => ravenports::uninstall_spec(&packages),
         }
     }
 
     pub fn upgrade_spec(&self, packages: &[String]) -> CommandSpec {
+        let packages = catalog::resolve(self.catalog_key(), packages);
         match self {
             #[cfg(target_os = "android")]
-            Self::Android(manager) => manager.upgrade_spec(packages),
+            Self::Android(manager) => manager.upgrade_spec(&packages),
             #[cfg(target_os = "linux")]
-            Self::Linux(manager) => manager.upgrade_spec(packages),
+            Self::Linux(manager) => manager.upgrade_spec(&packages),
             #[cfg(target_os = "windows")]
-            Self::Windows(manager) => manager.upgrade_spec(packages),
+            Self::Windows(manager) => manager.upgrade_spec(&packages),
             #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
-            Self::FreeBsd => freebsd::upgrade_spec(packages),
+            Self::FreeBsd => freebsd::upgrade_spec(&packages),
             #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-            Self::Ravenports => ravenports::upgrade_spec(packages),
+            Self::Ravenports => ravenports::upgrade_spec(&packages),
         }
     }
 
