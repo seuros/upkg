@@ -2,7 +2,7 @@
 
 Ever tried to document how to install your own program?
 
-You end up writing 47 pages just to say "install the dev headers for libfoo" — because on Debian it's `libfoo-dev`, on Fedora it's `libfoo-devel`, on Arch it's `libfoo`, on Alpine it's `libfoo-dev` (different one), on FreeBSD it's `foo`, and on macOS it's *"fook yu"* — because the dev didn't pay $199 to sign the package.
+You end up writing 47 pages just to say "install the dev headers for libfoo", because on Debian it's `libfoo-dev`, on Fedora it's `libfoo-devel`, on Arch it's `libfoo`, on Alpine it's `libfoo-dev` (different one), on FreeBSD it's `foo`, and on macOS it's *"unidentified developer"*, because the dev didn't pay Apple's yearly tax to bless the binary.
 
 **upkg lets you speak civilized. It speaks the dialect of 87 other package managers for you.**
 
@@ -10,13 +10,13 @@ You end up writing 47 pages just to say "install the dev headers for libfoo" —
 upkg install git curl ripgrep
 ```
 
-That's it. Same command on Debian, Fedora, Arch, openSUSE, OpenWrt, Termux, FreeBSD, and macOS.
+That's it. Same command on Debian, Fedora, Arch, openSUSE, OpenWrt, Termux, FreeBSD, DragonFly BSD, and macOS.
 
 ## What it actually does
 
 - One command surface: `upkg install`, `upkg uninstall`, `upkg upgrade`.
 - Routes to the platform package manager where that is the right boundary, with a built-in Homebrew-compatible engine on macOS.
-- Keeps the names people already know — no new catalog, no parallel universe.
+- Keeps the names people already know: no new catalog, no parallel universe.
 - Stays out of your way for anything advanced. Use `apt`, `dnf`, `pacman`, `pkg` directly when you need to.
 
 ## What it is not
@@ -35,7 +35,9 @@ That's it. Same command on Debian, Fedora, Arch, openSUSE, OpenWrt, Termux, Free
 | openSUSE | `zypper` |
 | OpenWrt | `opkg` |
 | Android (Termux) | `pkg` (fallback `apt`) |
-| FreeBSD | `pkg` |
+| FreeBSD (+ GhostBSD, HardenedBSD) | `pkg` |
+| DragonFly BSD | `pkg` (DPorts) |
+| Any of the above with Ravenports | `rvn` (takes precedence when installed) |
 | macOS | built-in engine (Homebrew-compatible names + prefixes) |
 
 ## macOS
@@ -105,7 +107,8 @@ upkg help
 | Arch | `pacman -Ss` |
 | openSUSE | `zypper search` |
 | OpenWrt | `opkg find` |
-| FreeBSD | `pkg search` |
+| FreeBSD / DragonFly BSD | `pkg search` |
+| Ravenports | `rvn search` |
 | Android (Termux) | `pkg search` |
 | Windows | `winget search` / `choco search` |
 | macOS | built-in search against the Homebrew JSON index |
@@ -116,13 +119,13 @@ tab-separated line: `kind<TAB>name<TAB>version<TAB>description`.
 
 Flags:
 
-- `--app` — on macOS, restrict to casks. No-op (and rejected as
+- `--app`: on macOS, restrict to casks. No-op (and rejected as
   `Unsupported`) on other platforms.
-- `--exact`, `-e` — exact name match. Maps to `pkg/winget/choco/rvn -e`
+- `--exact`, `-e`: exact name match. Maps to `pkg/winget/choco/rvn -e`
   and to an anchored `^…$` regex for `pacman`/`opkg`. Returns an
   `Unsupported` error on managers without an exact mode
   (`apt`/`dnf`/`yum`/`zypper`).
-- `--refresh` — macOS only. Forces revalidation of the cached Homebrew
+- `--refresh`: macOS only. Forces revalidation of the cached Homebrew
   index instead of using the on-disk copy (default TTL 12 hours).
 
 The macOS index lives at `<root>/cache/homebrew-search/` and is
