@@ -105,6 +105,22 @@ If the install directory is not already in `PATH`, the installer adds it to
 your shell profile (`.zshrc`, `.bashrc`, fish config, or `.profile`). Restart
 your shell after install. Set `UPKG_NO_MODIFY_PATH=1` to skip this.
 
+### CI (GitHub / Gitea / Forgejo Actions)
+
+Use [`seuros/setup-upkg`](https://github.com/seuros/setup-upkg) to install upkg
+in a workflow:
+
+```yaml
+steps:
+  - uses: seuros/setup-upkg@master
+  - run: upkg install imagemagick
+```
+
+`@master` tracks the latest action and installs the latest upkg release. Pin
+both if you need reproducibility: `seuros/setup-upkg@v0.9.1` with
+`with: { version: '0.10.0' }`. Works on GitHub Actions, Gitea Actions, and
+Forgejo Actions.
+
 ## Usage
 
 ```bash
