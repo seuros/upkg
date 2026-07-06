@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/seuros/upkg/compare/upkg-v0.11.0...upkg-v0.11.1) (2026-07-06)
+
+
+### Bug Fixes
+
+* dedupe identical if/else-if arms in cask delete escalation ([d6b419a](https://github.com/seuros/upkg/commit/d6b419aec50989570754d1c03e784be416fb878e))
+
 ## [0.11.0](https://github.com/seuros/upkg/compare/upkg-v0.10.0...upkg-v0.11.0) (2026-06-26)
 
 
