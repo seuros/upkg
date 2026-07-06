@@ -448,13 +448,13 @@ fn remove_cask_delete_target(target: &str) -> Result<(), Error> {
             .map_err(|e| Error::ExecutionError {
                 message: format!("failed to remove cask delete target '{target}': {e}"),
             })?;
-        return if output.status.success() {
-            Ok(())
-        } else if crate::privilege_macos::escalate_privilege(&command).map_err(|e| {
-            Error::ExecutionError {
-                message: format!("failed to request delete privileges for '{target}': {e}"),
-            }
-        })? {
+        let escalated = output.status.success()
+            || crate::privilege_macos::escalate_privilege(&command).map_err(|e| {
+                Error::ExecutionError {
+                    message: format!("failed to request delete privileges for '{target}': {e}"),
+                }
+            })?;
+        return if escalated {
             Ok(())
         } else {
             Err(Error::ExecutionError {
