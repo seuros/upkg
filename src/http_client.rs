@@ -2,14 +2,14 @@ use rama::{
     Service,
     error::extra::OpaqueError,
     http::{
-        Body, HeaderValue, Request, Response, StatusCode,
-        client::{EasyHttpWebClient, HttpClientService},
+        HeaderValue, Request, Response, StatusCode,
+        client::{EasyHttpWebClient, HttpPooledConnectorConfig},
         header::{AUTHORIZATION, LOCATION, USER_AGENT},
         service::client::HttpClientExt,
     },
-    net::client::pool::http::HttpPooledConnectorConfig,
     rt::Executor,
     service::BoxService,
+    tls::client::TlsClientConfig,
 };
 
 pub type RamaClient = BoxService<Request, Response, OpaqueError>;
@@ -76,11 +76,12 @@ pub struct RedirectHeaders {
 pub fn build_rama_client() -> RamaClient {
     EasyHttpWebClient::connector_builder()
         .with_default_transport_connector()
+        .with_default_dns_connector()
         .without_tls_proxy_support()
         .with_proxy_support()
-        .with_tls_support_using_rustls(None)
+        .with_tls_support_using_rustls(TlsClientConfig::default_http())
         .with_default_http_connector(Executor::default())
-        .try_with_connection_pool::<HttpClientService<Body>>(HttpPooledConnectorConfig::default())
+        .try_with_connection_pool(HttpPooledConnectorConfig::default())
         .expect("failed to build HTTP client with connection pool")
         .build_client()
         .boxed()
@@ -90,9 +91,10 @@ pub fn build_rama_client() -> RamaClient {
 pub fn build_isolated_rama_client() -> RamaClient {
     EasyHttpWebClient::connector_builder()
         .with_default_transport_connector()
+        .with_default_dns_connector()
         .without_tls_proxy_support()
         .with_proxy_support()
-        .with_tls_support_using_rustls(None)
+        .with_tls_support_using_rustls(TlsClientConfig::default_http())
         .with_default_http_connector(Executor::default())
         .build_client()
         .boxed()
