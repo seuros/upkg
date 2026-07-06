@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.2](https://github.com/seuros/upkg/compare/upkg-v0.11.1...upkg-v0.11.2) (2026-07-06)
+
+
+### Bug Fixes
+
+* **ci:** bump pinned rust-toolchain to 1.96.1 for rama 0.3.0-rc.1 MSRV ([b3b33dd](https://github.com/seuros/upkg/commit/b3b33dd1ea993db36a5da6b42ea89669d971deb3))
+
 ## [0.11.1](https://github.com/seuros/upkg/compare/upkg-v0.11.0...upkg-v0.11.1) (2026-07-06)
 
 
