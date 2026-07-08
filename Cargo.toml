@@ -14,7 +14,7 @@ toml = "0.8"
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "process"] }
 serde = { version = "1.0", features = ["derive"] }
-rama = { version = "0.3.0-rc.1", features = ["http-full", "rustls", "ring"] }
+rama = { version = "0.3.0", features = ["http-full", "rustls", "ring"] }
 flate2 = "1.1.8"
 tar = "0.4.44"
 sha2 = "0.11.0"
