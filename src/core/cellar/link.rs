@@ -4,7 +4,16 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::types::{ConflictedLink, Error};
 
-const LINK_DIRS: &[&str] = &["bin", "lib", "libexec", "include", "share", "etc"];
+const LINK_DIRS: &[&str] = &[
+    "bin",
+    "sbin",
+    "lib",
+    "libexec",
+    "cli-plugins",
+    "include",
+    "share",
+    "etc",
+];
 
 pub struct Linker {
     prefix: PathBuf,

@@ -29,6 +29,7 @@ fn stage_cask_apps_moves_app_and_leaves_caskroom_symlink() {
             delete: Vec::new(),
         },
         linked_artifacts: Vec::new(),
+        postflight_symlinks: Vec::new(),
     };
 
     stage_cask_apps(&source_root, &staged_path, &prefix, &cask).unwrap();
@@ -81,6 +82,7 @@ fn stage_cask_linked_artifacts_links_appdir_sources_into_prefix() {
                     target: "etc/bash_completion.d/ghostty".to_string(),
                 },
             ],
+            postflight_symlinks: Vec::new(),
         };
 
     stage_cask_linked_artifacts(&source_root, &prefix, &cask).unwrap();
@@ -139,6 +141,7 @@ fn write_cask_metadata_includes_pkg_uninstall_artifacts() {
             delete: vec!["/Library/Application Support/Test".to_string()],
         },
         linked_artifacts: Vec::new(),
+        postflight_symlinks: Vec::new(),
     };
     let cask_json = serde_json::json!({
         "token": "test-pkg",
@@ -158,6 +161,98 @@ fn write_cask_metadata_includes_pkg_uninstall_artifacts() {
     assert!(receipt.contains("Test.pkg"));
     assert!(receipt.contains("\"pkgutil\""));
     assert!(receipt.contains("com.example.test"));
+}
+
+#[test]
+fn stage_cask_binaries_supports_appdir_and_nested_prefix_targets() {
+    let tmp = TempDir::new().unwrap();
+    let source_root = tmp.path().join("mounted");
+    let prefix = tmp.path().join("homebrew");
+    let keg_path = tmp
+        .path()
+        .join("upkg/Cellar/cask:docker-desktop/4.88.1,237512");
+    let resources = prefix.join("Applications/Docker.app/Contents/Resources");
+
+    fs::create_dir_all(resources.join("bin")).unwrap();
+    fs::create_dir_all(resources.join("cli-plugins")).unwrap();
+    fs::write(resources.join("bin/docker"), "#!/bin/sh").unwrap();
+    fs::write(resources.join("cli-plugins/docker-compose"), "#!/bin/sh").unwrap();
+
+    let cask = crate::core::installer::cask::ResolvedCask {
+        install_name: "cask:docker-desktop".to_string(),
+        token: "docker-desktop".to_string(),
+        version: "4.88.1,237512".to_string(),
+        url: "https://example.com/Docker.dmg".to_string(),
+        sha256: "abc".to_string(),
+        binaries: vec![
+            crate::core::installer::cask::CaskBinary {
+                source: "$APPDIR/Docker.app/Contents/Resources/bin/docker".to_string(),
+                target: "bin/docker".to_string(),
+            },
+            crate::core::installer::cask::CaskBinary {
+                source: "$APPDIR/Docker.app/Contents/Resources/cli-plugins/docker-compose"
+                    .to_string(),
+                target: "cli-plugins/docker-compose".to_string(),
+            },
+        ],
+        apps: Vec::new(),
+        pkgs: Vec::new(),
+        uninstall: crate::core::installer::cask::CaskUninstall {
+            pkgutil: Vec::new(),
+            delete: Vec::new(),
+        },
+        linked_artifacts: Vec::new(),
+        postflight_symlinks: Vec::new(),
+    };
+
+    stage_cask_binaries(&source_root, &prefix, &keg_path, &cask).unwrap();
+    assert!(keg_path.join("bin/docker").exists());
+    assert!(keg_path.join("cli-plugins/docker-compose").exists());
+
+    let linker = Linker::new(&prefix).unwrap();
+    linker.link_keg(&keg_path).unwrap();
+    assert!(prefix.join("bin/docker").is_symlink());
+    assert!(prefix.join("cli-plugins/docker-compose").is_symlink());
+}
+
+#[test]
+fn stage_cask_postflight_symlink_respects_unless_exists_guard() {
+    let tmp = TempDir::new().unwrap();
+    let source_root = tmp.path().join("mounted");
+    let prefix = tmp.path().join("homebrew");
+    let source = prefix.join("Applications/Docker.app/Contents/Resources/bin/kubectl");
+    let target = prefix.join("bin/kubectl");
+
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::write(&source, "docker kubectl").unwrap();
+    fs::write(&target, "existing kubectl").unwrap();
+
+    let cask = crate::core::installer::cask::ResolvedCask {
+        install_name: "cask:docker-desktop".to_string(),
+        token: "docker-desktop".to_string(),
+        version: "4.88.1,237512".to_string(),
+        url: "https://example.com/Docker.dmg".to_string(),
+        sha256: "abc".to_string(),
+        binaries: Vec::new(),
+        apps: Vec::new(),
+        pkgs: Vec::new(),
+        uninstall: crate::core::installer::cask::CaskUninstall {
+            pkgutil: Vec::new(),
+            delete: Vec::new(),
+        },
+        linked_artifacts: Vec::new(),
+        postflight_symlinks: vec![crate::core::installer::cask::CaskPostflightSymlink {
+            source: "$APPDIR/Docker.app/Contents/Resources/bin/kubectl".to_string(),
+            target: "bin/kubectl".to_string(),
+            skip_if_exists: true,
+            uninstall: true,
+        }],
+    };
+
+    stage_cask_postflight_symlinks(&source_root, &prefix, &cask).unwrap();
+    assert!(!target.is_symlink());
+    assert_eq!(fs::read_to_string(target).unwrap(), "existing kubectl");
 }
 
 #[test]

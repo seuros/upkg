@@ -9,7 +9,16 @@ pub enum InitError {
 }
 
 const PREFIX_MANAGED_DIRS: &[&str] = &[
-    "bin", "Cellar", "opt", "lib", "libexec", "include", "share", "etc",
+    "bin",
+    "sbin",
+    "Cellar",
+    "opt",
+    "lib",
+    "libexec",
+    "cli-plugins",
+    "include",
+    "share",
+    "etc",
 ];
 
 fn managed_dirs(root: &Path, prefix: &Path) -> Vec<PathBuf> {

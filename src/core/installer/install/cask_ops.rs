@@ -3,11 +3,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::core::cellar::link::Linker;
-use crate::core::cellar::materialize::Cellar;
 use crate::types::Error;
-
-use super::Installer;
 
 #[path = "cask_ops/metadata.rs"]
 mod metadata;
@@ -21,68 +17,18 @@ pub(super) use metadata::{
 };
 pub(super) use source_root::with_cask_source_root;
 
-pub(super) struct FailedInstallGuard<'a> {
-    linker: &'a Linker,
-    cellar: &'a Cellar,
-    name: &'a str,
-    version: &'a str,
-    keg_path: &'a Path,
-    unlink: bool,
-    armed: bool,
-}
-
-impl<'a> FailedInstallGuard<'a> {
-    pub(super) fn new(
-        linker: &'a Linker,
-        cellar: &'a Cellar,
-        name: &'a str,
-        version: &'a str,
-        keg_path: &'a Path,
-        unlink: bool,
-    ) -> Self {
-        Self {
-            linker,
-            cellar,
-            name,
-            version,
-            keg_path,
-            unlink,
-            armed: true,
-        }
-    }
-
-    pub(super) fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for FailedInstallGuard<'_> {
-    fn drop(&mut self) {
-        if self.armed {
-            Installer::cleanup_failed_install(
-                self.linker,
-                self.cellar,
-                self.name,
-                self.version,
-                self.keg_path,
-                self.unlink,
-            );
-        }
-    }
-}
-
 pub(super) fn stage_cask_binaries(
-    extracted_root: &Path,
+    source_root: &Path,
+    prefix: &Path,
     keg_path: &Path,
     cask: &crate::core::installer::cask::ResolvedCask,
 ) -> Result<(), Error> {
-    let bin_dir = keg_path.join("bin");
-    fs::create_dir_all(&bin_dir).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create cask bin dir: {e}"),
+    fs::create_dir_all(keg_path).map_err(|e| Error::StoreCorruption {
+        message: format!("failed to create cask keg: {e}"),
     })?;
 
     for binary in &cask.binaries {
-        let source = resolve_cask_source_path(extracted_root, cask, &binary.source)?;
+        let source = resolve_cask_link_source_path(source_root, prefix, cask, &binary.source)?;
         if !source.exists() {
             return Err(Error::InvalidArgument {
                 message: format!(
@@ -92,12 +38,16 @@ pub(super) fn stage_cask_binaries(
             });
         }
 
-        let target = bin_dir.join(&binary.target);
-        if target.exists() {
-            fs::remove_file(&target).map_err(|e| Error::StoreCorruption {
-                message: format!("failed to replace existing cask binary: {e}"),
-            })?;
+        let target = cask_prefix_target(keg_path, &binary.target)?;
+        if target.exists() || target.is_symlink() {
+            remove_path_if_exists(&target)?;
         }
+        let parent = target.parent().ok_or_else(|| Error::StoreCorruption {
+            message: format!("target '{}' has no parent", target.display()),
+        })?;
+        fs::create_dir_all(parent).map_err(|e| Error::StoreCorruption {
+            message: format!("failed to create cask binary target directory: {e}"),
+        })?;
 
         fs::copy(&source, &target).map_err(|e| Error::StoreCorruption {
             message: format!("failed to stage cask binary '{}': {e}", binary.target),
@@ -117,6 +67,82 @@ pub(super) fn stage_cask_binaries(
                     message: format!("failed to make staged cask binary executable: {e}"),
                 })?;
             }
+        }
+    }
+
+    Ok(())
+}
+
+pub(super) fn stage_cask_postflight_symlinks(
+    source_root: &Path,
+    prefix: &Path,
+    cask: &crate::core::installer::cask::ResolvedCask,
+) -> Result<(), Error> {
+    for symlink in &cask.postflight_symlinks {
+        let source = resolve_cask_link_source_path(source_root, prefix, cask, &symlink.source)?;
+        if !source.exists() {
+            return Err(Error::InvalidArgument {
+                message: format!(
+                    "cask '{}' postflight source '{}' not found",
+                    cask.token, symlink.source
+                ),
+            });
+        }
+
+        let target = cask_prefix_target(prefix, &symlink.target)?;
+        if symlink.skip_if_exists && (target.exists() || target.is_symlink()) {
+            continue;
+        }
+        if target.exists() && !target.is_symlink() {
+            return Err(Error::InvalidArgument {
+                message: format!(
+                    "cask '{}' postflight target '{}' already exists",
+                    cask.token,
+                    target.display()
+                ),
+            });
+        }
+        if target.is_symlink() {
+            remove_path_if_exists(&target)?;
+        }
+
+        let parent = target.parent().ok_or_else(|| Error::StoreCorruption {
+            message: format!("target '{}' has no parent", target.display()),
+        })?;
+        fs::create_dir_all(parent).map_err(|e| Error::StoreCorruption {
+            message: format!("failed to create cask postflight target directory: {e}"),
+        })?;
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&source, &target).map_err(|e| Error::StoreCorruption {
+            message: format!(
+                "failed to link cask postflight target '{}' to '{}': {e}",
+                target.display(),
+                source.display()
+            ),
+        })?;
+    }
+
+    Ok(())
+}
+
+pub(super) fn remove_cask_postflight_symlinks(
+    prefix: &Path,
+    cask: &crate::core::installer::cask::ResolvedCask,
+) -> Result<(), Error> {
+    for symlink in &cask.postflight_symlinks {
+        if !symlink.uninstall {
+            continue;
+        }
+        let target = cask_prefix_target(prefix, &symlink.target)?;
+        let expected_source =
+            resolve_cask_link_source_path(Path::new("."), prefix, cask, &symlink.source)?;
+        if target.is_symlink()
+            && fs::read_link(&target)
+                .map(|source| source == expected_source)
+                .unwrap_or(false)
+        {
+            remove_path_if_exists(&target)?;
         }
     }
 

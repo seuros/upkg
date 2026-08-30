@@ -448,6 +448,22 @@ impl ApiClient {
     }
 
     pub async fn get_cask(&self, token: &str) -> Result<serde_json::Value, Error> {
+        if let Some(cask) = self.get_cask_exact(token).await? {
+            return Ok(cask);
+        }
+
+        if let Some(current_token) = self.resolve_cask_old_token(token).await?
+            && let Some(cask) = self.get_cask_exact(&current_token).await?
+        {
+            return Ok(cask);
+        }
+
+        Err(Error::MissingFormula {
+            name: cask_name(token),
+        })
+    }
+
+    async fn get_cask_exact(&self, token: &str) -> Result<Option<serde_json::Value>, Error> {
         let url = format!("{}/{}.json", self.cask_base_url, token);
         let response = self
             .client
@@ -459,9 +475,7 @@ impl ApiClient {
             })?;
 
         if response.status() == StatusCode::NOT_FOUND {
-            return Err(Error::MissingFormula {
-                name: cask_name(token),
-            });
+            return Ok(None);
         }
 
         if !response.status().is_success() {
@@ -473,9 +487,50 @@ impl ApiClient {
         response
             .try_into_json::<serde_json::Value>()
             .await
+            .map(Some)
             .map_err(|e| Error::NetworkFailure {
                 message: format!("failed to parse cask JSON: {e}"),
             })
+    }
+
+    async fn resolve_cask_old_token(&self, token: &str) -> Result<Option<String>, Error> {
+        let url = format!("{}.json", self.cask_base_url.trim_end_matches('/'));
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::NetworkFailure {
+                message: e.to_string(),
+            })?;
+
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(Error::NetworkFailure {
+                message: format!("cask index returned HTTP {}", response.status()),
+            });
+        }
+
+        let casks = response
+            .try_into_json::<Vec<serde_json::Value>>()
+            .await
+            .map_err(|e| Error::NetworkFailure {
+                message: format!("failed to parse cask index JSON: {e}"),
+            })?;
+
+        Ok(casks.into_iter().find_map(|cask| {
+            let is_old_token = cask
+                .get("old_tokens")
+                .and_then(serde_json::Value::as_array)
+                .map(|tokens| tokens.iter().any(|old| old.as_str() == Some(token)))
+                .unwrap_or(false);
+            is_old_token
+                .then(|| cask.get("token").and_then(serde_json::Value::as_str))
+                .flatten()
+                .map(ToString::to_string)
+        }))
     }
 
     async fn get_tap_formula(&self, spec: &TapFormulaRef) -> Result<Formula, Error> {

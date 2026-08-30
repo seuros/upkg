@@ -82,12 +82,14 @@ formula. Use `--app` when you want to force cask resolution:
 ```bash
 upkg install ghostty
 upkg install --app ghostty
+upkg install --app docker   # resolves the renamed docker-desktop cask
 upkg uninstall --app ghostty
 ```
 
 App installs are written in the Homebrew-compatible cask layout, so `brew
 info --cask <name>` can detect them. Supported cask artifacts currently include
-apps, manpages, and bash/fish/zsh completions.
+apps, binaries, manpages, bash/fish/zsh completions, and guarded postflight
+symlinks. Renamed casks also resolve through Homebrew's `old_tokens` metadata.
 
 ## Install
 

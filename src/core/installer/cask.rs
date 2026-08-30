@@ -41,6 +41,14 @@ pub struct CaskLinkedArtifact {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaskPostflightSymlink {
+    pub source: String,
+    pub target: String,
+    pub skip_if_exists: bool,
+    pub uninstall: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedCask {
     pub install_name: String,
     pub token: String,
@@ -52,9 +60,11 @@ pub struct ResolvedCask {
     pub pkgs: Vec<CaskPkg>,
     pub uninstall: CaskUninstall,
     pub linked_artifacts: Vec<CaskLinkedArtifact>,
+    pub postflight_symlinks: Vec<CaskPostflightSymlink>,
 }
 
 pub fn resolve_cask(token: &str, cask: &Value) -> Result<ResolvedCask, Error> {
+    let token = cask.get("token").and_then(Value::as_str).unwrap_or(token);
     let mut url = required_string(cask, "url")?;
     let mut sha256 = required_string(cask, "sha256")?;
     let version = required_string(cask, "version")?;
@@ -79,6 +89,7 @@ pub fn resolve_cask(token: &str, cask: &Value) -> Result<ResolvedCask, Error> {
     let pkgs = parse_pkg_artifacts(cask)?;
     let uninstall = parse_uninstall_artifacts(cask)?;
     let linked_artifacts = parse_linked_artifacts(cask)?;
+    let postflight_symlinks = parse_postflight_symlinks(cask)?;
     if binaries.is_empty() && apps.is_empty() && pkgs.is_empty() {
         return Err(Error::InvalidArgument {
             message: format!(
@@ -98,6 +109,7 @@ pub fn resolve_cask(token: &str, cask: &Value) -> Result<ResolvedCask, Error> {
         pkgs,
         uninstall,
         linked_artifacts,
+        postflight_symlinks,
     })
 }
 
@@ -137,12 +149,15 @@ fn parse_binary_artifacts(cask: &Value) -> Result<Vec<CaskBinary>, Error> {
             continue;
         };
 
+        let sibling_target = artifact_target(artifact);
         if is_flat_artifact_entry(entries) {
-            let (source, target) = parse_binary_entry(&Value::Array(entries.clone()))?;
+            let (source, target) =
+                parse_binary_entry(&Value::Array(entries.clone()), sibling_target)?;
             binaries.push(CaskBinary { source, target });
         } else {
             for entry in entries {
-                let (source, target) = parse_binary_entry(entry)?;
+                let fallback_target = (entries.len() == 1).then_some(sibling_target).flatten();
+                let (source, target) = parse_binary_entry(entry, fallback_target)?;
                 binaries.push(CaskBinary { source, target });
             }
         }
@@ -159,12 +174,14 @@ fn parse_app_artifacts(cask: &Value) -> Result<Vec<CaskApp>, Error> {
             continue;
         };
 
+        let sibling_target = artifact_target(artifact);
         if is_flat_artifact_entry(entries) {
-            let (source, target) = parse_binary_entry(&Value::Array(entries.clone()))?;
+            let (source, target) = parse_app_entry(&Value::Array(entries.clone()), sibling_target)?;
             apps.push(CaskApp { source, target });
         } else {
             for entry in entries {
-                let (source, target) = parse_binary_entry(entry)?;
+                let fallback_target = (entries.len() == 1).then_some(sibling_target).flatten();
+                let (source, target) = parse_app_entry(entry, fallback_target)?;
                 apps.push(CaskApp { source, target });
             }
         }
@@ -289,7 +306,8 @@ fn parse_linked_artifact_entries(
         .iter()
         .map(|entry| {
             let (source, target) = parse_symlink_entry(entry)?;
-            let target = target_for(&source, target.as_deref())?;
+            let explicit_target = target.as_deref().or_else(|| artifact_target(artifact));
+            let target = linked_artifact_target(&source, explicit_target, target_for)?;
             Ok(CaskLinkedArtifact {
                 kind: kind.clone(),
                 source,
@@ -303,9 +321,33 @@ fn is_flat_artifact_entry(entries: &[Value]) -> bool {
     entries.len() == 2 && entries[0].is_string() && entries[1].is_object()
 }
 
-fn parse_binary_entry(entry: &Value) -> Result<(String, String), Error> {
+fn artifact_target(artifact: &Value) -> Option<&str> {
+    artifact.get("target").and_then(Value::as_str)
+}
+
+fn parse_binary_entry(
+    entry: &Value,
+    fallback_target: Option<&str>,
+) -> Result<(String, String), Error> {
     let (source, target) = parse_artifact_entry(entry, "binary")?;
-    let target = target.unwrap_or_else(|| basename(source).unwrap_or_else(|_| source.to_string()));
+    let target = target.as_deref().or(fallback_target);
+    let target = match target {
+        Some(target) => normalize_binary_target(target)?,
+        None => format!("bin/{}", basename(source)?),
+    };
+    Ok((source.to_string(), target))
+}
+
+fn parse_app_entry(
+    entry: &Value,
+    fallback_target: Option<&str>,
+) -> Result<(String, String), Error> {
+    let (source, target) = parse_artifact_entry(entry, "app")?;
+    let target = target.as_deref().or(fallback_target);
+    let target = match target {
+        Some(target) => normalize_app_target(target)?,
+        None => basename(source)?,
+    };
     Ok((source.to_string(), target))
 }
 
@@ -336,10 +378,26 @@ fn parse_artifact_entry<'a>(
         .and_then(Value::as_object)
         .and_then(|obj| obj.get("target"))
         .and_then(Value::as_str)
-        .map(|target| validate_relative_target(target, artifact_kind))
-        .transpose()?;
+        .map(ToString::to_string);
 
     Ok((source, target))
+}
+
+fn linked_artifact_target(
+    source: &str,
+    target: Option<&str>,
+    target_for: fn(&str, Option<&str>) -> Result<String, Error>,
+) -> Result<String, Error> {
+    match target {
+        Some(target)
+            if target.contains('/')
+                || target.starts_with("$HOMEBREW_PREFIX")
+                || std::path::Path::new(target).is_absolute() =>
+        {
+            normalize_prefix_target(target, "linked artifact")
+        }
+        _ => target_for(source, target),
+    }
 }
 
 fn manpage_target(source: &str, target: Option<&str>) -> Result<String, Error> {
@@ -407,14 +465,118 @@ fn completion_stem(path: &str) -> String {
         .unwrap_or(name)
 }
 
-fn validate_relative_target(target: &str, artifact_kind: &str) -> Result<String, Error> {
-    if target.contains('/') || target.contains('$') || target.contains('~') {
+fn normalize_binary_target(target: &str) -> Result<String, Error> {
+    let target = normalize_prefix_target(target, "binary")?;
+    if target.contains('/') {
+        Ok(target)
+    } else {
+        Ok(format!("bin/{target}"))
+    }
+}
+
+fn normalize_app_target(target: &str) -> Result<String, Error> {
+    let target = target
+        .strip_prefix("/Applications/")
+        .or_else(|| target.strip_prefix("$APPDIR/"))
+        .unwrap_or(target);
+    validate_leaf_target(target, "app")
+}
+
+fn normalize_prefix_target(target: &str, artifact_kind: &str) -> Result<String, Error> {
+    let target = target
+        .strip_prefix("$HOMEBREW_PREFIX/")
+        .or_else(|| target.strip_prefix("/usr/local/"))
+        .or_else(|| target.strip_prefix("/opt/homebrew/"))
+        .unwrap_or(target);
+    let target_path = std::path::Path::new(target);
+    if target.is_empty()
+        || target_path.is_absolute()
+        || target.contains('$')
+        || target.contains('~')
+        || target_path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
         return Err(Error::InvalidArgument {
             message: format!("unsupported cask {artifact_kind} target path '{target}'"),
         });
     }
 
     Ok(target.to_string())
+}
+
+fn validate_leaf_target(target: &str, artifact_kind: &str) -> Result<String, Error> {
+    let normalized = normalize_prefix_target(target, artifact_kind)?;
+    if normalized.contains('/') {
+        return Err(Error::InvalidArgument {
+            message: format!("unsupported cask {artifact_kind} target path '{target}'"),
+        });
+    }
+    Ok(normalized)
+}
+
+fn parse_postflight_symlinks(cask: &Value) -> Result<Vec<CaskPostflightSymlink>, Error> {
+    let mut symlinks = Vec::new();
+
+    for artifact in artifacts(cask)? {
+        let Some(blocks) = artifact.get("postflight_steps").and_then(Value::as_array) else {
+            continue;
+        };
+        for block in blocks {
+            let Some(steps) = block.get("steps").and_then(Value::as_array) else {
+                continue;
+            };
+            for step in steps {
+                if step.get("type").and_then(Value::as_str) != Some("symlink") {
+                    continue;
+                }
+                let Some(source) = step
+                    .get("source")
+                    .and_then(|value| value.get("path"))
+                    .and_then(Value::as_str)
+                else {
+                    continue;
+                };
+                let Some(target) = step
+                    .get("target")
+                    .and_then(|value| value.get("path"))
+                    .and_then(Value::as_str)
+                else {
+                    continue;
+                };
+                let source = source
+                    .strip_prefix("{{appdir}}")
+                    .map(|rest| format!("$APPDIR{rest}"))
+                    .unwrap_or_else(|| source.to_string());
+                let skip_if_exists = step
+                    .get("guards")
+                    .and_then(Value::as_array)
+                    .map(|guards| {
+                        guards.iter().any(|guard| {
+                            guard.get("condition").and_then(Value::as_str) == Some("unless_exists")
+                        })
+                    })
+                    .unwrap_or(false);
+
+                symlinks.push(CaskPostflightSymlink {
+                    source,
+                    target: normalize_prefix_target(target, "postflight symlink")?,
+                    skip_if_exists,
+                    uninstall: step
+                        .get("uninstall")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                });
+            }
+        }
+    }
+
+    Ok(symlinks)
 }
 
 fn basename(path: &str) -> Result<String, Error> {
@@ -472,8 +634,8 @@ mod tests {
 
         let resolved = resolve_cask("test", &cask).unwrap();
         assert_eq!(resolved.binaries.len(), 2);
-        assert_eq!(resolved.binaries[0].target, "tool");
-        assert_eq!(resolved.binaries[1].target, "tool-two");
+        assert_eq!(resolved.binaries[0].target, "bin/tool");
+        assert_eq!(resolved.binaries[1].target, "bin/tool-two");
     }
 
     #[test]
@@ -606,7 +768,7 @@ mod tests {
             resolved.binaries[0].source,
             "$HOMEBREW_PREFIX/Caskroom/gimp/3.2.4/gimp.wrapper.sh"
         );
-        assert_eq!(resolved.binaries[0].target, "gimp");
+        assert_eq!(resolved.binaries[0].target, "bin/gimp");
     }
 
     #[test]
@@ -645,9 +807,108 @@ mod tests {
         let resolved = resolve_cask("test", &cask).unwrap();
         assert_eq!(resolved.binaries.len(), 2);
         assert_eq!(resolved.binaries[0].source, "bin/tool");
-        assert_eq!(resolved.binaries[0].target, "tool");
+        assert_eq!(resolved.binaries[0].target, "bin/tool");
         assert_eq!(resolved.binaries[1].source, "bin/tool2");
-        assert_eq!(resolved.binaries[1].target, "tool-two");
+        assert_eq!(resolved.binaries[1].target, "bin/tool-two");
+    }
+
+    #[test]
+    fn resolve_cask_parses_docker_desktop_artifacts() {
+        let cask = serde_json::json!({
+            "token": "docker-desktop",
+            "old_tokens": ["docker"],
+            "version": "4.88.1,237512",
+            "url": "https://example.com/Docker.dmg",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifacts": [
+                {
+                    "app": ["Docker.app"],
+                    "target": "/Applications/Docker.app"
+                },
+                {
+                    "binary": [
+                        "$APPDIR/Docker.app/Contents/Resources/bin/docker",
+                        {"target": "/usr/local/bin/docker"}
+                    ],
+                    "target": "/usr/local/bin/docker"
+                },
+                {
+                    "binary": [
+                        "$APPDIR/Docker.app/Contents/Resources/cli-plugins/docker-compose",
+                        {"target": "/usr/local/cli-plugins/docker-compose"}
+                    ],
+                    "target": "/usr/local/cli-plugins/docker-compose"
+                },
+                {
+                    "fish_completion": [
+                        "$APPDIR/Docker.app/Contents/Resources/etc/docker.fish-completion"
+                    ],
+                    "target": "$HOMEBREW_PREFIX/share/fish/vendor_completions.d/docker.fish"
+                },
+                {
+                    "zsh_completion": [
+                        "$APPDIR/Docker.app/Contents/Resources/etc/docker.zsh-completion"
+                    ],
+                    "target": "$HOMEBREW_PREFIX/share/zsh/site-functions/_docker"
+                },
+                {
+                    "postflight_steps": [{
+                        "steps": [{
+                            "source": {
+                                "path": "{{appdir}}/Docker.app/Contents/Resources/bin/kubectl"
+                            },
+                            "target": {"path": "/usr/local/bin/kubectl"},
+                            "uninstall": true,
+                            "guards": [{
+                                "path": "/usr/local/bin/kubectl",
+                                "condition": "unless_exists"
+                            }],
+                            "type": "symlink"
+                        }]
+                    }]
+                }
+            ]
+        });
+
+        let resolved = resolve_cask("docker", &cask).unwrap();
+
+        assert_eq!(resolved.token, "docker-desktop");
+        assert_eq!(resolved.install_name, "cask:docker-desktop");
+        assert_eq!(resolved.apps[0].target, "Docker.app");
+        assert_eq!(resolved.binaries[0].target, "bin/docker");
+        assert_eq!(resolved.binaries[1].target, "cli-plugins/docker-compose");
+        assert_eq!(
+            resolved.linked_artifacts[0].target,
+            "share/fish/vendor_completions.d/docker.fish"
+        );
+        assert_eq!(
+            resolved.linked_artifacts[1].target,
+            "share/zsh/site-functions/_docker"
+        );
+        assert_eq!(resolved.postflight_symlinks.len(), 1);
+        assert_eq!(
+            resolved.postflight_symlinks[0].source,
+            "$APPDIR/Docker.app/Contents/Resources/bin/kubectl"
+        );
+        assert_eq!(resolved.postflight_symlinks[0].target, "bin/kubectl");
+        assert!(resolved.postflight_symlinks[0].skip_if_exists);
+        assert!(resolved.postflight_symlinks[0].uninstall);
+    }
+
+    #[test]
+    fn resolve_cask_rejects_binary_targets_outside_known_prefixes() {
+        let cask = serde_json::json!({
+            "token": "test",
+            "version": "1.0.0",
+            "url": "https://example.com/test.zip",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "artifacts": [{
+                "binary": ["bin/tool", {"target": "/tmp/tool"}]
+            }]
+        });
+
+        let err = resolve_cask("test", &cask).unwrap_err();
+        assert!(matches!(err, Error::InvalidArgument { .. }));
     }
 
     #[test]

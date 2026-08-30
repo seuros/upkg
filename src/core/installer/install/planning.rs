@@ -81,8 +81,12 @@ impl Installer {
                 Ok(_) => formulas.push((original.clone(), normalized.clone())),
                 Err(Error::MissingFormula { .. }) => {
                     match self.api_client.get_cask(normalized).await {
-                        Ok(_) => {
-                            casks.push((original.clone(), cask_name(normalized)));
+                        Ok(cask) => {
+                            let token = cask
+                                .get("token")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or(normalized);
+                            casks.push((original.clone(), cask_name(token)));
                         }
                         Err(Error::MissingFormula { .. }) => {
                             return Err(Error::MissingFormula {

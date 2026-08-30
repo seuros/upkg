@@ -185,7 +185,16 @@ fn home_dir() -> Option<PathBuf> {
 #[cfg(target_os = "macos")]
 fn macos_managed_dirs(root: &Path, prefix: &Path) -> Vec<PathBuf> {
     const PREFIX_MANAGED_DIRS: &[&str] = &[
-        "bin", "Cellar", "opt", "lib", "libexec", "include", "share", "etc",
+        "bin",
+        "sbin",
+        "Cellar",
+        "opt",
+        "lib",
+        "libexec",
+        "cli-plugins",
+        "include",
+        "share",
+        "etc",
     ];
 
     let mut dirs = vec![

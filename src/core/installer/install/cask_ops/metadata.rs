@@ -99,6 +99,14 @@ fn brew_cask_uninstall_artifacts(
     cask.apps
         .iter()
         .map(|app| serde_json::json!({ "app": [app.target] }))
+        .chain(cask.binaries.iter().map(|binary| {
+            serde_json::json!({
+                "binary": [
+                    binary.source,
+                    { "target": format!("$HOMEBREW_PREFIX/{}", binary.target) }
+                ]
+            })
+        }))
         .chain(
             cask.pkgs
                 .iter()

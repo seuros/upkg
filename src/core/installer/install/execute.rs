@@ -1,8 +1,5 @@
-use std::path::Path;
 use std::sync::Arc;
 
-use crate::core::cellar::link::Linker;
-use crate::core::cellar::materialize::Cellar;
 use crate::core::network::download::{DownloadProgressCallback, DownloadRequest, DownloadResult};
 use crate::core::progress::{InstallProgress, ProgressCallback};
 use crate::types::{Error, Formula, InstallMethod, SelectedBottle};
@@ -276,28 +273,5 @@ impl Installer {
         }
 
         Ok(ExecuteResult { installed })
-    }
-
-    pub(super) fn cleanup_failed_install(
-        linker: &Linker,
-        cellar: &Cellar,
-        name: &str,
-        version: &str,
-        keg_path: &Path,
-        unlink: bool,
-    ) {
-        if unlink && let Err(e) = linker.unlink_keg(keg_path) {
-            eprintln!(
-                "warning: failed to clean up links for {}@{} after install error: {}",
-                name, version, e
-            );
-        }
-
-        if let Err(e) = cellar.remove_keg(name, version) {
-            eprintln!(
-                "warning: failed to remove keg for {}@{} after install error: {}",
-                name, version, e
-            );
-        }
     }
 }

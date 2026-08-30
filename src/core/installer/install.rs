@@ -13,10 +13,11 @@ mod planning;
 mod source_ops;
 
 use cask_ops::{
-    FailedInstallGuard, cask_app_dir, cask_versions, install_cask_pkgs, is_pkg,
-    load_latest_cask_metadata_json, remove_cask_linked_artifacts, remove_path_if_exists,
-    stage_cask_apps, stage_cask_binaries, stage_cask_linked_artifacts, uninstall_cask_pkgs,
-    with_cask_source_root, write_brew_cask_metadata,
+    cask_app_dir, cask_versions, install_cask_pkgs, is_pkg, load_latest_cask_metadata_json,
+    remove_cask_linked_artifacts, remove_cask_postflight_symlinks, remove_path_if_exists,
+    stage_cask_apps, stage_cask_binaries, stage_cask_linked_artifacts,
+    stage_cask_postflight_symlinks, uninstall_cask_pkgs, with_cask_source_root,
+    write_brew_cask_metadata,
 };
 pub use factory::create_installer;
 
@@ -187,16 +188,23 @@ impl Installer {
     }
 
     fn uninstall_cask(&mut self, token: &str) -> Result<(), Error> {
-        let caskroom_path = self.prefix.join("Caskroom").join(token);
+        let token = self.installed_cask_token(token)?;
+        let caskroom_path = self.prefix.join("Caskroom").join(&token);
         if !caskroom_path.exists() {
             return Err(Error::NotInstalled {
-                name: cask_name(token),
+                name: cask_name(&token),
             });
         }
 
-        if let Some(cask_json) = load_latest_cask_metadata_json(&caskroom_path, token)? {
-            let cask = resolve_cask(token, &cask_json)?;
+        if let Some(cask_json) = load_latest_cask_metadata_json(&caskroom_path, &token)? {
+            let cask = resolve_cask(&token, &cask_json)?;
+            remove_cask_postflight_symlinks(&self.prefix, &cask)?;
             remove_cask_linked_artifacts(&self.prefix, &cask)?;
+            if !cask.binaries.is_empty() {
+                let keg_path = self.cellar.keg_path(&cask.install_name, &cask.version);
+                self.linker.unlink_keg(&keg_path)?;
+                self.cellar.remove_keg(&cask.install_name, &cask.version)?;
+            }
             uninstall_cask_pkgs(&cask)?;
         }
 
@@ -232,9 +240,47 @@ impl Installer {
                 caskroom_path.display()
             ),
         })?;
-        self.state_db.remove_installed(&cask_name(token))?;
+        self.state_db.remove_installed(&cask_name(&token))?;
 
         Ok(())
+    }
+
+    fn installed_cask_token(&self, requested: &str) -> Result<String, Error> {
+        let caskroom_root = self.prefix.join("Caskroom");
+        if caskroom_root.join(requested).exists() {
+            return Ok(requested.to_string());
+        }
+        if !caskroom_root.exists() {
+            return Ok(requested.to_string());
+        }
+
+        for entry in fs::read_dir(&caskroom_root).map_err(|e| Error::StoreCorruption {
+            message: format!(
+                "failed to read caskroom root '{}': {e}",
+                caskroom_root.display()
+            ),
+        })? {
+            let path = match entry {
+                Ok(entry) if entry.path().is_dir() => entry.path(),
+                _ => continue,
+            };
+            let Some(token) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Some(cask_json) = load_latest_cask_metadata_json(&path, token)? else {
+                continue;
+            };
+            if cask_json
+                .get("old_tokens")
+                .and_then(serde_json::Value::as_array)
+                .map(|tokens| tokens.iter().any(|token| token.as_str() == Some(requested)))
+                .unwrap_or(false)
+            {
+                return Ok(token.to_string());
+            }
+        }
+
+        Ok(requested.to_string())
     }
 
     pub fn gc(&mut self) -> Result<Vec<String>, Error> {
@@ -318,38 +364,7 @@ impl Installer {
             )
             .await?;
 
-        if !cask.apps.is_empty() || !cask.pkgs.is_empty() {
-            self.install_cask_artifacts(&cask, &cask_json, &blob_path)?;
-            return Ok(());
-        }
-
-        let extracted = self.store.ensure_entry(&cask.sha256, &blob_path)?;
-        let keg_path = self.cellar.keg_path(&cask.install_name, &cask.version);
-        let mut cleanup = FailedInstallGuard::new(
-            &self.linker,
-            &self.cellar,
-            &cask.install_name,
-            &cask.version,
-            &keg_path,
-            link,
-        );
-
-        stage_cask_binaries(&extracted, &keg_path, &cask)?;
-
-        if link {
-            self.linker.link_keg(&keg_path)?;
-        }
-
-        self.record_install_receipt(
-            &keg_path,
-            &cask.install_name,
-            &cask.install_name,
-            &cask.version,
-            &cask.sha256,
-        )?;
-
-        cleanup.disarm();
-        Ok(())
+        self.install_cask_artifacts(&cask, &cask_json, &blob_path, link)
     }
 
     fn install_cask_artifacts(
@@ -357,6 +372,7 @@ impl Installer {
         cask: &crate::core::installer::cask::ResolvedCask,
         cask_json: &serde_json::Value,
         blob_path: &Path,
+        link: bool,
     ) -> Result<(), Error> {
         let caskroom_path = self.prefix.join("Caskroom").join(&cask.token);
         let staged_path = caskroom_path.join(&cask.version);
@@ -365,14 +381,30 @@ impl Installer {
             message: format!("failed to create cask staging directory: {e}"),
         })?;
 
-        if !cask.pkgs.is_empty() && cask.apps.is_empty() && is_pkg(blob_path) {
+        if !cask.pkgs.is_empty()
+            && cask.apps.is_empty()
+            && cask.binaries.is_empty()
+            && is_pkg(blob_path)
+        {
             let source_root = blob_path.parent().unwrap_or_else(|| Path::new("."));
             install_cask_pkgs(source_root, blob_path, cask)?;
         } else {
             with_cask_source_root(&self.store, cask, blob_path, |source_root| {
                 if !cask.apps.is_empty() {
                     stage_cask_apps(source_root, &staged_path, &self.prefix, cask)?;
+                }
+                if !cask.binaries.is_empty() {
+                    let keg_path = self.cellar.keg_path(&cask.install_name, &cask.version);
+                    stage_cask_binaries(source_root, &self.prefix, &keg_path, cask)?;
+                    if link {
+                        self.linker.link_keg(&keg_path)?;
+                    }
+                }
+                if !cask.linked_artifacts.is_empty() {
                     stage_cask_linked_artifacts(source_root, &self.prefix, cask)?;
+                }
+                if !cask.postflight_symlinks.is_empty() {
+                    stage_cask_postflight_symlinks(source_root, &self.prefix, cask)?;
                 }
                 if !cask.pkgs.is_empty() {
                     install_cask_pkgs(source_root, blob_path, cask)?;
@@ -381,8 +413,7 @@ impl Installer {
             })?;
         }
 
-        write_brew_cask_metadata(&caskroom_path, cask, cask_json)?;
-        self.record_installed_package(&InstallReceipt {
+        let receipt = InstallReceipt {
             install_name: cask.install_name.clone(),
             formula_name: cask.install_name.clone(),
             version: cask.version.clone(),
@@ -391,7 +422,13 @@ impl Installer {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0),
-        })?;
+        };
+        if !cask.binaries.is_empty() {
+            let keg_path = self.cellar.keg_path(&cask.install_name, &cask.version);
+            write_receipt(&keg_path, &receipt)?;
+        }
+        write_brew_cask_metadata(&caskroom_path, cask, cask_json)?;
+        self.record_installed_package(&receipt)?;
         Ok(())
     }
 }

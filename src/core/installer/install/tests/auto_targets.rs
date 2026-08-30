@@ -75,6 +75,56 @@ async fn auto_targets_fall_back_to_cask_when_formula_is_missing() {
 }
 
 #[tokio::test]
+async fn auto_targets_resolve_old_cask_tokens() {
+    let mock_server = MockServer::start().await;
+    let tmp = TempDir::new().unwrap();
+    let cask_json = r#"{
+        "token": "docker-desktop",
+        "old_tokens": ["docker"],
+        "version": "4.88.1,237512",
+        "url": "https://example.com/Docker.dmg",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "artifacts": [{"app":["Docker.app"]}]
+    }"#;
+
+    Mock::given(method("GET"))
+        .and(path("/formula/docker.json"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/cask/docker.json"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/cask.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!("[{cask_json}]")))
+        .mount(&mock_server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/cask/docker-desktop.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(cask_json))
+        .mount(&mock_server)
+        .await;
+
+    let api_client = ApiClient::with_base_url(format!("{}/formula", mock_server.uri()))
+        .with_cask_base_url(format!("{}/cask", mock_server.uri()));
+    let installer = new_test_installer(api_client, &tmp);
+
+    let targets = installer
+        .resolve_auto_install_targets(&[("docker".to_string(), "docker".to_string())])
+        .await
+        .unwrap();
+
+    assert!(targets.formulas.is_empty());
+    assert_eq!(
+        targets.casks,
+        vec![("docker".to_string(), "cask:docker-desktop".to_string())]
+    );
+}
+
+#[tokio::test]
 async fn auto_targets_report_original_missing_formula_when_cask_is_missing() {
     let mock_server = MockServer::start().await;
     let tmp = TempDir::new().unwrap();
