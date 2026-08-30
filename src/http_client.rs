@@ -3,7 +3,7 @@ use rama::{
     error::extra::OpaqueError,
     http::{
         HeaderValue, Request, Response, StatusCode,
-        client::{EasyHttpWebClient, HttpPooledConnectorConfig},
+        client::EasyHttpWebClient,
         header::{AUTHORIZATION, LOCATION, USER_AGENT},
         service::client::HttpClientExt,
     },
@@ -81,8 +81,7 @@ pub fn build_rama_client() -> RamaClient {
         .with_proxy_support()
         .with_tls_support_using_rustls(TlsClientConfig::default_http())
         .with_default_http_connector(Executor::default())
-        .try_with_connection_pool(HttpPooledConnectorConfig::default())
-        .expect("failed to build HTTP client with connection pool")
+        .with_default_connection_pool()
         .build_client()
         .boxed()
 }
@@ -96,6 +95,7 @@ pub fn build_isolated_rama_client() -> RamaClient {
         .with_proxy_support()
         .with_tls_support_using_rustls(TlsClientConfig::default_http())
         .with_default_http_connector(Executor::default())
+        .without_connection_pool()
         .build_client()
         .boxed()
 }
