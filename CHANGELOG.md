@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.12.0](https://github.com/seuros/upkg/compare/upkg-v0.11.2...upkg-v0.12.0) (2026-08-30)
+
+
+### Features
+
+* show version in help banner ([035d151](https://github.com/seuros/upkg/commit/035d151e73adf3f7db13de01a189cd0da227dcce))
+* support Docker Desktop cask artifacts ([40f48fe](https://github.com/seuros/upkg/commit/40f48fecf637107e04cce869b55f3eca6666d37f))
+
+
+### Bug Fixes
+
+* fix build ([6e03776](https://github.com/seuros/upkg/commit/6e037768bd8605b03cc66404b143aa97fc11e15d))
+
 ## [0.11.2](https://github.com/seuros/upkg/compare/upkg-v0.11.1...upkg-v0.11.2) (2026-07-06)
 
 
