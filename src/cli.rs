@@ -215,7 +215,11 @@ impl Cli {
     }
 
     pub fn help_text() -> &'static str {
-        "upkg - unified package manager frontend\n\nUSAGE:\n  upkg install [--app] [--dry-run] <package> [package...]\n  upkg uninstall [--app] [--dry-run] <package> [package...]\n  upkg upgrade [--app] [--dry-run] [package...]\n  upkg list\n  upkg search [--app] [--exact] [--refresh] <query...>\n  upkg shaman\n  upkg doctor\n  upkg --self-upgrade [--dry-run]\n  upkg --version\n\nEXAMPLES:\n  upkg install curl git\n  upkg install --app ghostty\n  upkg uninstall jq\n  upkg upgrade\n  upkg upgrade --dry-run neovim\n  upkg list\n  upkg search ripgrep\n  upkg search --app ghostty\n  upkg search --exact git\n  upkg shaman\n  upkg doctor\n  upkg --self-upgrade\n"
+        concat!(
+            "upkg v",
+            env!("CARGO_PKG_VERSION"),
+            " - unified package manager frontend\n\nUSAGE:\n  upkg install [--app] [--dry-run] <package> [package...]\n  upkg uninstall [--app] [--dry-run] <package> [package...]\n  upkg upgrade [--app] [--dry-run] [package...]\n  upkg list\n  upkg search [--app] [--exact] [--refresh] <query...>\n  upkg shaman\n  upkg doctor\n  upkg --self-upgrade [--dry-run]\n  upkg --version\n\nEXAMPLES:\n  upkg install curl git\n  upkg install --app ghostty\n  upkg uninstall jq\n  upkg upgrade\n  upkg upgrade --dry-run neovim\n  upkg list\n  upkg search ripgrep\n  upkg search --app ghostty\n  upkg search --exact git\n  upkg shaman\n  upkg doctor\n  upkg --self-upgrade\n"
+        )
     }
 }
 
