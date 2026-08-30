@@ -19,7 +19,8 @@ async fn auto_targets_keep_existing_formulas() {
         .await;
 
     let api_client = ApiClient::with_base_url(format!("{}/formula", mock_server.uri()))
-        .with_cask_base_url(format!("{}/cask", mock_server.uri()));
+        .with_cask_base_url(format!("{}/cask", mock_server.uri()))
+        .with_tap_roots(Vec::new());
     let installer = new_test_installer(api_client, &tmp);
 
     let targets = installer
@@ -59,7 +60,8 @@ async fn auto_targets_fall_back_to_cask_when_formula_is_missing() {
         .await;
 
     let api_client = ApiClient::with_base_url(format!("{}/formula", mock_server.uri()))
-        .with_cask_base_url(format!("{}/cask", mock_server.uri()));
+        .with_cask_base_url(format!("{}/cask", mock_server.uri()))
+        .with_tap_roots(Vec::new());
     let installer = new_test_installer(api_client, &tmp);
 
     let targets = installer
@@ -109,7 +111,8 @@ async fn auto_targets_resolve_old_cask_tokens() {
         .await;
 
     let api_client = ApiClient::with_base_url(format!("{}/formula", mock_server.uri()))
-        .with_cask_base_url(format!("{}/cask", mock_server.uri()));
+        .with_cask_base_url(format!("{}/cask", mock_server.uri()))
+        .with_tap_roots(Vec::new());
     let installer = new_test_installer(api_client, &tmp);
 
     let targets = installer
@@ -141,7 +144,8 @@ async fn auto_targets_report_original_missing_formula_when_cask_is_missing() {
         .await;
 
     let api_client = ApiClient::with_base_url(format!("{}/formula", mock_server.uri()))
-        .with_cask_base_url(format!("{}/cask", mock_server.uri()));
+        .with_cask_base_url(format!("{}/cask", mock_server.uri()))
+        .with_tap_roots(Vec::new());
     let installer = new_test_installer(api_client, &tmp);
 
     let err = installer
@@ -155,7 +159,8 @@ async fn auto_targets_report_original_missing_formula_when_cask_is_missing() {
 #[tokio::test]
 async fn auto_targets_do_not_probe_tap_formulae_as_casks() {
     let tmp = TempDir::new().unwrap();
-    let api_client = ApiClient::with_base_url("http://127.0.0.1:1".to_string());
+    let api_client =
+        ApiClient::with_base_url("http://127.0.0.1:1".to_string()).with_tap_roots(Vec::new());
     let installer = new_test_installer(api_client, &tmp);
 
     let targets = installer
