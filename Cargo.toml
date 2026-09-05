@@ -1,6 +1,6 @@
 [package]
 name = "upkg"
-version = "0.12.0"
+version = "0.12.1"
 description = "A universal package manager frontend that speaks the dialect of dozens of native package managers"
 edition = "2024"
 rust-version = "1.98"
