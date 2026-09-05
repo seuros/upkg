@@ -25,9 +25,23 @@ fn reject_exact_if(exact: bool, manager: &'static str) -> Result<(), UpkgError> 
     Ok(())
 }
 
+fn escape_ere(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(
+            c,
+            '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$'
+        ) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn anchor_if_exact(query: &str, exact: bool) -> String {
     if exact {
-        format!("^{}$", regex::escape(query))
+        format!("^{}$", escape_ere(query))
     } else {
         query.to_string()
     }

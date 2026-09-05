@@ -235,6 +235,31 @@ fn patch_macho_binary_strings_with_cellar(
     Ok(())
 }
 
+pub(crate) fn fix_version_segment(path: &str, pkg_name: &str, pkg_version: &str) -> Option<String> {
+    let needle = format!("/{}/", pkg_name);
+    let mut search_from = 0;
+    while let Some(pos) = path[search_from..].find(&needle) {
+        let seg_start = search_from + pos + needle.len();
+        let rest = &path[seg_start..];
+        let Some(seg_len) = rest.find('/') else {
+            return None;
+        };
+        if seg_len == 0 {
+            search_from += pos + 1;
+            continue;
+        }
+        if &rest[..seg_len] == pkg_version {
+            return None;
+        }
+        let mut out = String::with_capacity(path.len() + pkg_version.len());
+        out.push_str(&path[..seg_start]);
+        out.push_str(pkg_version);
+        out.push_str(&path[seg_start + seg_len..]);
+        return Some(out);
+    }
+    None
+}
+
 pub fn patch_homebrew_placeholders(
     keg_path: &Path,
     cellar_dir: &Path,
@@ -242,7 +267,6 @@ pub fn patch_homebrew_placeholders(
     pkg_version: &str,
 ) -> Result<(), Error> {
     use rayon::prelude::*;
-    use regex::Regex;
     use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, Once};
@@ -256,9 +280,6 @@ pub fn patch_homebrew_placeholders(
 
     let cellar_str = cellar_dir.to_string_lossy().to_string();
     let prefix_str = prefix.to_string_lossy().to_string();
-
-    let version_pattern = format!(r"(/{}/)([^/]+)(/)", regex::escape(pkg_name));
-    let version_regex = Regex::new(&version_pattern).ok();
 
     let macho_files: Vec<PathBuf> = walkdir::WalkDir::new(keg_path)
         .follow_links(false)
@@ -324,22 +345,9 @@ pub fn patch_homebrew_placeholders(
             changed = true;
         }
 
-        if let Some(re) = &version_regex
-            && re.is_match(&new_path)
-        {
-            let replacement = format!("/{}/{}/", pkg_name, pkg_version);
-            let fixed = re.replace(&new_path, |caps: &regex::Captures| {
-                let matched_version = &caps[2];
-                if matched_version != pkg_version {
-                    replacement.clone()
-                } else {
-                    caps[0].to_string()
-                }
-            });
-            if fixed != new_path {
-                new_path = fixed.to_string();
-                changed = true;
-            }
+        if let Some(fixed) = fix_version_segment(&new_path, pkg_name, pkg_version) {
+            new_path = fixed;
+            changed = true;
         }
 
         if changed && new_path != old_path {
@@ -500,6 +508,29 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
+
+    #[test]
+    fn fix_version_segment_fixes_mismatched_paths() {
+        let cases = [
+            (
+                "/opt/upkg/prefix/Cellar/ffmpeg/8.0.1_1/lib/libavdevice.62.dylib",
+                Some("/opt/upkg/prefix/Cellar/ffmpeg/8.0.1_2/lib/libavdevice.62.dylib"),
+            ),
+            (
+                "/opt/upkg/prefix/Cellar/ffmpeg/8.0.1_2/lib/libavdevice.62.dylib",
+                None,
+            ),
+            ("/opt/upkg/prefix/Cellar/libvpx/1.0.0/lib/libvpx.dylib", None),
+            ("/opt/upkg/prefix/Cellar/ffmpeg", None),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(
+                fix_version_segment(path, "ffmpeg", "8.0.1_2").as_deref(),
+                expected,
+                "path: {path}"
+            );
+        }
+    }
 
     #[test]
     fn test_patch_macho_preserves_execute_bit() {
