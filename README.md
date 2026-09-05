@@ -141,6 +141,17 @@ upkg --self-upgrade
 upkg help
 ```
 
+Argument parsing and help are generated with `usage-rs`. Use `upkg --help`
+for the command list and `upkg install --help` (or `upkg help install`)
+for command-specific options. Existing command aliases, including
+`upkg --self-upgrade`, remain supported.
+
+Package commands and search retain flag-like positional values for compatibility.
+Use `--` to treat all following tokens literally, including known options
+(for example, `upkg search -- --exact`). Help flags now display help instead
+of being treated as package names or search terms.
+Running `upkg` without a command prints help to stderr and exits with status 1.
+
 ## Search
 
 `upkg search <query>` routes to the platform's native search:

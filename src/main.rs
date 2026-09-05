@@ -39,6 +39,11 @@ use error::UpkgError;
 fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
+        Err(UpkgError::Usage(message)) => {
+            // usage-rs already supplies the error prefix and help hint.
+            eprint!("{message}");
+            ExitCode::from(1)
+        }
         Err(err) => {
             eprintln!("error: {err}");
             ExitCode::from(1)
@@ -72,8 +77,8 @@ fn run() -> Result<ExitCode, UpkgError> {
             kind,
             refresh,
         } => search(&query, exact, kind, refresh),
-        CommandKind::Help => {
-            println!("{}", Cli::help_text());
+        CommandKind::Help(text) => {
+            print!("{text}");
             Ok(ExitCode::SUCCESS)
         }
         CommandKind::Version => {

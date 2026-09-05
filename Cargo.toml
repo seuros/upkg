@@ -47,6 +47,9 @@ strip = true
 [dev-dependencies]
 rstest = "0.26.1"
 
+[dependencies]
+usage-rs = "6.7.0"
+
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 tempfile = "3.27.0"
 wiremock = "0.6.5"

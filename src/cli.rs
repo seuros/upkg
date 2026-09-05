@@ -1,5 +1,7 @@
 use crate::error::UpkgError;
 
+mod parser;
+
 #[derive(Debug)]
 pub struct Cli {
     pub command: CommandKind,
@@ -35,7 +37,7 @@ pub enum CommandKind {
         kind: PackageKind,
         refresh: bool,
     },
-    Help,
+    Help(String),
     Version,
     SelfUpgrade {
         dry_run: bool,
@@ -45,187 +47,142 @@ pub enum CommandKind {
 
 impl Cli {
     pub fn parse(args: impl Iterator<Item = String>) -> Result<Self, UpkgError> {
-        let values: Vec<String> = args.collect();
-        if values.is_empty() {
-            return Err(UpkgError::Usage("missing command"));
-        }
-
-        match values[0].as_str() {
-            "install" | "i" => Self::parse_install(values),
-            "uninstall" | "remove" | "rm" => Self::parse_uninstall(values),
-            "upgrade" | "update" => Self::parse_upgrade(values),
-            "list" | "ls" => Self::parse_list(values),
-            "search" | "s" => Self::parse_search(values),
-            "shaman" | "doctor" => Self::parse_shaman(values),
-            "--self-upgrade" | "self-upgrade" => Self::parse_self_upgrade(values),
-            "help" | "--help" | "-h" => Ok(Self {
-                command: CommandKind::Help,
-            }),
-            "--version" | "-V" => Ok(Self {
-                command: CommandKind::Version,
-            }),
-            _ => Err(UpkgError::Usage("unsupported command")),
-        }
-    }
-
-    fn parse_install(values: Vec<String>) -> Result<Self, UpkgError> {
-        let mut dry_run = false;
-        let mut kind = PackageKind::Auto;
-        let mut packages = Vec::new();
-
-        for arg in values.into_iter().skip(1) {
-            match arg.as_str() {
-                "--dry-run" => dry_run = true,
-                "--app" => kind = PackageKind::App,
-                _ => packages.push(arg),
-            }
-        }
-
-        if packages.is_empty() {
-            return Err(UpkgError::Usage("install requires at least one package"));
-        }
-
-        Ok(Self {
-            command: CommandKind::Install {
-                packages,
-                dry_run,
-                kind,
-            },
-        })
-    }
-
-    fn parse_uninstall(values: Vec<String>) -> Result<Self, UpkgError> {
-        let mut dry_run = false;
-        let mut kind = PackageKind::Auto;
-        let mut packages = Vec::new();
-
-        for arg in values.into_iter().skip(1) {
-            match arg.as_str() {
-                "--dry-run" => dry_run = true,
-                "--app" => kind = PackageKind::App,
-                _ => packages.push(arg),
-            }
-        }
-
-        if packages.is_empty() {
-            return Err(UpkgError::Usage("uninstall requires at least one package"));
-        }
-
-        Ok(Self {
-            command: CommandKind::Uninstall {
-                packages,
-                dry_run,
-                kind,
-            },
-        })
-    }
-
-    fn parse_upgrade(values: Vec<String>) -> Result<Self, UpkgError> {
-        let mut dry_run = false;
-        let mut kind = PackageKind::Auto;
-        let mut packages = Vec::new();
-
-        for arg in values.into_iter().skip(1) {
-            match arg.as_str() {
-                "--dry-run" => dry_run = true,
-                "--app" => kind = PackageKind::App,
-                _ => packages.push(arg),
-            }
-        }
-
-        Ok(Self {
-            command: CommandKind::Upgrade {
-                packages,
-                dry_run,
-                kind,
-            },
-        })
-    }
-
-    fn parse_self_upgrade(values: Vec<String>) -> Result<Self, UpkgError> {
-        let mut dry_run = false;
-
-        for arg in values.into_iter().skip(1) {
-            match arg.as_str() {
-                "--dry-run" => dry_run = true,
-                _ => return Err(UpkgError::Usage("self-upgrade only accepts --dry-run")),
-            }
-        }
-
-        Ok(Self {
-            command: CommandKind::SelfUpgrade { dry_run },
-        })
-    }
-
-    fn parse_shaman(values: Vec<String>) -> Result<Self, UpkgError> {
-        if values.len() != 1 {
-            return Err(UpkgError::Usage("shaman does not accept arguments yet"));
-        }
-
-        Ok(Self {
-            command: CommandKind::Shaman,
-        })
-    }
-
-    fn parse_list(values: Vec<String>) -> Result<Self, UpkgError> {
-        if values.len() != 1 {
-            return Err(UpkgError::Usage("list does not accept arguments yet"));
-        }
-
-        Ok(Self {
-            command: CommandKind::List,
-        })
-    }
-
-    fn parse_search(values: Vec<String>) -> Result<Self, UpkgError> {
-        let mut exact = false;
-        let mut kind = PackageKind::Auto;
-        let mut refresh = false;
-        let mut query_tokens: Vec<String> = Vec::new();
-        let mut positional_only = false;
-
-        for arg in values.into_iter().skip(1) {
-            if positional_only {
-                query_tokens.push(arg);
-                continue;
-            }
-            match arg.as_str() {
-                "--" => positional_only = true,
-                "--exact" | "-e" => exact = true,
-                "--app" => kind = PackageKind::App,
-                "--refresh" => refresh = true,
-                _ => query_tokens.push(arg),
-            }
-        }
-
-        if query_tokens.is_empty() {
-            return Err(UpkgError::Usage("search requires a query"));
-        }
-
-        let query = query_tokens.join(" ");
-
-        Ok(Self {
-            command: CommandKind::Search {
-                query,
-                exact,
-                kind,
-                refresh,
-            },
-        })
-    }
-
-    pub fn help_text() -> &'static str {
-        concat!(
-            "upkg v",
-            env!("CARGO_PKG_VERSION"),
-            " - unified package manager frontend\n\nUSAGE:\n  upkg install [--app] [--dry-run] <package> [package...]\n  upkg uninstall [--app] [--dry-run] <package> [package...]\n  upkg upgrade [--app] [--dry-run] [package...]\n  upkg list\n  upkg search [--app] [--exact] [--refresh] <query...>\n  upkg shaman\n  upkg doctor\n  upkg --self-upgrade [--dry-run]\n  upkg --version\n\nEXAMPLES:\n  upkg install curl git\n  upkg install --app ghostty\n  upkg uninstall jq\n  upkg upgrade\n  upkg upgrade --dry-run neovim\n  upkg list\n  upkg search ripgrep\n  upkg search --app ghostty\n  upkg search --exact git\n  upkg shaman\n  upkg doctor\n  upkg --self-upgrade\n"
-        )
+        parser::parse(args)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case(&["i", "git"], "install")]
+    #[case(&["remove", "git"], "uninstall")]
+    #[case(&["rm", "git"], "uninstall")]
+    #[case(&["update"], "upgrade")]
+    #[case(&["ls"], "list")]
+    #[case(&["doctor"], "shaman")]
+    #[case(&["--self-upgrade", "--dry-run"], "self-upgrade")]
+    fn aliases(#[case] args: &[&str], #[case] expected: &str) {
+        let cli = Cli::parse(args.iter().map(|arg| (*arg).to_owned())).unwrap();
+        let name = match cli.command {
+            CommandKind::Install { .. } => "install",
+            CommandKind::Uninstall { .. } => "uninstall",
+            CommandKind::Upgrade { .. } => "upgrade",
+            CommandKind::List => "list",
+            CommandKind::Shaman => "shaman",
+            CommandKind::SelfUpgrade { dry_run: true } => "self-upgrade",
+            _ => panic!("unexpected command"),
+        };
+        assert_eq!(name, expected);
+    }
+
+    #[rstest]
+    #[case(&[], "command")]
+    #[case(&["nonesuch"], "nonesuch")]
+    #[case(&["--unknown"], "--unknown")]
+    #[case(&["install", "--app"], "<PACKAGES>")]
+    #[case(&["uninstall", "--dry-run"], "<PACKAGES>")]
+    #[case(&["search", "--exact"], "<QUERY>")]
+    #[case(&["list", "extra"], "extra")]
+    #[case(&["shaman", "extra"], "extra")]
+    #[case(&["self-upgrade", "--app"], "--app")]
+    #[case(&["--self-upgrade", "extra"], "extra")]
+    fn invalid_arguments(#[case] args: &[&str], #[case] expected: &str) {
+        let error = Cli::parse(args.iter().map(|arg| (*arg).to_owned())).unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+
+    #[rstest]
+    #[case(&["help"], "install")]
+    #[case(&["--help"], "install")]
+    #[case(&["-h"], "install")]
+    #[case(&["install", "--help"], "--dry-run")]
+    #[case(&["help", "install"], "--dry-run")]
+    #[case(&["i", "-h"], "--app")]
+    #[case(&["search", "--help"], "--refresh")]
+    #[case(&["--self-upgrade", "--help"], "--dry-run")]
+    fn generated_help(#[case] args: &[&str], #[case] expected: &str) {
+        let cli = Cli::parse(args.iter().map(|arg| (*arg).to_owned())).unwrap();
+        let CommandKind::Help(text) = cli.command else {
+            panic!("expected help");
+        };
+        assert!(text.contains(expected), "{text}");
+        assert!(text.contains("upkg"), "{text}");
+    }
+
+    #[test]
+    fn short_version_flag() {
+        let cli = Cli::parse(["-V".to_owned()].into_iter()).unwrap();
+        assert!(matches!(cli.command, CommandKind::Version));
+    }
+
+    #[test]
+    fn package_options_can_follow_values_and_repeat() {
+        let cli = Cli::parse(
+            [
+                "install",
+                "git",
+                "--dry-run",
+                "curl",
+                "--app",
+                "--dry-run",
+                "--app",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        )
+        .unwrap();
+        let CommandKind::Install {
+            packages,
+            dry_run,
+            kind,
+        } = cli.command
+        else {
+            panic!("expected install");
+        };
+        assert_eq!(packages, ["git", "curl"]);
+        assert!(dry_run);
+        assert_eq!(kind, PackageKind::App);
+    }
+
+    #[rstest]
+    #[case("install")]
+    #[case("uninstall")]
+    #[case("upgrade")]
+    fn package_double_dash(#[case] command: &str) {
+        let cli = Cli::parse(
+            [command, "--", "--app", "--help"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .unwrap();
+        let (CommandKind::Install { packages, kind, .. }
+        | CommandKind::Uninstall { packages, kind, .. }
+        | CommandKind::Upgrade { packages, kind, .. }) = cli.command
+        else {
+            panic!("expected package command");
+        };
+        assert_eq!(packages, ["--app", "--help"]);
+        assert_eq!(kind, PackageKind::Auto);
+    }
+
+    #[rstest]
+    #[case("install")]
+    #[case("uninstall")]
+    #[case("upgrade")]
+    #[case("search")]
+    fn unknown_flags_remain_positional_values(#[case] command: &str) {
+        let cli = Cli::parse([command, "--unknown"].into_iter().map(str::to_owned)).unwrap();
+        match cli.command {
+            CommandKind::Install { packages, .. }
+            | CommandKind::Uninstall { packages, .. }
+            | CommandKind::Upgrade { packages, .. } => assert_eq!(packages, ["--unknown"]),
+            CommandKind::Search { query, .. } => assert_eq!(query, "--unknown"),
+            _ => panic!("unexpected command"),
+        }
+    }
 
     #[test]
     fn parse_install_with_dry_run() {
@@ -254,10 +211,7 @@ mod tests {
     fn parse_install_requires_package() {
         let err =
             Cli::parse(["install"].into_iter().map(str::to_string)).expect_err("parse should fail");
-        assert!(
-            err.to_string()
-                .contains("install requires at least one package")
-        );
+        assert!(err.to_string().contains("<PACKAGES>"));
     }
 
     #[test]
@@ -287,10 +241,7 @@ mod tests {
     fn parse_uninstall_requires_package() {
         let err = Cli::parse(["uninstall"].into_iter().map(str::to_string))
             .expect_err("parse should fail");
-        assert!(
-            err.to_string()
-                .contains("uninstall requires at least one package")
-        );
+        assert!(err.to_string().contains("<PACKAGES>"));
     }
 
     #[test]
@@ -335,7 +286,7 @@ mod tests {
     fn parse_shaman_rejects_arguments() {
         let err = Cli::parse(["shaman", "--verbose"].into_iter().map(str::to_string))
             .expect_err("shaman should reject arguments");
-        assert!(err.to_string().contains("shaman does not accept arguments"));
+        assert!(err.to_string().contains("--verbose"));
     }
 
     #[test]
@@ -462,7 +413,7 @@ mod tests {
     fn parse_search_requires_query() {
         let err = Cli::parse(["search"].into_iter().map(str::to_string))
             .expect_err("search needs a query");
-        assert!(err.to_string().contains("search requires a query"));
+        assert!(err.to_string().contains("<QUERY>"));
     }
 
     #[test]

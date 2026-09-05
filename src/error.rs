@@ -2,7 +2,7 @@ use std::fmt;
 
 #[derive(Debug)]
 pub enum UpkgError {
-    Usage(&'static str),
+    Usage(String),
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     Unsupported(&'static str),
     Io(std::io::Error),
@@ -19,7 +19,7 @@ pub enum UpkgError {
 impl fmt::Display for UpkgError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Usage(msg) => write!(f, "{msg}\n\nTry `upkg help`."),
+            Self::Usage(msg) => write!(f, "{msg}"),
             Self::Unsupported(msg) => write!(f, "{msg}"),
             Self::Io(err) => write!(f, "{err}"),
             Self::SelfUpgrade(msg) => write!(f, "{msg}"),
@@ -44,11 +44,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn usage_error_displays_help_hint() {
-        let err = UpkgError::Usage("invalid command");
-        let msg = err.to_string();
-        assert!(msg.contains("invalid command"));
-        assert!(msg.contains("Try `upkg help`"));
+    fn usage_error_preserves_rendered_diagnostic() {
+        let message = "error: invalid command\n\nFor more information, try '--help'.\n";
+        let err = UpkgError::Usage(message.into());
+        assert_eq!(err.to_string(), message);
     }
 
     #[test]
@@ -87,7 +86,7 @@ mod tests {
 
     #[test]
     fn usage_error_is_debug_printable() {
-        let err = UpkgError::Usage("test error");
+        let err = UpkgError::Usage("test error".into());
         let debug = format!("{:?}", err);
         assert!(debug.contains("Usage"));
     }

@@ -3351,6 +3351,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-ruby",
  "url",
+ "usage-rs",
  "walkdir",
  "wiremock",
  "xz2",
@@ -3368,6 +3369,33 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
+]
+
+[[package]]
+name = "usage-argv"
+version = "6.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3d704feaf6ce9016298e9c5847253a987f953848a7a6ec551546c22fc1702dd"
+
+[[package]]
+name = "usage-derive"
+version = "6.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f1b921cbfc9c9e64141e5fdedfb9322a956ec35bd0c3c05803f0e89dca67a86"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.4",
+]
+
+[[package]]
+name = "usage-rs"
+version = "6.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58a57fb206e84bff280034272e51c5bf24a71d04896f743ff178bea02e211751"
+dependencies = [
+ "usage-argv",
+ "usage-derive",
 ]
 
 [[package]]
