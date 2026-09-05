@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/seuros/upkg/compare/upkg-v0.12.0...upkg-v0.12.1) (2026-09-05)
+
+
+### Bug Fixes
+
+* drop regex dep and bundled sqlite to shrink binary 9.3M -&gt; 6.5M ([aae8656](https://github.com/seuros/upkg/commit/aae8656b870254ef5be9abdc2d85bfb3c821141e))
+
 ## [0.12.0](https://github.com/seuros/upkg/compare/upkg-v0.11.2...upkg-v0.12.0) (2026-08-30)
 
 
