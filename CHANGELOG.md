@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/seuros/upkg/compare/upkg-v0.12.1...upkg-v0.13.0) (2026-09-05)
+
+
+### Features
+
+* migrate CLI to usage-rs ([aae4d89](https://github.com/seuros/upkg/commit/aae4d899119e3be316d47b3021a7a8a19552b549))
+
 ## [0.12.1](https://github.com/seuros/upkg/compare/upkg-v0.12.0...upkg-v0.12.1) (2026-09-05)
 
 
