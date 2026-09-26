@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.14.0](https://github.com/seuros/upkg/compare/upkg-v0.13.0...upkg-v0.14.0) (2026-09-26)
+
+
+### Features
+
+* add reinstall command ([113236c](https://github.com/seuros/upkg/commit/113236c547857b2bf503d340a24bcf53a9d63b1b))
+* adopt usage-rs completions and embedded outcome, trim dependency features ([5563458](https://github.com/seuros/upkg/commit/556345812e40cb77af61f1e806eced5bcc0103ee))
+
+
+### Bug Fixes
+
+* **android:** add missing list_spec ([36bd78c](https://github.com/seuros/upkg/commit/36bd78c8b1c82c7c4a7b8738abbf1606c65a753c))
+* **build:** refuse unsupported formulas before touching the cellar ([a0a90e1](https://github.com/seuros/upkg/commit/a0a90e11da642f761826dcfb047f1c632d53f170))
+* **cellar:** don't treat empty kegs or store entries as installed ([6a25ff4](https://github.com/seuros/upkg/commit/6a25ff455d23db4d8f918edeae760c152d650b4b))
+* **install:** keep installed dependencies that cannot be upgraded ([ac2844f](https://github.com/seuros/upkg/commit/ac2844f231d42cb4dc93c73ba1a56f06e17fb6bc))
+* **patch:** only rewrite version segments in Cellar paths ([fa62cc4](https://github.com/seuros/upkg/commit/fa62cc4885b1a79408d41de105003b667ee622b6))
+
 ## [0.13.0](https://github.com/seuros/upkg/compare/upkg-v0.12.1...upkg-v0.13.0) (2026-09-05)
 
 
