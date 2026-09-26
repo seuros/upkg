@@ -348,5 +348,4 @@ mod tests {
             "#!/bin/sh\necho foo"
         );
     }
-
 }

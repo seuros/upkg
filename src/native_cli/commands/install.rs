@@ -207,7 +207,7 @@ pub async fn execute(
 
         {
             let bars = bars.lock().unwrap();
-            for (_, pb) in bars.iter() {
+            for pb in bars.values() {
                 if !pb.is_finished() {
                     pb.finish();
                 }

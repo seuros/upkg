@@ -241,9 +241,7 @@ pub(crate) fn fix_version_segment(path: &str, pkg_name: &str, pkg_version: &str)
     while let Some(pos) = path[search_from..].find(&needle) {
         let seg_start = search_from + pos + needle.len();
         let rest = &path[seg_start..];
-        let Some(seg_len) = rest.find('/') else {
-            return None;
-        };
+        let seg_len = rest.find('/')?;
         if seg_len == 0 {
             search_from += pos + 1;
             continue;
@@ -520,7 +518,10 @@ mod tests {
                 "/opt/upkg/prefix/Cellar/ffmpeg/8.0.1_2/lib/libavdevice.62.dylib",
                 None,
             ),
-            ("/opt/upkg/prefix/Cellar/libvpx/1.0.0/lib/libvpx.dylib", None),
+            (
+                "/opt/upkg/prefix/Cellar/libvpx/1.0.0/lib/libvpx.dylib",
+                None,
+            ),
             ("/opt/upkg/prefix/Cellar/ffmpeg", None),
         ];
         for (path, expected) in cases {
