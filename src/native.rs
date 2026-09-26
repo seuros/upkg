@@ -28,6 +28,21 @@ pub fn upgrade_native(packages: &[String], kind: crate::cli::PackageKind) -> Res
     crate::api::upgrade(packages, &options).map_err(UpkgError::Native)
 }
 
+pub fn reinstall_native(
+    packages: &[String],
+    kind: crate::cli::PackageKind,
+) -> Result<(), UpkgError> {
+    let options = install_options(kind);
+    crate::api::reinstall(packages, &options).map_err(UpkgError::Native)
+}
+
+pub fn print_reinstall_dry_run(
+    packages: &[String],
+    kind: crate::cli::PackageKind,
+) -> Result<(), UpkgError> {
+    print_dry_run("reinstall", packages, kind)
+}
+
 pub fn print_install_dry_run(
     packages: &[String],
     kind: crate::cli::PackageKind,

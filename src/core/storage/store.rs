@@ -32,7 +32,6 @@ impl Store {
         &self.store_dir
     }
 
-    #[cfg(test)]
     pub fn has_entry(&self, store_key: &str) -> bool {
         self.entry_path(store_key).exists()
     }

@@ -63,6 +63,19 @@ impl AndroidManager {
         }
     }
 
+    pub fn reinstall_spec(&self, packages: &[String]) -> CommandSpec {
+        let mut args: Vec<String> = match self {
+            Self::Pkg => vec!["reinstall".into()],
+            Self::Apt => vec!["install".into(), "--reinstall".into(), "-y".into()],
+        };
+        args.extend(packages.iter().cloned());
+
+        match self {
+            Self::Pkg => CommandSpec::new("pkg", args),
+            Self::Apt => CommandSpec::new("apt", args),
+        }
+    }
+
     pub fn search_spec(&self, query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
         if exact {
             return Err(UpkgError::Unsupported(match self {

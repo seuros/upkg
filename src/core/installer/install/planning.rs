@@ -17,15 +17,31 @@ impl Installer {
         names: &[String],
         build_from_source: bool,
     ) -> Result<InstallPlan, Error> {
+        self.plan_forcing(names, build_from_source, &[], true).await
+    }
+
+    /// Plans like `plan_with_options`, but `force` names are planned even
+    /// when the same version is already installed. With `upgrade_installed`
+    /// off, any other installed formula is left alone whatever its version.
+    pub(super) async fn plan_forcing(
+        &self,
+        names: &[String],
+        build_from_source: bool,
+        force: &[String],
+        upgrade_installed: bool,
+    ) -> Result<InstallPlan, Error> {
         let formulas = self.fetch_all_formulas(names).await?;
         let ordered = resolve_closure(names, &formulas)?;
 
         let mut items = Vec::with_capacity(ordered.len());
         for install_name in ordered {
             let formula = formulas.get(&install_name).cloned().unwrap();
-            if find_installed(self.cellar.root_dir(), &install_name)
-                .map(|installed| installed.version == formula.effective_version())
-                .unwrap_or(false)
+            if !force.contains(&install_name)
+                && find_installed(self.cellar.root_dir(), &install_name)
+                    .map(|installed| {
+                        !upgrade_installed || installed.version == formula.effective_version()
+                    })
+                    .unwrap_or(false)
             {
                 continue;
             }

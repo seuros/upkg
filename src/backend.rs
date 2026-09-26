@@ -178,6 +178,22 @@ impl Backend {
         }
     }
 
+    pub fn reinstall_spec(&self, packages: &[String]) -> Result<CommandSpec, UpkgError> {
+        let packages = catalog::resolve(self.catalog_key(), packages);
+        match self {
+            #[cfg(target_os = "android")]
+            Self::Android(manager) => Ok(manager.reinstall_spec(&packages)),
+            #[cfg(target_os = "linux")]
+            Self::Linux(manager) => Ok(manager.reinstall_spec(&packages)),
+            #[cfg(target_os = "windows")]
+            Self::Windows(manager) => manager.reinstall_spec(&packages),
+            #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
+            Self::FreeBsd => Ok(freebsd::reinstall_spec(&packages)),
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            Self::Ravenports => Err(UpkgError::Unsupported("reinstall is not supported by rvn")),
+        }
+    }
+
     pub fn upgrade_spec(&self, packages: &[String]) -> CommandSpec {
         let packages = catalog::resolve(self.catalog_key(), packages);
         match self {

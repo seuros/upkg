@@ -62,6 +62,19 @@ impl WindowsManager {
         }
     }
 
+    pub fn reinstall_spec(&self, packages: &[String]) -> Result<CommandSpec, UpkgError> {
+        match self {
+            Self::Winget => Err(UpkgError::Unsupported(
+                "reinstall is not supported by winget; uninstall and install instead",
+            )),
+            Self::Choco => {
+                let mut args: Vec<String> = vec!["install".into(), "-y".into(), "--force".into()];
+                args.extend(packages.iter().cloned());
+                Ok(CommandSpec::new("choco", args))
+            }
+        }
+    }
+
     pub fn upgrade_spec(&self, packages: &[String]) -> CommandSpec {
         let mut args: Vec<String> = match self {
             Self::Winget => vec![

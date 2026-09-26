@@ -99,152 +99,19 @@ pub async fn execute(
             );
         }
 
-        let multi = MultiProgress::new();
-        let bars: Arc<Mutex<HashMap<String, ProgressBar>>> = Arc::new(Mutex::new(HashMap::new()));
-
-        let download_style = ProgressStyle::default_bar()
-            .template("    {prefix:<16} {bar:25.cyan/dim} {bytes:>10}/{total_bytes:<10} {eta:>6}")
-            .unwrap()
-            .progress_chars("━━╸");
-
-        let spinner_style = ProgressStyle::default_spinner()
-            .template("    {prefix:<16} {spinner:.cyan} {msg}")
-            .unwrap()
-            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
-
-        let done_style = ProgressStyle::default_spinner()
-            .template("    {prefix:<16} {msg}")
-            .unwrap();
-
         println!(
             "{} Downloading and installing formulas...",
             style("==>").cyan().bold()
         );
 
-        let bars_clone = bars.clone();
-        let multi_clone = multi.clone();
-        let download_style_clone = download_style.clone();
-        let spinner_style_clone = spinner_style.clone();
-        let done_style_clone = done_style.clone();
-
-        let progress_callback: Arc<ProgressCallback> = Arc::new(Box::new(move |event| {
-            let mut bars = bars_clone.lock().unwrap();
-            match event {
-                InstallProgress::DownloadStarted { name, total_bytes } => {
-                    let pb = if let Some(total) = total_bytes {
-                        let pb = multi_clone.add(ProgressBar::new(total));
-                        pb.set_style(download_style_clone.clone());
-                        pb
-                    } else {
-                        let pb = multi_clone.add(ProgressBar::new_spinner());
-                        pb.set_style(spinner_style_clone.clone());
-                        pb.set_message("downloading...");
-                        pb.enable_steady_tick(std::time::Duration::from_millis(80));
-                        pb
-                    };
-                    pb.set_prefix(name.clone());
-                    bars.insert(name, pb);
-                }
-                InstallProgress::DownloadProgress {
-                    name,
-                    downloaded,
-                    total_bytes,
-                } => {
-                    if let Some(pb) = bars.get(&name)
-                        && total_bytes.is_some()
-                    {
-                        pb.set_position(downloaded);
-                    }
-                }
-                InstallProgress::DownloadCompleted { name, total_bytes } => {
-                    if let Some(pb) = bars.get(&name) {
-                        if total_bytes > 0 {
-                            pb.set_position(total_bytes);
-                        }
-                        pb.set_style(spinner_style_clone.clone());
-                        pb.set_message("unpacking...");
-                        pb.enable_steady_tick(std::time::Duration::from_millis(80));
-                    }
-                }
-                InstallProgress::UnpackStarted { name } => {
-                    if let Some(pb) = bars.get(&name) {
-                        pb.set_message("unpacking...");
-                    }
-                }
-                InstallProgress::UnpackCompleted { name } => {
-                    if let Some(pb) = bars.get(&name) {
-                        pb.set_message("unpacked");
-                    }
-                }
-                InstallProgress::LinkStarted { name } => {
-                    if let Some(pb) = bars.get(&name) {
-                        pb.set_message("linking...");
-                    }
-                }
-                InstallProgress::LinkCompleted { name } => {
-                    if let Some(pb) = bars.get(&name) {
-                        pb.set_message("linked");
-                    }
-                }
-                InstallProgress::LinkSkipped { name, reason } => {
-                    if let Some(pb) = bars.get(&name) {
-                        pb.set_message(format!("keg-only ({})", reason));
-                    }
-                }
-                InstallProgress::InstallCompleted { name } => {
-                    if let Some(pb) = bars.get(&name) {
-                        pb.set_style(done_style_clone.clone());
-                        pb.set_message(format!("{} installed", style("✓").green()));
-                        pb.finish();
-                    }
-                }
-            }
-        }));
+        let (bars, progress_callback) = progress_bars();
 
         let result_val = installer
             .execute_with_progress(plan, !no_link, Some(progress_callback))
             .await;
+        finish_bars(&bars);
 
-        {
-            let bars = bars.lock().unwrap();
-            for pb in bars.values() {
-                if !pb.is_finished() {
-                    pb.finish();
-                }
-            }
-        }
-
-        let result = match result_val {
-            Ok(r) => r,
-            Err(ref e @ crate::types::Error::LinkConflict { ref conflicts }) => {
-                eprintln!();
-                eprintln!(
-                    "{} The link step did not complete successfully.",
-                    style("Error:").red().bold()
-                );
-                eprintln!("The formula was installed, but is not symlinked into the prefix.");
-                eprintln!();
-                eprintln!("Possible conflicting files:");
-                for c in conflicts {
-                    if let Some(ref owner) = c.owned_by {
-                        eprintln!(
-                            "  {} (symlink belonging to {})",
-                            c.path.display(),
-                            style(owner).yellow()
-                        );
-                    } else {
-                        eprintln!("  {}", c.path.display());
-                    }
-                }
-                eprintln!();
-                return Err(e.clone());
-            }
-            Err(e) => {
-                let formula = failure_context_for_error(&e, &formula_names, &formulas);
-                explain_install_failure(&formula, &e);
-                return Err(e);
-            }
-        };
+        let result = result_val.map_err(|e| report_execute_error(e, &formula_names, &formulas))?;
         installed_count += result.installed;
     }
 
@@ -268,6 +135,154 @@ pub async fn execute(
     );
 
     Ok(())
+}
+
+type ProgressBars = Arc<Mutex<HashMap<String, ProgressBar>>>;
+
+pub(crate) fn progress_bars() -> (ProgressBars, Arc<ProgressCallback>) {
+    let multi = MultiProgress::new();
+    let bars: Arc<Mutex<HashMap<String, ProgressBar>>> = Arc::new(Mutex::new(HashMap::new()));
+
+    let download_style = ProgressStyle::default_bar()
+        .template("    {prefix:<16} {bar:25.cyan/dim} {bytes:>10}/{total_bytes:<10} {eta:>6}")
+        .unwrap()
+        .progress_chars("━━╸");
+
+    let spinner_style = ProgressStyle::default_spinner()
+        .template("    {prefix:<16} {spinner:.cyan} {msg}")
+        .unwrap()
+        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
+
+    let done_style = ProgressStyle::default_spinner()
+        .template("    {prefix:<16} {msg}")
+        .unwrap();
+
+    let bars_clone = bars.clone();
+    let multi_clone = multi.clone();
+    let download_style_clone = download_style.clone();
+    let spinner_style_clone = spinner_style.clone();
+    let done_style_clone = done_style.clone();
+
+    let progress_callback: Arc<ProgressCallback> = Arc::new(Box::new(move |event| {
+        let mut bars = bars_clone.lock().unwrap();
+        match event {
+            InstallProgress::DownloadStarted { name, total_bytes } => {
+                let pb = if let Some(total) = total_bytes {
+                    let pb = multi_clone.add(ProgressBar::new(total));
+                    pb.set_style(download_style_clone.clone());
+                    pb
+                } else {
+                    let pb = multi_clone.add(ProgressBar::new_spinner());
+                    pb.set_style(spinner_style_clone.clone());
+                    pb.set_message("downloading...");
+                    pb.enable_steady_tick(std::time::Duration::from_millis(80));
+                    pb
+                };
+                pb.set_prefix(name.clone());
+                bars.insert(name, pb);
+            }
+            InstallProgress::DownloadProgress {
+                name,
+                downloaded,
+                total_bytes,
+            } => {
+                if let Some(pb) = bars.get(&name)
+                    && total_bytes.is_some()
+                {
+                    pb.set_position(downloaded);
+                }
+            }
+            InstallProgress::DownloadCompleted { name, total_bytes } => {
+                if let Some(pb) = bars.get(&name) {
+                    if total_bytes > 0 {
+                        pb.set_position(total_bytes);
+                    }
+                    pb.set_style(spinner_style_clone.clone());
+                    pb.set_message("unpacking...");
+                    pb.enable_steady_tick(std::time::Duration::from_millis(80));
+                }
+            }
+            InstallProgress::UnpackStarted { name } => {
+                if let Some(pb) = bars.get(&name) {
+                    pb.set_message("unpacking...");
+                }
+            }
+            InstallProgress::UnpackCompleted { name } => {
+                if let Some(pb) = bars.get(&name) {
+                    pb.set_message("unpacked");
+                }
+            }
+            InstallProgress::LinkStarted { name } => {
+                if let Some(pb) = bars.get(&name) {
+                    pb.set_message("linking...");
+                }
+            }
+            InstallProgress::LinkCompleted { name } => {
+                if let Some(pb) = bars.get(&name) {
+                    pb.set_message("linked");
+                }
+            }
+            InstallProgress::LinkSkipped { name, reason } => {
+                if let Some(pb) = bars.get(&name) {
+                    pb.set_message(format!("keg-only ({})", reason));
+                }
+            }
+            InstallProgress::InstallCompleted { name } => {
+                if let Some(pb) = bars.get(&name) {
+                    pb.set_style(done_style_clone.clone());
+                    pb.set_message(format!("{} installed", style("✓").green()));
+                    pb.finish();
+                }
+            }
+        }
+    }));
+
+    (bars, progress_callback)
+}
+
+pub(crate) fn finish_bars(bars: &ProgressBars) {
+    for pb in bars.lock().unwrap().values() {
+        if !pb.is_finished() {
+            pb.finish();
+        }
+    }
+}
+
+/// Prints the explanation for a failed plan execution and hands the error back.
+pub(crate) fn report_execute_error(
+    error: crate::types::Error,
+    formula_names: &[(String, String)],
+    requested: &[String],
+) -> crate::types::Error {
+    match &error {
+        crate::types::Error::LinkConflict { conflicts } => {
+            eprintln!();
+            eprintln!(
+                "{} The link step did not complete successfully.",
+                style("Error:").red().bold()
+            );
+            eprintln!("The formula was installed, but is not symlinked into the prefix.");
+            eprintln!();
+            eprintln!("Possible conflicting files:");
+            for c in conflicts {
+                if let Some(ref owner) = c.owned_by {
+                    eprintln!(
+                        "  {} (symlink belonging to {})",
+                        c.path.display(),
+                        style(owner).yellow()
+                    );
+                } else {
+                    eprintln!("  {}", c.path.display());
+                }
+            }
+            eprintln!();
+        }
+        _ => {
+            let formula = failure_context_for_error(&error, formula_names, requested);
+            explain_install_failure(&formula, &error);
+        }
+    }
+    error
 }
 
 pub(crate) fn failure_context_for_error(

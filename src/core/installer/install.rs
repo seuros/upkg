@@ -9,6 +9,8 @@ mod execute;
 mod factory;
 #[path = "install/planning.rs"]
 mod planning;
+#[path = "install/reinstall_ops.rs"]
+mod reinstall_ops;
 #[path = "install/source_ops.rs"]
 mod source_ops;
 

@@ -35,6 +35,8 @@ enum Commands {
     /// Upgrade selected packages, or all packages when none are given
     #[usage(alias = "update")]
     Upgrade(OptionalPackages),
+    /// Reinstall installed packages, keeping the old copy if it fails
+    Reinstall(RequiredPackages),
     /// List installed packages
     #[usage(alias = "ls")]
     List,
@@ -181,6 +183,11 @@ pub(super) fn parse(args: impl Iterator<Item = OsString>) -> Result<Cli, UpkgErr
             kind: package_kind(args.options.app),
         },
         Commands::Upgrade(args) => CommandKind::Upgrade {
+            packages: args.packages,
+            dry_run: args.options.dry_run,
+            kind: package_kind(args.options.app),
+        },
+        Commands::Reinstall(args) => CommandKind::Reinstall {
             packages: args.packages,
             dry_run: args.options.dry_run,
             kind: package_kind(args.options.app),

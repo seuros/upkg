@@ -131,6 +131,37 @@ pub fn upgrade(formulas: &[String], options: &InstallOptions) -> Result<(), Erro
     })
 }
 
+pub fn reinstall(formulas: &[String], options: &InstallOptions) -> Result<(), Error> {
+    if formulas.is_empty() {
+        return Err(Error::InvalidArgument {
+            message: "reinstall requires at least one formula".to_string(),
+        });
+    }
+    if options.package_kind == PackageKindHint::App {
+        return Err(Error::InvalidArgument {
+            message: "reinstall --app is not supported yet; uninstall and install instead"
+                .to_string(),
+        });
+    }
+
+    let (root, prefix) = resolve_root_and_prefix(options);
+    crate::init::ensure_init(&root, &prefix, true)?;
+
+    let runtime = build_runtime()?;
+
+    runtime.block_on(async {
+        let mut installer = create_installer(&root, &prefix, options.concurrency)?;
+
+        crate::native_cli::commands::reinstall::execute(
+            &mut installer,
+            formulas.to_vec(),
+            options.no_link,
+            options.build_from_source,
+        )
+        .await
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
     pub root: Option<PathBuf>,

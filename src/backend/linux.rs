@@ -133,6 +133,34 @@ impl LinuxManager {
         }
     }
 
+    pub fn reinstall_spec(&self, packages: &[String]) -> CommandSpec {
+        let mut args: Vec<String> = match self {
+            Self::Apt => vec![
+                "apt".into(),
+                "install".into(),
+                "--reinstall".into(),
+                "-y".into(),
+            ],
+            Self::Dnf => vec!["dnf".into(), "reinstall".into(), "-y".into()],
+            Self::Yum => vec!["yum".into(), "reinstall".into(), "-y".into()],
+            // -S reinstalls packages that are already up to date.
+            Self::Pacman => vec!["pacman".into(), "-S".into(), "--noconfirm".into()],
+            Self::Zypper => vec![
+                "zypper".into(),
+                "--non-interactive".into(),
+                "install".into(),
+                "--force".into(),
+            ],
+            Self::Opkg => vec!["install".into(), "--force-reinstall".into()],
+        };
+        args.extend(packages.iter().cloned());
+
+        match self {
+            Self::Opkg => CommandSpec::new("opkg", args),
+            _ => CommandSpec::new("sudo", args),
+        }
+    }
+
     pub fn upgrade_spec(&self, packages: &[String]) -> CommandSpec {
         let mut args: Vec<String> = match self {
             Self::Apt => {
@@ -327,6 +355,25 @@ mod tests {
         #[case] expected_args: Vec<&str>,
     ) {
         let spec = manager.uninstall_spec(&packages);
+        assert_eq!(spec.command(), expected_command);
+
+        let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
+        assert_eq!(args, expected_args);
+    }
+
+    #[rstest]
+    #[case(LinuxManager::Apt, "sudo", vec!["apt", "install", "--reinstall", "-y", "git"])]
+    #[case(LinuxManager::Dnf, "sudo", vec!["dnf", "reinstall", "-y", "git"])]
+    #[case(LinuxManager::Yum, "sudo", vec!["yum", "reinstall", "-y", "git"])]
+    #[case(LinuxManager::Pacman, "sudo", vec!["pacman", "-S", "--noconfirm", "git"])]
+    #[case(LinuxManager::Zypper, "sudo", vec!["zypper", "--non-interactive", "install", "--force", "git"])]
+    #[case(LinuxManager::Opkg, "opkg", vec!["install", "--force-reinstall", "git"])]
+    fn reinstall_spec_generates_correct_commands(
+        #[case] manager: LinuxManager,
+        #[case] expected_command: &str,
+        #[case] expected_args: Vec<&str>,
+    ) {
+        let spec = manager.reinstall_spec(&["git".to_string()]);
         assert_eq!(spec.command(), expected_command);
 
         let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();

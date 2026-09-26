@@ -90,5 +90,7 @@ mod helpers;
 mod lifecycle;
 #[path = "tests/planning.rs"]
 mod planning;
+#[path = "tests/reinstall.rs"]
+mod reinstall;
 #[path = "tests/resilience.rs"]
 mod resilience;

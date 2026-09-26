@@ -32,6 +32,11 @@ pub enum CommandKind {
         dry_run: bool,
         kind: PackageKind,
     },
+    Reinstall {
+        packages: Vec<String>,
+        dry_run: bool,
+        kind: PackageKind,
+    },
     List,
     Search {
         query: String,
@@ -66,6 +71,7 @@ mod tests {
     #[case(&["remove", "git"], "uninstall")]
     #[case(&["rm", "git"], "uninstall")]
     #[case(&["update"], "upgrade")]
+    #[case(&["reinstall", "git"], "reinstall")]
     #[case(&["ls"], "list")]
     #[case(&["doctor"], "shaman")]
     #[case(&["--self-upgrade", "--dry-run"], "self-upgrade")]
@@ -75,6 +81,7 @@ mod tests {
             CommandKind::Install { .. } => "install",
             CommandKind::Uninstall { .. } => "uninstall",
             CommandKind::Upgrade { .. } => "upgrade",
+            CommandKind::Reinstall { .. } => "reinstall",
             CommandKind::List => "list",
             CommandKind::Shaman => "shaman",
             CommandKind::SelfUpgrade { dry_run: true } => "self-upgrade",
@@ -89,6 +96,7 @@ mod tests {
     #[case(&["--unknown"], "--unknown")]
     #[case(&["install", "--app"], "<PACKAGES>")]
     #[case(&["uninstall", "--dry-run"], "<PACKAGES>")]
+    #[case(&["reinstall"], "<PACKAGES>")]
     #[case(&["search", "--exact"], "<QUERY>")]
     #[case(&["list", "extra"], "extra")]
     #[case(&["shaman", "extra"], "extra")]
@@ -150,6 +158,7 @@ mod tests {
     #[case("install")]
     #[case("uninstall")]
     #[case("upgrade")]
+    #[case("reinstall")]
     fn package_double_dash(#[case] command: &str) {
         let cli = Cli::parse(
             [command, "--", "--app", "--help"]
@@ -159,7 +168,8 @@ mod tests {
         .unwrap();
         let (CommandKind::Install { packages, kind, .. }
         | CommandKind::Uninstall { packages, kind, .. }
-        | CommandKind::Upgrade { packages, kind, .. }) = cli.command
+        | CommandKind::Upgrade { packages, kind, .. }
+        | CommandKind::Reinstall { packages, kind, .. }) = cli.command
         else {
             panic!("expected package command");
         };
@@ -171,13 +181,15 @@ mod tests {
     #[case("install")]
     #[case("uninstall")]
     #[case("upgrade")]
+    #[case("reinstall")]
     #[case("search")]
     fn unknown_flags_remain_positional_values(#[case] command: &str) {
         let cli = Cli::parse([command, "--unknown"].into_iter().map(str::to_owned)).unwrap();
         match cli.command {
             CommandKind::Install { packages, .. }
             | CommandKind::Uninstall { packages, .. }
-            | CommandKind::Upgrade { packages, .. } => assert_eq!(packages, ["--unknown"]),
+            | CommandKind::Upgrade { packages, .. }
+            | CommandKind::Reinstall { packages, .. } => assert_eq!(packages, ["--unknown"]),
             CommandKind::Search { query, .. } => assert_eq!(query, "--unknown"),
             _ => panic!("unexpected command"),
         }

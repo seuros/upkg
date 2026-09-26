@@ -70,6 +70,11 @@ fn run() -> Result<ExitCode, UpkgError> {
             dry_run,
             kind,
         } => upgrade(&packages, dry_run, kind),
+        CommandKind::Reinstall {
+            packages,
+            dry_run,
+            kind,
+        } => reinstall(&packages, dry_run, kind),
         CommandKind::List => list(),
         CommandKind::Search {
             query,
@@ -151,6 +156,30 @@ fn upgrade(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<Exit
         reject_app_kind(kind)?;
         let backend = Backend::detect()?;
         let spec = backend.upgrade_spec(packages);
+        if dry_run {
+            return print_dry_run(&backend, &spec);
+        }
+        execute_spec(backend, spec)
+    }
+}
+
+fn reinstall(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<ExitCode, UpkgError> {
+    #[cfg(target_os = "macos")]
+    {
+        if dry_run {
+            native::print_reinstall_dry_run(packages, kind)?;
+            return Ok(ExitCode::SUCCESS);
+        }
+
+        native::reinstall_native(packages, kind)?;
+        Ok(ExitCode::SUCCESS)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        reject_app_kind(kind)?;
+        let backend = Backend::detect()?;
+        let spec = backend.reinstall_spec(packages)?;
         if dry_run {
             return print_dry_run(&backend, &spec);
         }
