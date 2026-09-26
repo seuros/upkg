@@ -55,6 +55,14 @@ impl Cellar {
         }
 
         let src_path = find_bottle_content(store_entry, name, version)?;
+        if fs::read_dir(&src_path).map_or(true, |mut entries| entries.next().is_none()) {
+            return Err(Error::StoreCorruption {
+                message: format!(
+                    "store entry for {name}@{version} is empty: {}",
+                    store_entry.display()
+                ),
+            });
+        }
 
         copy_dir_with_fallback(&src_path, &keg_path)?;
 
@@ -272,6 +280,21 @@ mod tests {
             fs::read_link(&link_path).unwrap(),
             PathBuf::from("libfoo.dylib")
         );
+    }
+
+    #[test]
+    fn empty_store_entry_is_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let store_entry = tmp.path().join("store/abc");
+        fs::create_dir_all(&store_entry).unwrap();
+
+        let cellar = Cellar::new(tmp.path()).unwrap();
+        let err = cellar
+            .materialize("foo", "1.2.3", &store_entry)
+            .unwrap_err();
+
+        assert!(matches!(err, Error::StoreCorruption { .. }));
+        assert!(!cellar.keg_path("foo", "1.2.3").exists());
     }
 
     #[test]

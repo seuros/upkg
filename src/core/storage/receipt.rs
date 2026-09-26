@@ -75,7 +75,7 @@ pub fn scan_installed(cellar: &Path) -> Result<Vec<InstalledKeg>, Error> {
                 Ok(v) => v.path(),
                 Err(_) => continue,
             };
-            if !version_dir.is_dir() {
+            if !version_dir.is_dir() || is_keg_backup(&version_dir) {
                 continue;
             }
 
@@ -91,7 +91,8 @@ pub fn scan_installed(cellar: &Path) -> Result<Vec<InstalledKeg>, Error> {
                     version: receipt.version,
                     store_key: receipt.store_key,
                 });
-            } else {
+            } else if is_populated(&version_dir) {
+                // Adopted keg (e.g. left by Homebrew): no upkg receipt, but real contents.
                 out.push(InstalledKeg {
                     name: formula_name.clone(),
                     version,
@@ -105,6 +106,23 @@ pub fn scan_installed(cellar: &Path) -> Result<Vec<InstalledKeg>, Error> {
     Ok(out)
 }
 
+/// Kegs set aside while a source build or reinstall runs; they are restored or
+/// removed afterwards and must never be reported as installed.
+fn is_keg_backup(version_dir: &Path) -> bool {
+    version_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.contains(".upkg-backup-"))
+}
+
+/// Anything besides a receipt counts; an empty directory is debris from an
+/// install that failed before writing files, not an installed keg.
+fn is_populated(keg_path: &Path) -> bool {
+    fs::read_dir(keg_path)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
+}
+
 pub fn find_installed(cellar: &Path, name: &str) -> Option<InstalledKeg> {
     let installed = scan_installed(cellar).ok()?;
     if name.contains('/') {
@@ -115,4 +133,62 @@ pub fn find_installed(cellar: &Path, name: &str) -> Option<InstalledKeg> {
     installed.into_iter().find(|keg| {
         keg.name == name || (!keg.name.contains('/') && formula_token(&keg.name) == needle)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn empty_version_dir_is_not_installed() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join("gmp/6.3.0")).unwrap();
+
+        assert!(scan_installed(tmp.path()).unwrap().is_empty());
+        assert!(find_installed(tmp.path(), "gmp").is_none());
+    }
+
+    #[test]
+    fn populated_keg_without_receipt_is_adopted() {
+        let tmp = TempDir::new().unwrap();
+        let lib = tmp.path().join("libyaml/0.2.5/lib");
+        fs::create_dir_all(&lib).unwrap();
+        fs::write(lib.join("libyaml-0.2.dylib"), b"").unwrap();
+
+        let keg = find_installed(tmp.path(), "libyaml").expect("adopted keg");
+        assert_eq!(keg.version, "0.2.5");
+        assert!(keg.store_key.is_empty());
+    }
+
+    #[test]
+    fn keg_backups_are_not_installed() {
+        let tmp = TempDir::new().unwrap();
+        let lib = tmp.path().join("jq/1.8.1.upkg-backup-42/lib");
+        fs::create_dir_all(&lib).unwrap();
+        fs::write(lib.join("libjq.1.dylib"), b"").unwrap();
+
+        assert!(scan_installed(tmp.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn receipt_wins_over_directory_name() {
+        let tmp = TempDir::new().unwrap();
+        let keg_path = tmp.path().join("openssl@3/3.6.2");
+        fs::create_dir_all(&keg_path).unwrap();
+        write_receipt(
+            &keg_path,
+            &InstallReceipt {
+                install_name: "openssl@3".into(),
+                formula_name: "openssl@3".into(),
+                version: "3.6.2".into(),
+                store_key: "abc".into(),
+                installed_at: 0,
+            },
+        )
+        .unwrap();
+
+        let keg = find_installed(tmp.path(), "openssl@3").unwrap();
+        assert_eq!(keg.store_key, "abc");
+    }
 }
