@@ -235,8 +235,11 @@ fn patch_macho_binary_strings_with_cellar(
     Ok(())
 }
 
+/// Rewrites the version in `Cellar/<pkg>/<version>/` when it differs from the
+/// installed one. Only Cellar paths carry a version; `opt/<pkg>/lib/...` must
+/// be left alone, or `lib` gets mistaken for a version.
 pub(crate) fn fix_version_segment(path: &str, pkg_name: &str, pkg_version: &str) -> Option<String> {
-    let needle = format!("/{}/", pkg_name);
+    let needle = format!("/Cellar/{}/", pkg_name);
     let mut search_from = 0;
     while let Some(pos) = path[search_from..].find(&needle) {
         let seg_start = search_from + pos + needle.len();
@@ -523,6 +526,8 @@ mod tests {
                 None,
             ),
             ("/opt/upkg/prefix/Cellar/ffmpeg", None),
+            ("/opt/upkg/prefix/opt/ffmpeg/lib/libavdevice.62.dylib", None),
+            ("/usr/local/share/ffmpeg/presets/x.ffpreset", None),
         ];
         for (path, expected) in cases {
             assert_eq!(
@@ -531,6 +536,19 @@ mod tests {
                 "path: {path}"
             );
         }
+    }
+
+    #[test]
+    fn fix_version_segment_leaves_opt_install_names_alone() {
+        // Homebrew's libyaml bottle: `@@HOMEBREW_PREFIX@@/opt/libyaml/lib/libyaml-0.2.dylib`.
+        assert_eq!(
+            fix_version_segment(
+                "/usr/local/opt/libyaml/lib/libyaml-0.2.dylib",
+                "libyaml",
+                "0.2.5"
+            ),
+            None
+        );
     }
 
     #[test]
