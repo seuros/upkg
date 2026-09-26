@@ -80,3 +80,15 @@ fn backup_existing_source_keg_returns_none_when_keg_is_missing() {
 
     assert!(backup.is_none());
 }
+
+#[test]
+fn backup_existing_source_keg_discards_empty_keg() {
+    let tmp = TempDir::new().unwrap();
+    let empty_keg = tmp.path().join("Cellar").join("gmp").join("6.3.0");
+    fs::create_dir_all(&empty_keg).unwrap();
+
+    let backup = Installer::backup_existing_source_keg(&empty_keg, "gmp", "6.3.0").unwrap();
+
+    assert!(backup.is_none());
+    assert!(!empty_keg.exists());
+}

@@ -25,6 +25,22 @@ impl BuildExecutor {
         formula_rb_path: &Path,
         _installed_deps: &HashMap<String, DepInfo>,
     ) -> Result<(), Error> {
+        // Reject unsupported formulas before downloading anything or creating
+        // the keg, so a refusal leaves no trace in the cellar.
+        let formula_source =
+            fs::read_to_string(formula_rb_path)
+                .await
+                .map_err(|e| Error::FileError {
+                    message: format!("failed to read formula source: {e}"),
+                })?;
+        let native_plan =
+            parse_supported_install_plan(&formula_source)?.ok_or_else(|| {
+                Error::UnsupportedFormula {
+                    name: plan.formula_name.clone(),
+                    reason: "formula install block uses unsupported Homebrew DSL; Ruby fallback has been removed".to_string(),
+                }
+            })?;
+
         let work_dir = self.work_root.join(&plan.formula_name);
         self.prepare_work_dir(&work_dir).await?;
 
@@ -41,19 +57,6 @@ impl BuildExecutor {
                 message: format!("failed to create cellar directory: {e}"),
             })?;
 
-        let formula_source =
-            fs::read_to_string(formula_rb_path)
-                .await
-                .map_err(|e| Error::FileError {
-                    message: format!("failed to read formula source: {e}"),
-                })?;
-        let native_plan =
-            parse_supported_install_plan(&formula_source)?.ok_or_else(|| {
-                Error::UnsupportedFormula {
-                    name: plan.formula_name.clone(),
-                    reason: "formula install block uses unsupported Homebrew DSL; Ruby fallback has been removed".to_string(),
-                }
-            })?;
         execute_native_install_plan(plan, &source_root, &native_plan).await?;
         self.cleanup_work_dir(&work_dir).await;
         Ok(())
@@ -324,6 +327,29 @@ mod tests {
             prefix: prefix.to_path_buf(),
             cellar_path,
         }
+    }
+
+    #[tokio::test]
+    async fn unsupported_formula_fails_before_touching_the_cellar() {
+        let tmp = tempfile::tempdir().unwrap();
+        let prefix = tmp.path().join("prefix");
+        let plan = test_build_plan(&prefix);
+        let formula_rb = tmp.path().join("foo.rb");
+        std::fs::write(
+            &formula_rb,
+            "class Foo < Formula\n  def install\n    system \"./configure\", \"--prefix=#{prefix}\"\n    system \"make\", \"install\"\n  end\nend\n",
+        )
+        .unwrap();
+
+        let executor = BuildExecutor::new(prefix.clone(), tmp.path().to_path_buf());
+        let err = executor
+            .execute(&plan, &formula_rb, &HashMap::new())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::UnsupportedFormula { .. }), "{err:?}");
+        assert!(!plan.cellar_path.exists());
+        assert!(!tmp.path().join("cache/build/foo").exists());
     }
 
     #[tokio::test]

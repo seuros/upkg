@@ -81,6 +81,9 @@ impl Installer {
                     formula_name,
                     &version,
                 )?;
+            } else {
+                // A half-built keg would otherwise be taken as installed next run.
+                Self::cleanup_materialized(&self.cellar, formula_name, &version);
             }
             return Err(build_err);
         }
@@ -153,6 +156,17 @@ impl Installer {
             return Ok(None);
         }
 
+        // Debris from an earlier failed build; nothing worth restoring.
+        if fs::read_dir(keg_path).is_ok_and(|mut entries| entries.next().is_none()) {
+            fs::remove_dir(keg_path).map_err(|e| Error::StoreCorruption {
+                message: format!(
+                    "failed to remove empty keg for '{}@{}': {}",
+                    formula_name, version, e
+                ),
+            })?;
+            return Ok(None);
+        }
+
         let backup_path = Self::source_keg_backup_path(keg_path);
         if backup_path.exists() {
             fs::remove_dir_all(&backup_path).map_err(|e| Error::StoreCorruption {
@@ -196,7 +210,7 @@ impl Installer {
         })
     }
 
-    fn remove_source_keg_backup(
+    pub(super) fn remove_source_keg_backup(
         backup_path: &Path,
         formula_name: &str,
         version: &str,
