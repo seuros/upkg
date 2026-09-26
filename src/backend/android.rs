@@ -108,6 +108,13 @@ impl AndroidManager {
             Self::Apt => CommandSpec::new("apt", args),
         }
     }
+
+    pub fn list_spec(&self) -> CommandSpec {
+        match self {
+            Self::Pkg => CommandSpec::new("pkg", vec!["list-installed".into()]),
+            Self::Apt => CommandSpec::new("apt", vec!["list".into(), "--installed".into()]),
+        }
+    }
 }
 
 #[cfg(test)]
