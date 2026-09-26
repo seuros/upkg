@@ -1,3 +1,4 @@
+use crate::formula::types::BottleFile;
 use crate::{Error, Formula};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,6 +141,14 @@ pub fn current_platform_bottle_tag() -> Option<String> {
     current_platform_bottle_candidates().into_iter().next()
 }
 
+fn selected(tag: impl Into<String>, file: &BottleFile) -> SelectedBottle {
+    SelectedBottle {
+        tag: tag.into(),
+        url: file.url.clone(),
+        sha256: file.sha256.clone(),
+    }
+}
+
 fn select_bottle_with_codename(
     formula: &Formula,
     macos_codename: Option<&'static str>,
@@ -155,11 +164,7 @@ fn select_bottle_with_codename(
 
         for tag in &tags {
             if let Some(file) = formula.bottle.stable.files.get(tag.as_str()) {
-                return Ok(SelectedBottle {
-                    tag: tag.clone(),
-                    url: file.url.clone(),
-                    sha256: file.sha256.clone(),
-                });
+                return Ok(selected(tag.clone(), file));
             }
         }
     }
@@ -168,21 +173,13 @@ fn select_bottle_with_codename(
     {
         for tag in compatible_codenames(macos_codename) {
             if let Some(file) = formula.bottle.stable.files.get(tag) {
-                return Ok(SelectedBottle {
-                    tag: tag.to_string(),
-                    url: file.url.clone(),
-                    sha256: file.sha256.clone(),
-                });
+                return Ok(selected(tag.to_string(), file));
             }
         }
     }
 
     if let Some(file) = formula.bottle.stable.files.get("all") {
-        return Ok(SelectedBottle {
-            tag: "all".to_string(),
-            url: file.url.clone(),
-            sha256: file.sha256.clone(),
-        });
+        return Ok(selected("all".to_string(), file));
     }
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -192,11 +189,7 @@ fn select_bottle_with_codename(
             if let Some(codename) = tag.strip_prefix("arm64_")
                 && compatible.contains(&codename)
             {
-                return Ok(SelectedBottle {
-                    tag: tag.clone(),
-                    url: file.url.clone(),
-                    sha256: file.sha256.clone(),
-                });
+                return Ok(selected(tag.clone(), file));
             }
         }
     }
@@ -206,11 +199,7 @@ fn select_bottle_with_codename(
         let compatible = compatible_codenames(macos_codename);
         for (tag, file) in &formula.bottle.stable.files {
             if !tag.starts_with("arm64_") && compatible.contains(&tag.as_str()) {
-                return Ok(SelectedBottle {
-                    tag: tag.clone(),
-                    url: file.url.clone(),
-                    sha256: file.sha256.clone(),
-                });
+                return Ok(selected(tag.clone(), file));
             }
         }
     }
@@ -235,11 +224,7 @@ fn select_bottle_with_codename(
     {
         for codename in newer_codenames(macos_codename) {
             if let Some(file) = formula.bottle.stable.files.get(codename) {
-                return Ok(SelectedBottle {
-                    tag: codename.to_string(),
-                    url: file.url.clone(),
-                    sha256: file.sha256.clone(),
-                });
+                return Ok(selected(codename.to_string(), file));
             }
         }
     }

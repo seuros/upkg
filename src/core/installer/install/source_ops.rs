@@ -228,10 +228,7 @@ impl Installer {
     }
 
     fn source_keg_backup_path(keg_path: &Path) -> PathBuf {
-        let backup_suffix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+        let backup_suffix = crate::clock::unix_nanos();
         let name = keg_path
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())

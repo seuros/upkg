@@ -15,24 +15,18 @@ pub enum PackageKind {
     App,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageAction {
+    Install,
+    Uninstall,
+    Upgrade,
+    Reinstall,
+}
+
 #[derive(Debug)]
 pub enum CommandKind {
-    Install {
-        packages: Vec<String>,
-        dry_run: bool,
-        kind: PackageKind,
-    },
-    Uninstall {
-        packages: Vec<String>,
-        dry_run: bool,
-        kind: PackageKind,
-    },
-    Upgrade {
-        packages: Vec<String>,
-        dry_run: bool,
-        kind: PackageKind,
-    },
-    Reinstall {
+    Package {
+        action: PackageAction,
         packages: Vec<String>,
         dry_run: bool,
         kind: PackageKind,
@@ -78,10 +72,12 @@ mod tests {
     fn aliases(#[case] args: &[&str], #[case] expected: &str) {
         let cli = Cli::parse(args.iter().map(|arg| (*arg).to_owned())).unwrap();
         let name = match cli.command {
-            CommandKind::Install { .. } => "install",
-            CommandKind::Uninstall { .. } => "uninstall",
-            CommandKind::Upgrade { .. } => "upgrade",
-            CommandKind::Reinstall { .. } => "reinstall",
+            CommandKind::Package { action, .. } => match action {
+                PackageAction::Install => "install",
+                PackageAction::Uninstall => "uninstall",
+                PackageAction::Upgrade => "upgrade",
+                PackageAction::Reinstall => "reinstall",
+            },
             CommandKind::List => "list",
             CommandKind::Shaman => "shaman",
             CommandKind::SelfUpgrade { dry_run: true } => "self-upgrade",
@@ -141,7 +137,8 @@ mod tests {
             .map(str::to_owned),
         )
         .unwrap();
-        let CommandKind::Install {
+        let CommandKind::Package {
+            action: PackageAction::Install,
             packages,
             dry_run,
             kind,
@@ -166,11 +163,7 @@ mod tests {
                 .map(str::to_owned),
         )
         .unwrap();
-        let (CommandKind::Install { packages, kind, .. }
-        | CommandKind::Uninstall { packages, kind, .. }
-        | CommandKind::Upgrade { packages, kind, .. }
-        | CommandKind::Reinstall { packages, kind, .. }) = cli.command
-        else {
+        let CommandKind::Package { packages, kind, .. } = cli.command else {
             panic!("expected package command");
         };
         assert_eq!(packages, ["--app", "--help"]);
@@ -186,10 +179,7 @@ mod tests {
     fn unknown_flags_remain_positional_values(#[case] command: &str) {
         let cli = Cli::parse([command, "--unknown"].into_iter().map(str::to_owned)).unwrap();
         match cli.command {
-            CommandKind::Install { packages, .. }
-            | CommandKind::Uninstall { packages, .. }
-            | CommandKind::Upgrade { packages, .. }
-            | CommandKind::Reinstall { packages, .. } => assert_eq!(packages, ["--unknown"]),
+            CommandKind::Package { packages, .. } => assert_eq!(packages, ["--unknown"]),
             CommandKind::Search { query, .. } => assert_eq!(query, "--unknown"),
             _ => panic!("unexpected command"),
         }
@@ -205,7 +195,8 @@ mod tests {
         .expect("parse should succeed");
 
         match cli.command {
-            CommandKind::Install {
+            CommandKind::Package {
+                action: PackageAction::Install,
                 packages,
                 dry_run,
                 kind,
@@ -235,7 +226,8 @@ mod tests {
         .expect("parse should succeed");
 
         match cli.command {
-            CommandKind::Uninstall {
+            CommandKind::Package {
+                action: PackageAction::Uninstall,
                 packages,
                 dry_run,
                 kind,
@@ -261,7 +253,8 @@ mod tests {
             Cli::parse(["upgrade"].into_iter().map(str::to_string)).expect("parse should succeed");
 
         match cli.command {
-            CommandKind::Upgrade {
+            CommandKind::Package {
+                action: PackageAction::Upgrade,
                 packages,
                 dry_run,
                 kind,
@@ -310,7 +303,8 @@ mod tests {
         .expect("parse should succeed");
 
         match cli.command {
-            CommandKind::Install {
+            CommandKind::Package {
+                action: PackageAction::Install,
                 packages,
                 dry_run,
                 kind,

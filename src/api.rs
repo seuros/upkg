@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::core::installer::install::create_installer;
+use crate::core::installer::install::{Installer, create_installer};
 use crate::core::network::api::ApiClient;
 use crate::package_ref::{is_cask_name, normalize_app_name};
 use crate::types::Error;
@@ -50,24 +50,36 @@ fn build_runtime() -> Result<tokio::runtime::Runtime, Error> {
         })
 }
 
-pub fn install(formulas: &[String], options: &InstallOptions) -> Result<(), Error> {
+fn require_formulas(formulas: &[String], command: &str) -> Result<(), Error> {
     if formulas.is_empty() {
         return Err(Error::InvalidArgument {
-            message: "install requires at least one formula".to_string(),
+            message: format!("{command} requires at least one formula"),
         });
     }
+    Ok(())
+}
 
+fn run_installer(
+    options: &InstallOptions,
+    op: impl AsyncFnOnce(&mut Installer) -> Result<(), Error>,
+) -> Result<(), Error> {
     let (root, prefix) = resolve_root_and_prefix(options);
-
     crate::init::ensure_init(&root, &prefix, true)?;
 
     let runtime = build_runtime()?;
 
     runtime.block_on(async {
         let mut installer = create_installer(&root, &prefix, options.concurrency)?;
+        op(&mut installer).await
+    })
+}
 
+pub fn install(formulas: &[String], options: &InstallOptions) -> Result<(), Error> {
+    require_formulas(formulas, "install")?;
+
+    run_installer(options, async |installer| {
         crate::native_cli::commands::install::execute(
-            &mut installer,
+            installer,
             formulas.to_vec(),
             options.no_link,
             options.build_from_source,
@@ -78,11 +90,7 @@ pub fn install(formulas: &[String], options: &InstallOptions) -> Result<(), Erro
 }
 
 pub fn uninstall(formulas: &[String], options: &InstallOptions) -> Result<(), Error> {
-    if formulas.is_empty() {
-        return Err(Error::InvalidArgument {
-            message: "uninstall requires at least one formula".to_string(),
-        });
-    }
+    require_formulas(formulas, "uninstall")?;
 
     let (root, prefix) = resolve_root_and_prefix(options);
     crate::init::ensure_init(&root, &prefix, true)?;
@@ -103,13 +111,7 @@ pub fn upgrade(formulas: &[String], options: &InstallOptions) -> Result<(), Erro
         });
     }
 
-    let (root, prefix) = resolve_root_and_prefix(options);
-    crate::init::ensure_init(&root, &prefix, true)?;
-
-    let runtime = build_runtime()?;
-
-    runtime.block_on(async {
-        let mut installer = create_installer(&root, &prefix, options.concurrency)?;
+    run_installer(options, async |installer| {
         let targets = if formulas.is_empty() {
             installed_formula_targets(installer.list_installed()?)
         } else {
@@ -121,7 +123,7 @@ pub fn upgrade(formulas: &[String], options: &InstallOptions) -> Result<(), Erro
         }
 
         crate::native_cli::commands::install::execute(
-            &mut installer,
+            installer,
             targets,
             options.no_link,
             options.build_from_source,
@@ -132,11 +134,7 @@ pub fn upgrade(formulas: &[String], options: &InstallOptions) -> Result<(), Erro
 }
 
 pub fn reinstall(formulas: &[String], options: &InstallOptions) -> Result<(), Error> {
-    if formulas.is_empty() {
-        return Err(Error::InvalidArgument {
-            message: "reinstall requires at least one formula".to_string(),
-        });
-    }
+    require_formulas(formulas, "reinstall")?;
     if options.package_kind == PackageKindHint::App {
         return Err(Error::InvalidArgument {
             message: "reinstall --app is not supported yet; uninstall and install instead"
@@ -144,16 +142,9 @@ pub fn reinstall(formulas: &[String], options: &InstallOptions) -> Result<(), Er
         });
     }
 
-    let (root, prefix) = resolve_root_and_prefix(options);
-    crate::init::ensure_init(&root, &prefix, true)?;
-
-    let runtime = build_runtime()?;
-
-    runtime.block_on(async {
-        let mut installer = create_installer(&root, &prefix, options.concurrency)?;
-
+    run_installer(options, async |installer| {
         crate::native_cli::commands::reinstall::execute(
-            &mut installer,
+            installer,
             formulas.to_vec(),
             options.no_link,
             options.build_from_source,
@@ -278,31 +269,11 @@ fn score_formulae(body: &str, needle: &str, exact: bool) -> Result<Vec<(u8, Sear
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let aliases: Vec<&str> = entry
-            .get("aliases")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|s| s.as_str()).collect())
-            .unwrap_or_default();
-        let oldnames: Vec<&str> = entry
-            .get("oldnames")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|s| s.as_str()).collect())
-            .unwrap_or_default();
+        let aliases: Vec<&str> = str_array(entry, "aliases");
+        let oldnames: Vec<&str> = str_array(entry, "oldnames");
 
         if let Some(rank) = score_hit(needle, exact, name, full_name, &aliases, &oldnames, desc) {
-            hits.push((
-                rank,
-                SearchHit {
-                    kind: SearchKind::Formula,
-                    name: name.to_string(),
-                    version,
-                    desc: if desc.is_empty() {
-                        None
-                    } else {
-                        Some(desc.to_string())
-                    },
-                },
-            ));
+            hits.push((rank, search_hit(SearchKind::Formula, name, version, desc)));
         }
     }
     Ok(hits)
@@ -328,34 +299,30 @@ fn score_casks(body: &str, needle: &str, exact: bool) -> Result<Vec<(u8, SearchH
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let names: Vec<String> = entry
-            .get("name")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|s| s.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        let names = str_array(entry, "name");
 
-        if let Some(rank) = score_hit(needle, exact, token, token, &name_refs, &[], desc) {
-            hits.push((
-                rank,
-                SearchHit {
-                    kind: SearchKind::Cask,
-                    name: token.to_string(),
-                    version,
-                    desc: if desc.is_empty() {
-                        None
-                    } else {
-                        Some(desc.to_string())
-                    },
-                },
-            ));
+        if let Some(rank) = score_hit(needle, exact, token, token, &names, &[], desc) {
+            hits.push((rank, search_hit(SearchKind::Cask, token, version, desc)));
         }
     }
     Ok(hits)
+}
+
+fn str_array<'a>(entry: &'a serde_json::Value, key: &str) -> Vec<&'a str> {
+    entry
+        .get(key)
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|s| s.as_str()).collect())
+        .unwrap_or_default()
+}
+
+fn search_hit(kind: SearchKind, name: &str, version: String, desc: &str) -> SearchHit {
+    SearchHit {
+        kind,
+        name: name.to_string(),
+        version,
+        desc: (!desc.is_empty()).then(|| desc.to_string()),
+    }
 }
 
 fn score_hit(

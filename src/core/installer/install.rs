@@ -23,6 +23,7 @@ use cask_ops::{
 };
 pub use factory::create_installer;
 
+use crate::clock::unix_secs;
 use crate::core::cellar::link::Linker;
 use crate::core::cellar::materialize::Cellar;
 use crate::core::installer::cask::resolve_cask;
@@ -91,10 +92,7 @@ impl Installer {
             formula_name: formula_name.to_string(),
             version: version.to_string(),
             store_key: store_key.to_string(),
-            installed_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
+            installed_at: unix_secs(),
         };
         write_receipt(keg_path, &receipt)?;
         self.record_installed_package(&receipt)
@@ -174,10 +172,7 @@ impl Installer {
             return self.uninstall_cask(token);
         }
 
-        let installed =
-            find_installed(self.cellar.root_dir(), name).ok_or(Error::NotInstalled {
-                name: name.to_string(),
-            })?;
+        let installed = self.installed_keg(name)?;
         let keg_name = formula_token(&installed.name);
 
         let keg_path = self.cellar.keg_path(keg_name, &installed.version);
@@ -327,6 +322,12 @@ impl Installer {
         Ok(removed)
     }
 
+    fn installed_keg(&self, name: &str) -> Result<InstalledKeg, Error> {
+        find_installed(self.cellar.root_dir(), name).ok_or_else(|| Error::NotInstalled {
+            name: name.to_string(),
+        })
+    }
+
     #[cfg(test)]
     pub fn is_installed(&self, name: &str) -> bool {
         find_installed(self.cellar.root_dir(), name).is_some()
@@ -420,10 +421,7 @@ impl Installer {
             formula_name: cask.install_name.clone(),
             version: cask.version.clone(),
             store_key: cask.sha256.clone(),
-            installed_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
+            installed_at: unix_secs(),
         };
         if !cask.binaries.is_empty() {
             let keg_path = self.cellar.keg_path(&cask.install_name, &cask.version);

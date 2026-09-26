@@ -26,28 +26,24 @@ struct HealthCheck {
 }
 
 impl HealthCheck {
-    fn ok(label: &'static str, detail: impl Into<String>) -> Self {
+    fn new(status: HealthStatus, label: &'static str, detail: impl Into<String>) -> Self {
         Self {
-            status: HealthStatus::Ok,
+            status,
             label,
             detail: detail.into(),
         }
+    }
+
+    fn ok(label: &'static str, detail: impl Into<String>) -> Self {
+        Self::new(HealthStatus::Ok, label, detail)
     }
 
     fn warn(label: &'static str, detail: impl Into<String>) -> Self {
-        Self {
-            status: HealthStatus::Warn,
-            label,
-            detail: detail.into(),
-        }
+        Self::new(HealthStatus::Warn, label, detail)
     }
 
     fn fail(label: &'static str, detail: impl Into<String>) -> Self {
-        Self {
-            status: HealthStatus::Fail,
-            label,
-            detail: detail.into(),
-        }
+        Self::new(HealthStatus::Fail, label, detail)
     }
 }
 
@@ -135,7 +131,7 @@ fn folder_checks() -> Vec<HealthCheck> {
         checks.push(directory_check("root", &root));
         checks.push(directory_check("prefix", &prefix));
 
-        for dir in macos_managed_dirs(&root, &prefix) {
+        for dir in crate::init::managed_dirs(&root, &prefix) {
             checks.push(directory_check("managed dir", &dir));
         }
     }
@@ -180,31 +176,6 @@ fn home_dir() -> Option<PathBuf> {
     {
         env::var_os("HOME").map(PathBuf::from)
     }
-}
-
-#[cfg(target_os = "macos")]
-fn macos_managed_dirs(root: &Path, prefix: &Path) -> Vec<PathBuf> {
-    const PREFIX_MANAGED_DIRS: &[&str] = &[
-        "bin",
-        "sbin",
-        "Cellar",
-        "opt",
-        "lib",
-        "libexec",
-        "cli-plugins",
-        "include",
-        "share",
-        "etc",
-    ];
-
-    let mut dirs = vec![
-        root.join("store"),
-        root.join("cache"),
-        root.join("locks"),
-        root.join("db"),
-    ];
-    dirs.extend(PREFIX_MANAGED_DIRS.iter().map(|dir| prefix.join(dir)));
-    dirs
 }
 
 #[cfg(target_os = "macos")]

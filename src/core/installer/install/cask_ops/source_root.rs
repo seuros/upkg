@@ -55,14 +55,7 @@ struct MountedDmg {
 
 impl MountedDmg {
     fn attach(path: &Path) -> Result<Self, Error> {
-        let mountpoint = std::env::temp_dir().join(format!(
-            "upkg-dmg-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
+        let mountpoint = crate::clock::unique_temp_dir("dmg");
 
         fs::create_dir_all(&mountpoint).map_err(|e| Error::StoreCorruption {
             message: format!("failed to create dmg mountpoint: {e}"),

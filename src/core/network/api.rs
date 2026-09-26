@@ -7,7 +7,7 @@ use crate::http_client::{self, RamaClient};
 use crate::package_ref::cask_name;
 use crate::types::{Error, Formula};
 use futures_util::stream::{self, StreamExt};
-use rama::http::{BodyExtractExt, StatusCode, service::client::HttpClientExt};
+use rama::http::{BodyExtractExt, Response, StatusCode, service::client::HttpClientExt};
 
 const HOMEBREW_CORE_RAW_BASE: &str =
     "https://raw.githubusercontent.com/Homebrew/homebrew-core/main";
@@ -149,14 +149,7 @@ impl ApiClient {
             verify_sha256_bytes(entry.body.as_bytes(), expected_sha256)
                 .map_err(|e| Self::map_formula_rb_checksum_error(e, ruby_source_path, "cache"))?;
 
-            let dest = cache_dir.join(ruby_source_path.replace('/', "_"));
-            std::fs::create_dir_all(cache_dir).map_err(|e| Error::FileError {
-                message: format!("failed to create rb cache dir: {e}"),
-            })?;
-            std::fs::write(&dest, entry.body.as_bytes()).map_err(|e| Error::FileError {
-                message: format!("failed to write cached rb file: {e}"),
-            })?;
-            return Ok(dest);
+            return write_rb_file(cache_dir, ruby_source_path, &entry.body);
         }
 
         let response = self
@@ -193,15 +186,7 @@ impl ApiClient {
             let _ = cache.put(&cache_key, &entry);
         }
 
-        let dest = cache_dir.join(ruby_source_path.replace('/', "_"));
-        std::fs::create_dir_all(cache_dir).map_err(|e| Error::FileError {
-            message: format!("failed to create rb cache dir: {e}"),
-        })?;
-        std::fs::write(&dest, body.as_bytes()).map_err(|e| Error::FileError {
-            message: format!("failed to write rb file: {e}"),
-        })?;
-
-        Ok(dest)
+        write_rb_file(cache_dir, ruby_source_path, &body)
     }
 
     fn map_formula_rb_checksum_error(err: Error, ruby_source_path: &str, source: &str) -> Error {
@@ -269,23 +254,11 @@ impl ApiClient {
             });
         }
 
-        if !response.status().is_success() {
-            return Err(Error::NetworkFailure {
-                message: format!("HTTP {}", response.status()),
-            });
-        }
+        let response = super::ensure_success(response)?;
 
-        let etag = response
-            .headers()
-            .get("etag")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+        let etag = header_string(&response, "etag");
 
-        let last_modified = response
-            .headers()
-            .get("last-modified")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+        let last_modified = header_string(&response, "last-modified");
 
         let body = response
             .try_into_string()
@@ -404,16 +377,8 @@ impl ApiClient {
             });
         }
 
-        let etag = response
-            .headers()
-            .get("etag")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-        let last_modified = response
-            .headers()
-            .get("last-modified")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+        let etag = header_string(&response, "etag");
+        let last_modified = header_string(&response, "last-modified");
 
         let body = response
             .try_into_string()
@@ -463,26 +428,25 @@ impl ApiClient {
         })
     }
 
-    async fn get_cask_exact(&self, token: &str) -> Result<Option<serde_json::Value>, Error> {
-        let url = format!("{}/{}.json", self.cask_base_url, token);
-        let response = self
-            .client
-            .get(&url)
+    async fn get(&self, url: &str) -> Result<Response, Error> {
+        self.client
+            .get(url)
             .send()
             .await
             .map_err(|e| Error::NetworkFailure {
                 message: e.to_string(),
-            })?;
+            })
+    }
+
+    async fn get_cask_exact(&self, token: &str) -> Result<Option<serde_json::Value>, Error> {
+        let url = format!("{}/{}.json", self.cask_base_url, token);
+        let response = self.get(&url).await?;
 
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
 
-        if !response.status().is_success() {
-            return Err(Error::NetworkFailure {
-                message: format!("HTTP {}", response.status()),
-            });
-        }
+        let response = super::ensure_success(response)?;
 
         response
             .try_into_json::<serde_json::Value>()
@@ -495,14 +459,7 @@ impl ApiClient {
 
     async fn resolve_cask_old_token(&self, token: &str) -> Result<Option<String>, Error> {
         let url = format!("{}.json", self.cask_base_url.trim_end_matches('/'));
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::NetworkFailure {
-                message: e.to_string(),
-            })?;
+        let response = self.get(&url).await?;
 
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
@@ -678,11 +635,31 @@ impl ApiClient {
     }
 }
 
+fn header_string(response: &Response, name: &str) -> Option<String> {
+    response
+        .headers()
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string)
+}
+
+fn write_rb_file(
+    cache_dir: &std::path::Path,
+    ruby_source_path: &str,
+    body: &str,
+) -> Result<std::path::PathBuf, Error> {
+    let dest = cache_dir.join(ruby_source_path.replace('/', "_"));
+    std::fs::create_dir_all(cache_dir).map_err(|e| Error::FileError {
+        message: format!("failed to create rb cache dir: {e}"),
+    })?;
+    std::fs::write(&dest, body.as_bytes()).map_err(|e| Error::FileError {
+        message: format!("failed to write rb file: {e}"),
+    })?;
+    Ok(dest)
+}
+
 fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    crate::clock::unix_secs() as u64
 }
 
 fn index_is_fresh(fetched_at: u64) -> bool {

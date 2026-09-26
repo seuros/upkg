@@ -16,6 +16,8 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, Notify, RwLock, Semaphore, mpsc};
 
+use chrono_machines::{AsyncRetryable, DelayHint, ExponentialBackoff};
+
 use crate::checksum::finalize_sha256_hex;
 use crate::core::{progress::InstallProgress, storage::blob::BlobCache};
 use crate::http_client::{self, RamaClient, RedirectHeaders};
@@ -30,7 +32,7 @@ const GLOBAL_DOWNLOAD_CONCURRENCY: usize = 20;
 
 const MAX_CONCURRENT_CHUNKS: usize = 6;
 
-const MAX_CHUNK_RETRIES: u32 = 3;
+const MAX_CHUNK_ATTEMPTS: u8 = 4;
 fn calculate_chunk_size(file_size: u64) -> u64 {
     const MIN_CHUNK_SIZE: u64 = 5 * 1024 * 1024;
     const MAX_CHUNK_SIZE: u64 = 20 * 1024 * 1024;
@@ -64,6 +66,49 @@ struct ChunkedDownloadContext {
 }
 
 pub type DownloadProgressCallback = Arc<dyn Fn(InstallProgress) + Send + Sync>;
+
+fn report_download_completed(
+    progress: &Option<DownloadProgressCallback>,
+    name: &Option<String>,
+    total_bytes: u64,
+) {
+    if let (Some(cb), Some(n)) = (progress, name) {
+        cb(InstallProgress::DownloadCompleted {
+            name: n.clone(),
+            total_bytes,
+        });
+    }
+}
+
+fn cancelled() -> Error {
+    Error::NetworkFailure {
+        message: "cancelled: another download finished first".to_string(),
+    }
+}
+
+fn bearer(token: &str) -> HeaderValue {
+    HeaderValue::from_str(&format!("Bearer {token}")).unwrap()
+}
+
+fn content_length(response: &Response) -> Option<u64> {
+    response
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+}
+
+fn www_authenticate(response: &Response) -> Result<&str, Error> {
+    match response.headers().get(WWW_AUTHENTICATE) {
+        Some(value) => value.to_str().map_err(|_| Error::NetworkFailure {
+            message: "WWW-Authenticate header contains invalid characters".to_string(),
+        }),
+        None => Err(Error::NetworkFailure {
+            message: "server returned 401 without WWW-Authenticate header (may be rate limited)"
+                .to_string(),
+        }),
+    }
+}
 
 fn get_alternate_urls(primary_url: &str) -> Vec<String> {
     let mut alternates = Vec::new();
@@ -154,12 +199,7 @@ impl Downloader {
         progress: Option<DownloadProgressCallback>,
     ) -> Result<PathBuf, Error> {
         if self.blob_cache.has_blob(expected_sha256) {
-            if let (Some(cb), Some(n)) = (&progress, &name) {
-                cb(InstallProgress::DownloadCompleted {
-                    name: n.clone(),
-                    total_bytes: 0,
-                });
-            }
+            report_download_completed(&progress, &name, 0);
             return Ok(self.blob_cache.blob_path(expected_sha256));
         }
 
@@ -184,18 +224,12 @@ impl Downloader {
             match send_head_with_redirects(
                 &self.client,
                 primary_url,
-                cached_token
-                    .as_ref()
-                    .map(|t| HeaderValue::from_str(&format!("Bearer {t}")).unwrap()),
+                cached_token.as_deref().map(bearer),
             )
             .await
             {
                 Ok(response) if response.status().is_success() => {
-                    let content_length = response
-                        .headers()
-                        .get(CONTENT_LENGTH)
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|s| s.parse::<u64>().ok());
+                    let content_length = content_length(&response);
 
                     let supports_ranges = server_supports_ranges(&response);
 
@@ -281,85 +315,63 @@ impl Downloader {
                 tokio::time::sleep(delay).await;
 
                 if done.load(Ordering::Acquire) {
-                    return Err(Error::NetworkFailure {
-                        message: "cancelled: another download finished first".to_string(),
-                    });
+                    return Err(cancelled());
                 }
 
-                if blob_cache.has_blob(&expected_sha256) {
-                    if let (Some(cb), Some(n)) = (&progress, &name) {
-                        cb(InstallProgress::DownloadCompleted {
-                            name: n.clone(),
-                            total_bytes: 0,
-                        });
-                    }
+                let finish_from_cache = || {
+                    blob_cache.has_blob(&expected_sha256).then(|| {
+                        report_download_completed(&progress, &name, 0);
+                        done.store(true, Ordering::Release);
+                        done_notify.notify_waiters();
+                        blob_cache.blob_path(&expected_sha256)
+                    })
+                };
 
-                    done.store(true, Ordering::Release);
-                    done_notify.notify_waiters();
-                    return Ok(blob_cache.blob_path(&expected_sha256));
+                if let Some(path) = finish_from_cache() {
+                    return Ok(path);
                 }
 
-                let response = {
-                    let mut last_err = None;
-                    let mut resp = None;
-                    for attempt in 0..4u32 {
-                        if attempt > 0 {
-                            tokio::time::sleep(Duration::from_millis(200 * (1 << attempt))).await;
-                            if done.load(Ordering::Acquire) {
-                                return Err(Error::NetworkFailure {
-                                    message: "cancelled: another download finished first"
-                                        .to_string(),
-                                });
-                            }
+                let fetch = || {
+                    let was_cancelled = done.load(Ordering::Acquire);
+                    let client = downloader_client.clone();
+                    let token_cache = token_cache.clone();
+                    let url = url.clone();
+                    async move {
+                        if was_cancelled {
+                            return Err(cancelled());
                         }
-                        match fetch_download_response_internal(
-                            downloader_client.clone(),
-                            token_cache.clone(),
-                            url.clone(),
-                        )
-                        .await
-                        {
-                            Ok(r) => {
-                                resp = Some(r);
-                                break;
-                            }
-                            Err(e) => last_err = Some(e),
-                        }
-                    }
-                    match resp {
-                        Some(r) => r,
-                        None => return Err(last_err.unwrap()),
+                        fetch_response_internal(client, token_cache, url, None).await
                     }
                 };
+                let response = fetch
+                    .retry_async(
+                        ExponentialBackoff::new()
+                            .base_delay_ms(400)
+                            .multiplier(2.0)
+                            .jitter_factor(0.0)
+                            .max_attempts(4),
+                    )
+                    .when(|_| !done.load(Ordering::Acquire))
+                    .call_async(|ms| tokio::time::sleep(Duration::from_millis(ms)))
+                    .await
+                    .map(|outcome| outcome.into_inner())
+                    .map_err(|err| err.into_cause().unwrap_or_else(cancelled))?;
 
                 let _permit = tokio::select! {
                     permit = body_download_gate.acquire_owned() => permit.map_err(|_| Error::NetworkFailure {
                         message: "download permit closed unexpectedly".to_string(),
                     })?,
                     _ = done_notify.notified() => {
-                        return Err(Error::NetworkFailure {
-                            message: "cancelled: another download finished first".to_string(),
-                        });
+                        return Err(cancelled());
                     }
                 };
 
                 if done.load(Ordering::Acquire) {
-                    return Err(Error::NetworkFailure {
-                        message: "cancelled: another download finished first".to_string(),
-                    });
+                    return Err(cancelled());
                 }
 
-                if blob_cache.has_blob(&expected_sha256) {
-                    if let (Some(cb), Some(n)) = (&progress, &name) {
-                        cb(InstallProgress::DownloadCompleted {
-                            name: n.clone(),
-                            total_bytes: 0,
-                        });
-                    }
-
-                    done.store(true, Ordering::Release);
-                    done_notify.notify_waiters();
-                    return Ok(blob_cache.blob_path(&expected_sha256));
+                if let Some(path) = finish_from_cache() {
+                    return Ok(path);
                 }
 
                 let result = download_response_internal(
@@ -411,69 +423,29 @@ impl Downloader {
     }
 }
 
-async fn fetch_download_response_internal(
+async fn fetch_response_internal(
     client: RamaClient,
     token_cache: TokenCache,
     url: String,
+    range: Option<String>,
 ) -> Result<Response, Error> {
     let cached_token = get_cached_token_for_url_internal(&token_cache, &url).await;
 
     let response = send_get_with_redirects(
         &client,
         &url,
-        cached_token
-            .as_ref()
-            .map(|t| HeaderValue::from_str(&format!("Bearer {t}")).unwrap()),
-        None,
+        cached_token.as_deref().map(bearer),
+        range.clone(),
     )
     .await?;
 
     let response = if response.status() == StatusCode::UNAUTHORIZED {
-        handle_auth_challenge_internal(&client, &token_cache, &url, response).await?
+        handle_auth_challenge_internal(&client, &token_cache, &url, response, range).await?
     } else {
         response
     };
 
-    if !response.status().is_success() {
-        return Err(Error::NetworkFailure {
-            message: format!("HTTP {}", response.status()),
-        });
-    }
-
-    Ok(response)
-}
-
-async fn fetch_range_response_internal(
-    client: RamaClient,
-    token_cache: TokenCache,
-    url: String,
-    range: String,
-) -> Result<Response, Error> {
-    let cached_token = get_cached_token_for_url_internal(&token_cache, &url).await;
-
-    let response = send_get_with_redirects(
-        &client,
-        &url,
-        cached_token
-            .as_ref()
-            .map(|t| HeaderValue::from_str(&format!("Bearer {t}")).unwrap()),
-        Some(range),
-    )
-    .await?;
-
-    let response = if response.status() == StatusCode::UNAUTHORIZED {
-        handle_auth_challenge_internal(&client, &token_cache, &url, response).await?
-    } else {
-        response
-    };
-
-    if !response.status().is_success() {
-        return Err(Error::NetworkFailure {
-            message: format!("HTTP {}", response.status()),
-        });
-    }
-
-    Ok(response)
+    super::ensure_success(response)
 }
 
 async fn get_cached_token_for_url_internal(token_cache: &TokenCache, url: &str) -> Option<String> {
@@ -492,31 +464,12 @@ async fn handle_auth_challenge_internal(
     token_cache: &TokenCache,
     url: &str,
     response: Response,
+    range: Option<String>,
 ) -> Result<Response, Error> {
-    let www_auth_header = response.headers().get(WWW_AUTHENTICATE);
-
-    let www_auth = match www_auth_header {
-        Some(value) => value.to_str().map_err(|_| Error::NetworkFailure {
-            message: "WWW-Authenticate header contains invalid characters".to_string(),
-        })?,
-        None => {
-            return Err(Error::NetworkFailure {
-                message:
-                    "server returned 401 without WWW-Authenticate header (may be rate limited)"
-                        .to_string(),
-            });
-        }
-    };
-
+    let www_auth = www_authenticate(&response)?;
     let token = fetch_bearer_token_internal(client, token_cache, www_auth).await?;
 
-    let response = send_get_with_redirects(
-        client,
-        url,
-        Some(HeaderValue::from_str(&format!("Bearer {token}")).unwrap()),
-        None,
-    )
-    .await?;
+    let response = send_get_with_redirects(client, url, Some(bearer(&token)), range).await?;
 
     if response.status() == StatusCode::UNAUTHORIZED {
         return Err(Error::NetworkFailure {
@@ -656,143 +609,147 @@ fn calculate_chunk_ranges(file_size: u64) -> Vec<ChunkRange> {
     chunks
 }
 
+enum ChunkError {
+    Retry(Error),
+    TokenRefreshed,
+    Fatal(Error),
+}
+
 async fn download_chunk(ctx: &ChunkDownloadContext, chunk: &ChunkRange) -> Result<Vec<u8>, Error> {
     let range_header = format!("bytes={}-{}", chunk.offset, chunk.offset + chunk.size - 1);
 
-    let mut last_error = None;
-
-    for attempt in 0..=MAX_CHUNK_RETRIES {
-        let cached_token = get_cached_token_for_url_internal(&ctx.token_cache, &ctx.url).await;
-
-        match send_get_with_redirects(
-            &ctx.client,
-            &ctx.url,
-            cached_token
-                .as_ref()
-                .map(|t| HeaderValue::from_str(&format!("Bearer {t}")).unwrap()),
-            Some(range_header.clone()),
+    (|| try_download_chunk(ctx, chunk, &range_header))
+        .retry_async(
+            ExponentialBackoff::new()
+                .base_delay_ms(100)
+                .multiplier(2.0)
+                .jitter_factor(0.0)
+                .max_attempts(MAX_CHUNK_ATTEMPTS),
         )
+        .when(|e| !matches!(e, ChunkError::Fatal(_)))
+        .delay_from(|e, _| match e {
+            ChunkError::TokenRefreshed => DelayHint::Ms(0),
+            _ => DelayHint::Backoff,
+        })
+        .call_async(|ms| tokio::time::sleep(Duration::from_millis(ms)))
         .await
-        {
-            Ok(response) => {
-                if response.status() == StatusCode::UNAUTHORIZED {
-                    let www_auth = match response.headers().get(WWW_AUTHENTICATE) {
-                        Some(value) => value.to_str().map_err(|_| Error::NetworkFailure {
-                            message: "WWW-Authenticate header contains invalid characters"
-                                .to_string(),
-                        })?,
-                        None => {
-                            return Err(Error::NetworkFailure {
-                                message: "server returned 401 without WWW-Authenticate header"
-                                    .to_string(),
-                            });
-                        }
-                    };
+        .map(|outcome| outcome.into_inner())
+        .map_err(|err| match err.into_cause() {
+            Some(ChunkError::Retry(e) | ChunkError::Fatal(e)) => e,
+            Some(ChunkError::TokenRefreshed) => Error::NetworkFailure {
+                message: "token expired, retrying with new token".to_string(),
+            },
+            None => Error::NetworkFailure {
+                message: "chunk download failed after retries".to_string(),
+            },
+        })
+}
 
-                    match fetch_bearer_token_internal(&ctx.client, &ctx.token_cache, www_auth).await
-                    {
-                        Ok(_new_token) => {
-                            last_error = Some(Error::NetworkFailure {
-                                message: "token expired, retrying with new token".to_string(),
-                            });
-                            continue;
-                        }
-                        Err(e) => {
-                            return Err(Error::NetworkFailure {
-                                message: format!("failed to refresh token: {e}"),
-                            });
-                        }
-                    }
-                }
+async fn try_download_chunk(
+    ctx: &ChunkDownloadContext,
+    chunk: &ChunkRange,
+    range_header: &str,
+) -> Result<Vec<u8>, ChunkError> {
+    let cached_token = get_cached_token_for_url_internal(&ctx.token_cache, &ctx.url).await;
 
-                if let Some(content_range) = response.headers().get(CONTENT_RANGE) {
-                    let range_str = content_range.to_str().unwrap_or("");
-                    if !range_str.contains(&format!(
-                        "{}-{}",
-                        chunk.offset,
-                        chunk.offset + chunk.size - 1
-                    )) {
-                        return Err(Error::NetworkFailure {
-                            message: format!(
-                                "invalid content-range: expected bytes {}-{}, got: {}",
-                                chunk.offset,
-                                chunk.offset + chunk.size - 1,
-                                range_str
-                            ),
-                        });
-                    }
-                }
+    let response = send_get_with_redirects(
+        &ctx.client,
+        &ctx.url,
+        cached_token.as_deref().map(bearer),
+        Some(range_header.to_string()),
+    )
+    .await
+    .map_err(|e| {
+        ChunkError::Retry(Error::NetworkFailure {
+            message: format!("chunk download failed: {e}"),
+        })
+    })?;
 
-                if !response.status().is_success() {
-                    last_error = Some(Error::NetworkFailure {
-                        message: format!("chunk download returned HTTP {}", response.status()),
-                    });
+    if response.status() == StatusCode::UNAUTHORIZED {
+        let www_auth = www_authenticate(&response).map_err(ChunkError::Fatal)?;
+        fetch_bearer_token_internal(&ctx.client, &ctx.token_cache, www_auth)
+            .await
+            .map_err(|e| {
+                ChunkError::Fatal(Error::NetworkFailure {
+                    message: format!("failed to refresh token: {e}"),
+                })
+            })?;
+        return Err(ChunkError::TokenRefreshed);
+    }
 
-                    if response.status().is_server_error() && attempt < MAX_CHUNK_RETRIES {
-                        tokio::time::sleep(Duration::from_millis(100 * (1 << attempt))).await;
-                        continue;
-                    }
-                    return Err(last_error.unwrap());
-                }
-
-                let mut chunk_data = Vec::with_capacity(chunk.size as usize);
-                let mut stream = response.into_body().into_data_stream();
-
-                while let Some(result) = stream.next().await {
-                    let bytes = result.map_err(|e| Error::NetworkFailure {
-                        message: format!("failed to read chunk bytes: {e}"),
-                    })?;
-
-                    chunk_data.extend_from_slice(&bytes);
-
-                    if let (Some(cb), Some(n)) = (&ctx.progress, &ctx.name) {
-                        let downloaded = ctx
-                            .total_downloaded
-                            .fetch_add(bytes.len() as u64, Ordering::Release);
-                        cb(InstallProgress::DownloadProgress {
-                            name: n.clone(),
-                            downloaded: downloaded + bytes.len() as u64,
-                            total_bytes: Some(ctx.file_size),
-                        });
-                    }
-                }
-
-                if chunk_data.len() != chunk.size as usize {
-                    return Err(Error::NetworkFailure {
-                        message: format!(
-                            "chunk size mismatch: expected {} bytes, got {} bytes",
-                            chunk.size,
-                            chunk_data.len()
-                        ),
-                    });
-                }
-
-                return Ok(chunk_data);
-            }
-            Err(e) => {
-                last_error = Some(Error::NetworkFailure {
-                    message: format!("chunk download failed: {e}"),
-                });
-
-                if attempt < MAX_CHUNK_RETRIES {
-                    tokio::time::sleep(Duration::from_millis(100 * (1 << attempt))).await;
-                    continue;
-                }
-            }
+    if let Some(content_range) = response.headers().get(CONTENT_RANGE) {
+        let range_str = content_range.to_str().unwrap_or("");
+        if !range_str.contains(&format!(
+            "{}-{}",
+            chunk.offset,
+            chunk.offset + chunk.size - 1
+        )) {
+            return Err(ChunkError::Fatal(Error::NetworkFailure {
+                message: format!(
+                    "invalid content-range: expected bytes {}-{}, got: {}",
+                    chunk.offset,
+                    chunk.offset + chunk.size - 1,
+                    range_str
+                ),
+            }));
         }
     }
 
-    Err(last_error.unwrap_or_else(|| Error::NetworkFailure {
-        message: "chunk download failed after retries".to_string(),
-    }))
+    if !response.status().is_success() {
+        let error = Error::NetworkFailure {
+            message: format!("chunk download returned HTTP {}", response.status()),
+        };
+        return Err(if response.status().is_server_error() {
+            ChunkError::Retry(error)
+        } else {
+            ChunkError::Fatal(error)
+        });
+    }
+
+    let mut chunk_data = Vec::with_capacity(chunk.size as usize);
+    let mut stream = response.into_body().into_data_stream();
+
+    while let Some(result) = stream.next().await {
+        let bytes = result.map_err(|e| {
+            ChunkError::Fatal(Error::NetworkFailure {
+                message: format!("failed to read chunk bytes: {e}"),
+            })
+        })?;
+
+        chunk_data.extend_from_slice(&bytes);
+
+        if let (Some(cb), Some(n)) = (&ctx.progress, &ctx.name) {
+            let downloaded = ctx
+                .total_downloaded
+                .fetch_add(bytes.len() as u64, Ordering::Release);
+            cb(InstallProgress::DownloadProgress {
+                name: n.clone(),
+                downloaded: downloaded + bytes.len() as u64,
+                total_bytes: Some(ctx.file_size),
+            });
+        }
+    }
+
+    if chunk_data.len() != chunk.size as usize {
+        return Err(ChunkError::Fatal(Error::NetworkFailure {
+            message: format!(
+                "chunk size mismatch: expected {} bytes, got {} bytes",
+                chunk.size,
+                chunk_data.len()
+            ),
+        }));
+    }
+
+    Ok(chunk_data)
 }
 
 async fn download_with_chunks(ctx: &ChunkedDownloadContext) -> Result<PathBuf, Error> {
     if !validate_range_support(ctx).await? {
-        let response = fetch_download_response_internal(
+        let response = fetch_response_internal(
             ctx.client.clone(),
             ctx.token_cache.clone(),
             ctx.url.clone(),
+            None,
         )
         .await?;
         return download_response_internal(
@@ -957,22 +914,17 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext) -> Result<PathBuf, E
         message: format!("failed to flush download: {e}"),
     })?;
 
-    if let (Some(cb), Some(n)) = (&ctx.progress, &ctx.name) {
-        cb(InstallProgress::DownloadCompleted {
-            name: n.clone(),
-            total_bytes: ctx.file_size,
-        });
-    }
+    report_download_completed(&ctx.progress, &ctx.name, ctx.file_size);
 
     writer.commit()
 }
 
 async fn validate_range_support(ctx: &ChunkedDownloadContext) -> Result<bool, Error> {
-    let response = fetch_range_response_internal(
+    let response = fetch_response_internal(
         ctx.client.clone(),
         ctx.token_cache.clone(),
         ctx.url.clone(),
-        "bytes=0-0".to_string(),
+        Some("bytes=0-0".to_string()),
     )
     .await?;
 
@@ -996,11 +948,7 @@ async fn download_response_internal(
     name: Option<String>,
     progress: Option<DownloadProgressCallback>,
 ) -> Result<PathBuf, Error> {
-    let total_bytes = response
-        .headers()
-        .get(CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<u64>().ok());
+    let total_bytes = content_length(&response);
 
     if let (Some(cb), Some(n)) = (&progress, &name) {
         cb(InstallProgress::DownloadStarted {
@@ -1055,12 +1003,7 @@ async fn download_response_internal(
         message: format!("failed to flush download: {e}"),
     })?;
 
-    if let (Some(cb), Some(n)) = (&progress, &name) {
-        cb(InstallProgress::DownloadCompleted {
-            name: n.clone(),
-            total_bytes: downloaded,
-        });
-    }
+    report_download_completed(&progress, &name, downloaded);
 
     writer.commit()
 }

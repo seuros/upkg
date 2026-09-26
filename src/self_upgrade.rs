@@ -252,14 +252,7 @@ fn checksum_for_asset(checksums: &str, asset_name: &str) -> Result<String, UpkgE
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn create_work_dir() -> Result<std::path::PathBuf, UpkgError> {
-    let dir = std::env::temp_dir().join(format!(
-        "upkg-self-upgrade-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
+    let dir = crate::clock::unique_temp_dir("self-upgrade");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }

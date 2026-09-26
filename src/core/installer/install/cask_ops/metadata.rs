@@ -74,10 +74,7 @@ fn brew_cask_receipt_json(
         "uninstall_flight_blocks": false,
         "installed_as_dependency": false,
         "installed_on_request": true,
-        "time": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0),
+        "time": crate::clock::unix_secs(),
         "runtime_dependencies": {},
         "source": {
             "tap": "homebrew/cask",

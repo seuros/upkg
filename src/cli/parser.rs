@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 
-use super::{Cli, CommandKind, PackageKind};
+use super::{Cli, CommandKind, PackageAction, PackageKind};
 use crate::error::UpkgError;
 use usage::embedded::Outcome;
 use usage_rs as usage;
@@ -149,6 +149,15 @@ fn package_kind(app: bool) -> PackageKind {
     }
 }
 
+fn package(action: PackageAction, options: PackageOptions, packages: Vec<String>) -> CommandKind {
+    CommandKind::Package {
+        action,
+        packages,
+        dry_run: options.dry_run,
+        kind: package_kind(options.app),
+    }
+}
+
 pub(super) fn parse(args: impl Iterator<Item = OsString>) -> Result<Cli, UpkgError> {
     let mut argv: Vec<OsString> = args.collect();
     // Normalize only the command token, leaving package names and search terms untouched.
@@ -172,26 +181,10 @@ pub(super) fn parse(args: impl Iterator<Item = OsString>) -> Result<Cli, UpkgErr
         }
     };
     let command = match arguments.command {
-        Commands::Install(args) => CommandKind::Install {
-            packages: args.packages,
-            dry_run: args.options.dry_run,
-            kind: package_kind(args.options.app),
-        },
-        Commands::Uninstall(args) => CommandKind::Uninstall {
-            packages: args.packages,
-            dry_run: args.options.dry_run,
-            kind: package_kind(args.options.app),
-        },
-        Commands::Upgrade(args) => CommandKind::Upgrade {
-            packages: args.packages,
-            dry_run: args.options.dry_run,
-            kind: package_kind(args.options.app),
-        },
-        Commands::Reinstall(args) => CommandKind::Reinstall {
-            packages: args.packages,
-            dry_run: args.options.dry_run,
-            kind: package_kind(args.options.app),
-        },
+        Commands::Install(args) => package(PackageAction::Install, args.options, args.packages),
+        Commands::Uninstall(args) => package(PackageAction::Uninstall, args.options, args.packages),
+        Commands::Upgrade(args) => package(PackageAction::Upgrade, args.options, args.packages),
+        Commands::Reinstall(args) => package(PackageAction::Reinstall, args.options, args.packages),
         Commands::List => CommandKind::List,
         Commands::Search(args) => CommandKind::Search {
             query: args.query.join(" "),

@@ -6,6 +6,8 @@ mod backend;
 #[path = "core/checksum.rs"]
 mod checksum;
 mod cli;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod clock;
 #[cfg(target_os = "macos")]
 mod core;
 mod error;
@@ -33,7 +35,7 @@ use std::process::ExitCode;
 
 #[cfg(not(target_os = "macos"))]
 use backend::Backend;
-use cli::{Cli, CommandKind, PackageKind};
+use cli::{Cli, CommandKind, PackageAction, PackageKind};
 use error::UpkgError;
 
 fn main() -> ExitCode {
@@ -55,26 +57,12 @@ fn run() -> Result<ExitCode, UpkgError> {
     let cli = Cli::parse(std::env::args_os().skip(1))?;
 
     match cli.command {
-        CommandKind::Install {
+        CommandKind::Package {
+            action,
             packages,
             dry_run,
             kind,
-        } => install(&packages, dry_run, kind),
-        CommandKind::Uninstall {
-            packages,
-            dry_run,
-            kind,
-        } => uninstall(&packages, dry_run, kind),
-        CommandKind::Upgrade {
-            packages,
-            dry_run,
-            kind,
-        } => upgrade(&packages, dry_run, kind),
-        CommandKind::Reinstall {
-            packages,
-            dry_run,
-            kind,
-        } => reinstall(&packages, dry_run, kind),
+        } => package(action, &packages, dry_run, kind),
         CommandKind::List => list(),
         CommandKind::Search {
             query,
@@ -91,15 +79,19 @@ fn run() -> Result<ExitCode, UpkgError> {
     }
 }
 
-fn install(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<ExitCode, UpkgError> {
+fn package(
+    action: PackageAction,
+    packages: &[String],
+    dry_run: bool,
+    kind: PackageKind,
+) -> Result<ExitCode, UpkgError> {
     #[cfg(target_os = "macos")]
     {
         if dry_run {
-            native::print_install_dry_run(packages, kind)?;
-            return Ok(ExitCode::SUCCESS);
+            native::print_dry_run(action, packages, kind)?;
+        } else {
+            native::run(action, packages, kind)?;
         }
-
-        native::install_native(packages, kind)?;
         Ok(ExitCode::SUCCESS)
     }
 
@@ -107,79 +99,12 @@ fn install(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<Exit
     {
         reject_app_kind(kind)?;
         let backend = Backend::detect()?;
-        let spec = backend.install_spec(packages);
-        if dry_run {
-            return print_dry_run(&backend, &spec);
-        }
-        execute_spec(backend, spec)
-    }
-}
-
-fn uninstall(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<ExitCode, UpkgError> {
-    #[cfg(target_os = "macos")]
-    {
-        if dry_run {
-            native::print_uninstall_dry_run(packages, kind)?;
-            return Ok(ExitCode::SUCCESS);
-        }
-
-        native::uninstall_native(packages, kind)?;
-        Ok(ExitCode::SUCCESS)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        reject_app_kind(kind)?;
-        let backend = Backend::detect()?;
-        let spec = backend.uninstall_spec(packages);
-        if dry_run {
-            return print_dry_run(&backend, &spec);
-        }
-        execute_spec(backend, spec)
-    }
-}
-
-fn upgrade(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<ExitCode, UpkgError> {
-    #[cfg(target_os = "macos")]
-    {
-        if dry_run {
-            native::print_upgrade_dry_run(packages, kind)?;
-            return Ok(ExitCode::SUCCESS);
-        }
-
-        native::upgrade_native(packages, kind)?;
-        Ok(ExitCode::SUCCESS)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        reject_app_kind(kind)?;
-        let backend = Backend::detect()?;
-        let spec = backend.upgrade_spec(packages);
-        if dry_run {
-            return print_dry_run(&backend, &spec);
-        }
-        execute_spec(backend, spec)
-    }
-}
-
-fn reinstall(packages: &[String], dry_run: bool, kind: PackageKind) -> Result<ExitCode, UpkgError> {
-    #[cfg(target_os = "macos")]
-    {
-        if dry_run {
-            native::print_reinstall_dry_run(packages, kind)?;
-            return Ok(ExitCode::SUCCESS);
-        }
-
-        native::reinstall_native(packages, kind)?;
-        Ok(ExitCode::SUCCESS)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        reject_app_kind(kind)?;
-        let backend = Backend::detect()?;
-        let spec = backend.reinstall_spec(packages)?;
+        let spec = match action {
+            PackageAction::Install => backend.install_spec(packages),
+            PackageAction::Uninstall => backend.uninstall_spec(packages),
+            PackageAction::Upgrade => backend.upgrade_spec(packages),
+            PackageAction::Reinstall => backend.reinstall_spec(packages)?,
+        };
         if dry_run {
             return print_dry_run(&backend, &spec);
         }

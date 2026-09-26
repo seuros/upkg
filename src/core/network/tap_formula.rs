@@ -1,9 +1,10 @@
+use crate::core::build::formula_parser::{parse_ruby, parse_string};
 use crate::types::formula::{
     Bottle, BottleFile, BottleStable, FormulaUrls, KegOnly, SourceUrl, Versions,
 };
 use crate::types::{Error, Formula};
 use std::collections::BTreeMap;
-use tree_sitter::{Node, Parser, Tree};
+use tree_sitter::{Node, Tree};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TapFormulaRef {
@@ -90,20 +91,10 @@ struct ParsedTapFormula<'a> {
 
 impl<'a> ParsedTapFormula<'a> {
     fn parse(source: &'a str) -> Result<Self, Error> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_ruby::LANGUAGE.into())
-            .map_err(|e| Error::ExecutionError {
-                message: format!("failed to load Ruby grammar: {e}"),
-            })?;
-
-        let tree = parser
-            .parse(source, None)
-            .ok_or_else(|| Error::ExecutionError {
-                message: "failed to parse Ruby formula".to_string(),
-            })?;
-
-        Ok(Self { tree, source })
+        Ok(Self {
+            tree: parse_ruby(source)?,
+            source,
+        })
     }
 
     fn source_bytes(&self) -> &'a [u8] {
@@ -454,27 +445,6 @@ fn symbol_value(node: Node<'_>, source: &[u8]) -> Option<String> {
             .map(|value| value.trim_start_matches(':').to_string()),
         _ => None,
     }
-}
-
-fn parse_string(node: Node<'_>, source: &[u8]) -> Option<String> {
-    if node.kind() != "string" {
-        return None;
-    }
-
-    if let Some(content) = node.child_by_field_name("content")
-        && let Ok(value) = content.utf8_text(source)
-    {
-        return Some(value.to_string());
-    }
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if child.kind() == "string_content" {
-            return child.utf8_text(source).ok().map(ToString::to_string);
-        }
-    }
-
-    Some(String::new())
 }
 
 fn is_sha256_hex(value: &str) -> bool {

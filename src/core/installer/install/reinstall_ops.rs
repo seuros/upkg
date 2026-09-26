@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::core::progress::ProgressCallback;
-use crate::core::storage::receipt::{InstallReceipt, find_installed, read_receipt};
+use crate::core::storage::receipt::{InstallReceipt, read_receipt};
 use crate::types::{Error, formula_token};
 
 use super::{ExecuteResult, InstallPlan, Installer};
@@ -50,8 +50,7 @@ impl Installer {
         let mut fetch_names = Vec::new();
 
         for name in names {
-            let installed = find_installed(self.cellar.root_dir(), name)
-                .ok_or(Error::NotInstalled { name: name.clone() })?;
+            let installed = self.installed_keg(name)?;
             let keg_name = formula_token(&installed.name).to_string();
             let receipt = read_receipt(&self.cellar.keg_path(&keg_name, &installed.version));
 
@@ -229,10 +228,7 @@ impl Installer {
     }
 
     fn stash_keg(&self, name: &str) -> Result<StashedKeg, Error> {
-        let installed =
-            find_installed(self.cellar.root_dir(), name).ok_or(Error::NotInstalled {
-                name: name.to_string(),
-            })?;
+        let installed = self.installed_keg(name)?;
         let keg_name = formula_token(&installed.name).to_string();
         let keg_path = self.cellar.keg_path(&keg_name, &installed.version);
 

@@ -33,13 +33,34 @@ fn keg_name_from_path(path: &Path) -> Option<String> {
     None
 }
 
-fn keg_name_from_symlink(dst: &Path) -> Option<String> {
-    let target = fs::read_link(dst).ok()?;
-    let resolved = if target.is_relative() {
-        dst.parent().unwrap_or(Path::new("")).join(&target)
+fn read_link_resolved(link: &Path) -> io::Result<PathBuf> {
+    let target = fs::read_link(link)?;
+    Ok(if target.is_relative() {
+        link.parent().unwrap_or(Path::new("")).join(target)
     } else {
         target
-    };
+    })
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    fs::canonicalize(left).ok() == fs::canonicalize(right).ok()
+}
+
+fn keg_formula_name(keg_path: &Path) -> Option<&str> {
+    keg_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+}
+
+fn store_err(e: io::Error) -> Error {
+    Error::StoreCorruption {
+        message: e.to_string(),
+    }
+}
+
+fn keg_name_from_symlink(dst: &Path) -> Option<String> {
+    let resolved = read_link_resolved(dst).ok()?;
     let canonical = fs::canonicalize(&resolved).ok()?;
     keg_name_from_path(&canonical)
 }
@@ -91,9 +112,8 @@ impl Linker {
     }
 
     fn collect_conflicts(src: &Path, dst: &Path, conflicts: &mut Vec<ConflictedLink>) {
-        let entries = match fs::read_dir(src) {
-            Ok(e) => e,
-            Err(_) => return,
+        let Ok(entries) = fs::read_dir(src) else {
+            return;
         };
         for entry in entries.flatten() {
             let src_path = entry.path();
@@ -102,13 +122,8 @@ impl Linker {
             if src_path.is_dir() {
                 if dst_path.symlink_metadata().is_ok()
                     && dst_path.is_symlink()
-                    && let Ok(old_target) = fs::read_link(&dst_path)
+                    && let Ok(resolved) = read_link_resolved(&dst_path)
                 {
-                    let resolved = if old_target.is_relative() {
-                        dst_path.parent().unwrap_or(Path::new("")).join(&old_target)
-                    } else {
-                        old_target
-                    };
                     Self::collect_conflicts_merged(&src_path, &resolved, &dst_path, conflicts);
                     continue;
                 }
@@ -117,13 +132,8 @@ impl Linker {
             }
 
             if dst_path.symlink_metadata().is_ok() {
-                if let Ok(target) = fs::read_link(&dst_path) {
-                    let resolved = if target.is_relative() {
-                        dst_path.parent().unwrap_or(Path::new("")).join(&target)
-                    } else {
-                        target
-                    };
-                    if fs::canonicalize(&resolved).ok() == fs::canonicalize(&src_path).ok() {
+                if let Ok(resolved) = read_link_resolved(&dst_path) {
+                    if same_path(&resolved, &src_path) {
                         continue;
                     }
                     if same_cellar_formula(&resolved, &src_path) {
@@ -194,31 +204,17 @@ impl Linker {
 
     fn link_recursive(src: &Path, dst: &Path) -> Result<(), Error> {
         if !dst.exists() {
-            fs::create_dir_all(dst).map_err(|e| Error::StoreCorruption {
-                message: e.to_string(),
-            })?;
+            fs::create_dir_all(dst).map_err(store_err)?;
         }
 
-        for entry in fs::read_dir(src).map_err(|e| Error::StoreCorruption {
-            message: e.to_string(),
-        })? {
-            let entry = entry.map_err(|e| Error::StoreCorruption {
-                message: e.to_string(),
-            })?;
+        for entry in fs::read_dir(src).map_err(store_err)? {
+            let entry = entry.map_err(store_err)?;
             let src_path = entry.path();
             let dst_path = dst.join(entry.file_name());
 
             if src_path.is_dir() {
                 if dst_path.symlink_metadata().is_ok() && dst_path.is_symlink() {
-                    let old_target =
-                        fs::read_link(&dst_path).map_err(|e| Error::StoreCorruption {
-                            message: e.to_string(),
-                        })?;
-                    let resolved_target = if old_target.is_relative() {
-                        dst_path.parent().unwrap_or(Path::new("")).join(&old_target)
-                    } else {
-                        old_target
-                    };
+                    let resolved_target = read_link_resolved(&dst_path).map_err(store_err)?;
                     let _ = fs::remove_file(&dst_path);
                     Self::link_recursive(&resolved_target, &dst_path)?;
                 }
@@ -227,13 +223,8 @@ impl Linker {
             }
 
             if dst_path.symlink_metadata().is_ok() {
-                if let Ok(target) = fs::read_link(&dst_path) {
-                    let resolved = if target.is_relative() {
-                        dst_path.parent().unwrap_or(Path::new("")).join(&target)
-                    } else {
-                        target
-                    };
-                    if fs::canonicalize(&resolved).ok() == fs::canonicalize(&src_path).ok() {
+                if let Ok(resolved) = read_link_resolved(&dst_path) {
+                    if same_path(&resolved, &src_path) {
                         if resolved.exists() {
                             continue;
                         } else {
@@ -267,11 +258,7 @@ impl Linker {
             }
 
             #[cfg(unix)]
-            std::os::unix::fs::symlink(&src_path, &dst_path).map_err(|e| {
-                Error::StoreCorruption {
-                    message: e.to_string(),
-                }
-            })?;
+            std::os::unix::fs::symlink(&src_path, &dst_path).map_err(store_err)?;
         }
         Ok(())
     }
@@ -294,12 +281,8 @@ impl Linker {
         if !src.exists() || !dst.exists() {
             return Ok(unlinked);
         }
-        for entry in fs::read_dir(src).map_err(|e| Error::StoreCorruption {
-            message: e.to_string(),
-        })? {
-            let entry = entry.map_err(|e| Error::StoreCorruption {
-                message: e.to_string(),
-            })?;
+        for entry in fs::read_dir(src).map_err(store_err)? {
+            let entry = entry.map_err(store_err)?;
             let src_path = entry.path();
             let dst_path = dst.join(entry.file_name());
 
@@ -313,68 +296,43 @@ impl Linker {
                 continue;
             }
 
-            if let Ok(target) = fs::read_link(&dst_path) {
-                let resolved = if target.is_relative() {
-                    dst_path.parent().unwrap_or(Path::new("")).join(&target)
-                } else {
-                    target
-                };
-                if fs::canonicalize(&resolved).ok() == fs::canonicalize(&src_path).ok() {
-                    let _ = fs::remove_file(&dst_path);
-                    unlinked.push(dst_path);
-                }
+            if let Ok(resolved) = read_link_resolved(&dst_path)
+                && same_path(&resolved, &src_path)
+            {
+                let _ = fs::remove_file(&dst_path);
+                unlinked.push(dst_path);
             }
         }
         Ok(unlinked)
     }
 
     fn unlink_opt(&self, keg_path: &Path) -> Result<(), Error> {
-        let name = keg_path
-            .parent()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str());
-        if let Some(name) = name {
+        if let Some(name) = keg_formula_name(keg_path) {
             let opt_link = self.opt_dir.join(name);
-            if let Ok(target) = fs::read_link(&opt_link) {
-                let resolved = if target.is_relative() {
-                    opt_link.parent().unwrap_or(Path::new("")).join(&target)
-                } else {
-                    target
-                };
-                if fs::canonicalize(&resolved).ok() == fs::canonicalize(keg_path).ok() {
-                    let _ = fs::remove_file(&opt_link);
-                }
+            if let Ok(resolved) = read_link_resolved(&opt_link)
+                && same_path(&resolved, keg_path)
+            {
+                let _ = fs::remove_file(&opt_link);
             }
         }
         Ok(())
     }
 
     pub fn link_opt(&self, keg_path: &Path) -> Result<(), Error> {
-        let name = keg_path
-            .parent()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| Error::StoreCorruption {
-                message: "invalid keg path".into(),
-            })?;
+        let name = keg_formula_name(keg_path).ok_or_else(|| Error::StoreCorruption {
+            message: "invalid keg path".into(),
+        })?;
         let opt_link = self.opt_dir.join(name);
         if opt_link.symlink_metadata().is_ok() {
-            if let Ok(target) = fs::read_link(&opt_link) {
-                let resolved = if target.is_relative() {
-                    opt_link.parent().unwrap_or(Path::new("")).join(&target)
-                } else {
-                    target
-                };
-                if fs::canonicalize(&resolved).ok() == fs::canonicalize(keg_path).ok() {
-                    return Ok(());
-                }
+            if let Ok(resolved) = read_link_resolved(&opt_link)
+                && same_path(&resolved, keg_path)
+            {
+                return Ok(());
             }
             let _ = fs::remove_file(&opt_link);
         }
         #[cfg(unix)]
-        std::os::unix::fs::symlink(keg_path, &opt_link).map_err(|e| Error::StoreCorruption {
-            message: e.to_string(),
-        })?;
+        std::os::unix::fs::symlink(keg_path, &opt_link).map_err(store_err)?;
         Ok(())
     }
 }

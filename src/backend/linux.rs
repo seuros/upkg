@@ -95,145 +95,69 @@ impl LinuxManager {
         }
     }
 
-    pub fn install_spec(&self, packages: &[String]) -> CommandSpec {
-        let mut args: Vec<String> = match self {
-            Self::Apt => vec!["apt".into(), "install".into(), "-y".into()],
-            Self::Dnf => vec!["dnf".into(), "install".into(), "-y".into()],
-            Self::Yum => vec!["yum".into(), "install".into(), "-y".into()],
-            Self::Pacman => vec!["pacman".into(), "-S".into(), "--noconfirm".into()],
-            Self::Zypper => vec![
-                "zypper".into(),
-                "--non-interactive".into(),
-                "install".into(),
-            ],
-            Self::Opkg => vec!["install".into()],
-        };
-        args.extend(packages.iter().cloned());
-
+    fn spec(&self, args: &[&str], packages: &[String]) -> CommandSpec {
         match self {
-            Self::Opkg => CommandSpec::new("opkg", args),
-            _ => CommandSpec::new("sudo", args),
+            Self::Opkg => CommandSpec::with_packages("opkg", args, packages),
+            _ => CommandSpec::with_packages("sudo", &[&[self.name()], args].concat(), packages),
         }
+    }
+
+    pub fn install_spec(&self, packages: &[String]) -> CommandSpec {
+        let args: &[&str] = match self {
+            Self::Apt | Self::Dnf | Self::Yum => &["install", "-y"],
+            Self::Pacman => &["-S", "--noconfirm"],
+            Self::Zypper => &["--non-interactive", "install"],
+            Self::Opkg => &["install"],
+        };
+        self.spec(args, packages)
     }
 
     pub fn uninstall_spec(&self, packages: &[String]) -> CommandSpec {
-        let mut args: Vec<String> = match self {
-            Self::Apt => vec!["apt".into(), "remove".into(), "-y".into()],
-            Self::Dnf => vec!["dnf".into(), "remove".into(), "-y".into()],
-            Self::Yum => vec!["yum".into(), "remove".into(), "-y".into()],
-            Self::Pacman => vec!["pacman".into(), "-R".into(), "--noconfirm".into()],
-            Self::Zypper => vec!["zypper".into(), "--non-interactive".into(), "remove".into()],
-            Self::Opkg => vec!["remove".into()],
+        let args: &[&str] = match self {
+            Self::Apt | Self::Dnf | Self::Yum => &["remove", "-y"],
+            Self::Pacman => &["-R", "--noconfirm"],
+            Self::Zypper => &["--non-interactive", "remove"],
+            Self::Opkg => &["remove"],
         };
-        args.extend(packages.iter().cloned());
-
-        match self {
-            Self::Opkg => CommandSpec::new("opkg", args),
-            _ => CommandSpec::new("sudo", args),
-        }
+        self.spec(args, packages)
     }
 
     pub fn reinstall_spec(&self, packages: &[String]) -> CommandSpec {
-        let mut args: Vec<String> = match self {
-            Self::Apt => vec![
-                "apt".into(),
-                "install".into(),
-                "--reinstall".into(),
-                "-y".into(),
-            ],
-            Self::Dnf => vec!["dnf".into(), "reinstall".into(), "-y".into()],
-            Self::Yum => vec!["yum".into(), "reinstall".into(), "-y".into()],
+        let args: &[&str] = match self {
+            Self::Apt => &["install", "--reinstall", "-y"],
+            Self::Dnf | Self::Yum => &["reinstall", "-y"],
             // -S reinstalls packages that are already up to date.
-            Self::Pacman => vec!["pacman".into(), "-S".into(), "--noconfirm".into()],
-            Self::Zypper => vec![
-                "zypper".into(),
-                "--non-interactive".into(),
-                "install".into(),
-                "--force".into(),
-            ],
-            Self::Opkg => vec!["install".into(), "--force-reinstall".into()],
+            Self::Pacman => &["-S", "--noconfirm"],
+            Self::Zypper => &["--non-interactive", "install", "--force"],
+            Self::Opkg => &["install", "--force-reinstall"],
         };
-        args.extend(packages.iter().cloned());
-
-        match self {
-            Self::Opkg => CommandSpec::new("opkg", args),
-            _ => CommandSpec::new("sudo", args),
-        }
+        self.spec(args, packages)
     }
 
     pub fn upgrade_spec(&self, packages: &[String]) -> CommandSpec {
-        let mut args: Vec<String> = match self {
-            Self::Apt => {
-                if packages.is_empty() {
-                    vec!["apt".into(), "upgrade".into(), "-y".into()]
-                } else {
-                    vec![
-                        "apt".into(),
-                        "install".into(),
-                        "--only-upgrade".into(),
-                        "-y".into(),
-                    ]
-                }
-            }
-            Self::Dnf => vec!["dnf".into(), "upgrade".into(), "-y".into()],
-            Self::Yum => vec!["yum".into(), "update".into(), "-y".into()],
-            Self::Pacman => {
-                if packages.is_empty() {
-                    vec!["pacman".into(), "-Syu".into(), "--noconfirm".into()]
-                } else {
-                    vec!["pacman".into(), "-S".into(), "--noconfirm".into()]
-                }
-            }
-            Self::Zypper => vec!["zypper".into(), "--non-interactive".into(), "update".into()],
-            Self::Opkg => vec!["upgrade".into()],
+        let args: &[&str] = match self {
+            Self::Apt if packages.is_empty() => &["upgrade", "-y"],
+            Self::Apt => &["install", "--only-upgrade", "-y"],
+            Self::Dnf => &["upgrade", "-y"],
+            Self::Yum => &["update", "-y"],
+            Self::Pacman if packages.is_empty() => &["-Syu", "--noconfirm"],
+            Self::Pacman => &["-S", "--noconfirm"],
+            Self::Zypper => &["--non-interactive", "update"],
+            Self::Opkg => &["upgrade"],
         };
-        args.extend(packages.iter().cloned());
-
-        match self {
-            Self::Opkg => CommandSpec::new("opkg", args),
-            _ => CommandSpec::new("sudo", args),
-        }
+        self.spec(args, packages)
     }
 
     pub fn search_spec(&self, query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
-        match self {
-            Self::Apt => {
-                reject_exact_if(exact, "apt")?;
-                Ok(CommandSpec::new(
-                    "apt",
-                    vec!["search".into(), query.to_string()],
-                ))
+        let args = match self {
+            Self::Pacman => vec!["-Ss".to_string(), anchor_if_exact(query, exact)],
+            Self::Opkg => vec!["find".to_string(), anchor_if_exact(query, exact)],
+            _ => {
+                reject_exact_if(exact, self.name())?;
+                vec!["search".to_string(), query.to_string()]
             }
-            Self::Dnf => {
-                reject_exact_if(exact, "dnf")?;
-                Ok(CommandSpec::new(
-                    "dnf",
-                    vec!["search".into(), query.to_string()],
-                ))
-            }
-            Self::Yum => {
-                reject_exact_if(exact, "yum")?;
-                Ok(CommandSpec::new(
-                    "yum",
-                    vec!["search".into(), query.to_string()],
-                ))
-            }
-            Self::Zypper => {
-                reject_exact_if(exact, "zypper")?;
-                Ok(CommandSpec::new(
-                    "zypper",
-                    vec!["search".into(), query.to_string()],
-                ))
-            }
-            Self::Pacman => Ok(CommandSpec::new(
-                "pacman",
-                vec!["-Ss".into(), anchor_if_exact(query, exact)],
-            )),
-            Self::Opkg => Ok(CommandSpec::new(
-                "opkg",
-                vec!["find".into(), anchor_if_exact(query, exact)],
-            )),
-        }
+        };
+        Ok(CommandSpec::new(self.name(), args))
     }
 
     pub fn list_spec(&self) -> CommandSpec {

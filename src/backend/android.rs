@@ -38,42 +38,23 @@ impl AndroidManager {
     }
 
     pub fn install_spec(&self, packages: &[String]) -> CommandSpec {
-        let mut args: Vec<String> = match self {
-            Self::Pkg => vec!["install".into(), "-y".into()],
-            Self::Apt => vec!["install".into(), "-y".into()],
-        };
-        args.extend(packages.iter().cloned());
-
-        match self {
-            Self::Pkg => CommandSpec::new("pkg", args),
-            Self::Apt => CommandSpec::new("apt", args),
-        }
+        CommandSpec::with_packages(self.name(), &["install", "-y"], packages)
     }
 
     pub fn uninstall_spec(&self, packages: &[String]) -> CommandSpec {
-        let mut args: Vec<String> = match self {
-            Self::Pkg => vec!["uninstall".into(), "-y".into()],
-            Self::Apt => vec!["remove".into(), "-y".into()],
+        let args: &[&str] = match self {
+            Self::Pkg => &["uninstall", "-y"],
+            Self::Apt => &["remove", "-y"],
         };
-        args.extend(packages.iter().cloned());
-
-        match self {
-            Self::Pkg => CommandSpec::new("pkg", args),
-            Self::Apt => CommandSpec::new("apt", args),
-        }
+        CommandSpec::with_packages(self.name(), args, packages)
     }
 
     pub fn reinstall_spec(&self, packages: &[String]) -> CommandSpec {
-        let mut args: Vec<String> = match self {
-            Self::Pkg => vec!["reinstall".into()],
-            Self::Apt => vec!["install".into(), "--reinstall".into(), "-y".into()],
+        let args: &[&str] = match self {
+            Self::Pkg => &["reinstall"],
+            Self::Apt => &["install", "--reinstall", "-y"],
         };
-        args.extend(packages.iter().cloned());
-
-        match self {
-            Self::Pkg => CommandSpec::new("pkg", args),
-            Self::Apt => CommandSpec::new("apt", args),
-        }
+        CommandSpec::with_packages(self.name(), args, packages)
     }
 
     pub fn search_spec(&self, query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
@@ -83,37 +64,27 @@ impl AndroidManager {
                 Self::Apt => "--exact is not supported by apt search",
             }));
         }
-        let args = vec!["search".into(), query.to_string()];
-        Ok(match self {
-            Self::Pkg => CommandSpec::new("pkg", args),
-            Self::Apt => CommandSpec::new("apt", args),
-        })
+        Ok(CommandSpec::with_packages(
+            self.name(),
+            &["search", query],
+            &[],
+        ))
     }
 
     pub fn upgrade_spec(&self, packages: &[String]) -> CommandSpec {
-        let mut args: Vec<String> = match self {
-            Self::Pkg => vec!["upgrade".into(), "-y".into()],
-            Self::Apt => {
-                if packages.is_empty() {
-                    vec!["upgrade".into(), "-y".into()]
-                } else {
-                    vec!["install".into(), "--only-upgrade".into(), "-y".into()]
-                }
-            }
+        let args: &[&str] = match self {
+            Self::Apt if !packages.is_empty() => &["install", "--only-upgrade", "-y"],
+            _ => &["upgrade", "-y"],
         };
-        args.extend(packages.iter().cloned());
-
-        match self {
-            Self::Pkg => CommandSpec::new("pkg", args),
-            Self::Apt => CommandSpec::new("apt", args),
-        }
+        CommandSpec::with_packages(self.name(), args, packages)
     }
 
     pub fn list_spec(&self) -> CommandSpec {
-        match self {
-            Self::Pkg => CommandSpec::new("pkg", vec!["list-installed".into()]),
-            Self::Apt => CommandSpec::new("apt", vec!["list".into(), "--installed".into()]),
-        }
+        let args: &[&str] = match self {
+            Self::Pkg => &["list-installed"],
+            Self::Apt => &["list", "--installed"],
+        };
+        CommandSpec::with_packages(self.name(), args, &[])
     }
 }
 

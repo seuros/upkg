@@ -9,34 +9,28 @@ pub fn is_available() -> bool {
 }
 
 pub fn install_spec(packages: &[String]) -> CommandSpec {
-    let mut args = vec!["install".to_string(), "-y".to_string()];
-    args.extend(packages.iter().cloned());
-    CommandSpec::new(RVN_PATH, args)
+    CommandSpec::with_packages(RVN_PATH, &["install", "-y"], packages)
 }
 
 pub fn uninstall_spec(packages: &[String]) -> CommandSpec {
-    let mut args = vec!["remove".to_string(), "-y".to_string()];
-    args.extend(packages.iter().cloned());
-    CommandSpec::new(RVN_PATH, args)
+    CommandSpec::with_packages(RVN_PATH, &["remove", "-y"], packages)
 }
 
 pub fn upgrade_spec(packages: &[String]) -> CommandSpec {
-    let mut args = vec!["upgrade".to_string(), "-y".to_string()];
-    args.extend(packages.iter().cloned());
-    CommandSpec::new(RVN_PATH, args)
+    CommandSpec::with_packages(RVN_PATH, &["upgrade", "-y"], packages)
 }
 
 pub fn list_spec() -> CommandSpec {
-    CommandSpec::new(RVN_PATH, vec!["info".to_string(), "-a".to_string()])
+    CommandSpec::with_packages(RVN_PATH, &["info", "-a"], &[])
 }
 
 pub fn search_spec(query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
-    let mut args = vec!["search".to_string()];
-    if exact {
-        args.push("-e".to_string());
-    }
-    args.push(query.to_string());
-    Ok(CommandSpec::new(RVN_PATH, args))
+    let args: &[&str] = if exact {
+        &["search", "-e", query]
+    } else {
+        &["search", query]
+    };
+    Ok(CommandSpec::with_packages(RVN_PATH, args, &[]))
 }
 
 #[cfg(test)]

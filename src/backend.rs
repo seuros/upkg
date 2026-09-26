@@ -46,6 +46,12 @@ impl CommandSpec {
         }
     }
 
+    pub fn with_packages(program: impl Into<String>, args: &[&str], packages: &[String]) -> Self {
+        let mut argv: Vec<String> = args.iter().map(ToString::to_string).collect();
+        argv.extend(packages.iter().cloned());
+        Self::new(program, argv)
+    }
+
     pub fn render(&self) -> String {
         format!("{} {}", self.program, self.args.join(" "))
             .trim()

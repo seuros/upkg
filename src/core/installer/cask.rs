@@ -70,11 +70,10 @@ pub fn resolve_cask(token: &str, cask: &Value) -> Result<ResolvedCask, Error> {
     let version = required_string(cask, "version")?;
 
     if let Some(variation) = select_platform_variation(cask) {
-        if let Some(variation_url) = variation.get("url").and_then(Value::as_str) {
-            url = variation_url.to_string();
-        }
-        if let Some(variation_sha) = variation.get("sha256").and_then(Value::as_str) {
-            sha256 = variation_sha.to_string();
+        for (key, value) in [("url", &mut url), ("sha256", &mut sha256)] {
+            if let Some(overridden) = variation.get(key).and_then(Value::as_str) {
+                *value = overridden.to_string();
+            }
         }
     }
 
@@ -400,10 +399,14 @@ fn linked_artifact_target(
     }
 }
 
-fn manpage_target(source: &str, target: Option<&str>) -> Result<String, Error> {
-    let target = target
+fn target_or_basename(source: &str, target: Option<&str>) -> String {
+    target
         .map(ToString::to_string)
-        .unwrap_or_else(|| basename(source).unwrap_or_else(|_| source.to_string()));
+        .unwrap_or_else(|| basename(source).unwrap_or_else(|_| source.to_string()))
+}
+
+fn manpage_target(source: &str, target: Option<&str>) -> Result<String, Error> {
+    let target = target_or_basename(source, target);
     let section = manpage_section(&target).or_else(|| manpage_section(source));
     let section = section.ok_or_else(|| Error::InvalidArgument {
         message: format!("failed to determine manpage section for '{source}'"),
@@ -419,9 +422,7 @@ fn bash_completion_target(source: &str, target: Option<&str>) -> Result<String, 
 }
 
 fn fish_completion_target(source: &str, target: Option<&str>) -> Result<String, Error> {
-    let mut target = target
-        .map(ToString::to_string)
-        .unwrap_or_else(|| basename(source).unwrap_or_else(|_| source.to_string()));
+    let mut target = target_or_basename(source, target);
     if !target.ends_with(".fish") {
         target.push_str(".fish");
     }
@@ -429,9 +430,7 @@ fn fish_completion_target(source: &str, target: Option<&str>) -> Result<String, 
 }
 
 fn zsh_completion_target(source: &str, target: Option<&str>) -> Result<String, Error> {
-    let mut target = target
-        .map(ToString::to_string)
-        .unwrap_or_else(|| basename(source).unwrap_or_else(|_| source.to_string()));
+    let mut target = target_or_basename(source, target);
     if !target.starts_with('_') {
         target.insert(0, '_');
     }
@@ -520,6 +519,10 @@ fn validate_leaf_target(target: &str, artifact_kind: &str) -> Result<String, Err
     Ok(normalized)
 }
 
+fn step_path<'a>(step: &'a Value, key: &str) -> Option<&'a str> {
+    step.get(key)?.get("path")?.as_str()
+}
+
 fn parse_postflight_symlinks(cask: &Value) -> Result<Vec<CaskPostflightSymlink>, Error> {
     let mut symlinks = Vec::new();
 
@@ -535,17 +538,8 @@ fn parse_postflight_symlinks(cask: &Value) -> Result<Vec<CaskPostflightSymlink>,
                 if step.get("type").and_then(Value::as_str) != Some("symlink") {
                     continue;
                 }
-                let Some(source) = step
-                    .get("source")
-                    .and_then(|value| value.get("path"))
-                    .and_then(Value::as_str)
-                else {
-                    continue;
-                };
-                let Some(target) = step
-                    .get("target")
-                    .and_then(|value| value.get("path"))
-                    .and_then(Value::as_str)
+                let (Some(source), Some(target)) =
+                    (step_path(step, "source"), step_path(step, "target"))
                 else {
                     continue;
                 };

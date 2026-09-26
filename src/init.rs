@@ -21,7 +21,7 @@ const PREFIX_MANAGED_DIRS: &[&str] = &[
     "etc",
 ];
 
-fn managed_dirs(root: &Path, prefix: &Path) -> Vec<PathBuf> {
+pub(crate) fn managed_dirs(root: &Path, prefix: &Path) -> Vec<PathBuf> {
     let mut dirs = vec![
         root.join("store"),
         root.join("cache"),
@@ -30,6 +30,10 @@ fn managed_dirs(root: &Path, prefix: &Path) -> Vec<PathBuf> {
     ];
     dirs.extend(PREFIX_MANAGED_DIRS.iter().map(|dir| prefix.join(dir)));
     dirs
+}
+
+fn home() -> Result<String, InitError> {
+    std::env::var("HOME").map_err(|_| InitError::Message("HOME not set".to_string()))
 }
 
 pub fn needs_init(root: &Path, prefix: &Path) -> bool {
@@ -79,8 +83,7 @@ pub fn run_init(root: &Path, prefix: &Path, no_modify_path: bool) -> Result<(), 
     let upkg_dir = match std::env::var("UPKG_DIR") {
         Ok(dir) => dir,
         Err(_) => {
-            let home = std::env::var("HOME")
-                .map_err(|_| InitError::Message("HOME not set".to_string()))?;
+            let home = home()?;
             format!("{}/.upkg", home)
         }
     };
@@ -228,7 +231,7 @@ fn add_to_path(
     no_modify_path: bool,
 ) -> Result<(), InitError> {
     let shell = std::env::var("SHELL").unwrap_or_default();
-    let home = std::env::var("HOME").map_err(|_| InitError::Message("HOME not set".to_string()))?;
+    let home = home()?;
 
     let config_file = if shell.contains("zsh") {
         let zdotdir = std::env::var("ZDOTDIR").unwrap_or_else(|_| home.clone());

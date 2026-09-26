@@ -126,25 +126,10 @@ fn patch_macho_binary_strings_with_cellar(
         if new_bytes.len() > old_bytes.len() {
             continue;
         }
-        let shrink = old_bytes.len() - new_bytes.len();
         let mut i = 0;
         while i + old_bytes.len() <= contents.len() {
             if contents[i..i + old_bytes.len()] == **old_bytes {
-                // Find the end of the containing C string (next null byte)
-                let str_end = contents[i + old_bytes.len()..]
-                    .iter()
-                    .position(|&b| b == 0)
-                    .map(|p| i + old_bytes.len() + p)
-                    .unwrap_or(contents.len());
-
-                // Write new prefix
-                contents[i..i + new_bytes.len()].copy_from_slice(new_bytes);
-                // Shift suffix left to close the gap
-                contents.copy_within(i + old_bytes.len()..str_end, i + new_bytes.len());
-                // Null-pad the freed bytes at the end of the string field
-                let pad_start = str_end - shrink;
-                contents[pad_start..str_end].fill(0);
-
+                let str_end = replace_in_c_string(&mut contents, i, old_bytes.len(), new_bytes);
                 patched = true;
                 i += new_bytes.len() + (str_end - i - old_bytes.len());
             } else {
@@ -165,7 +150,6 @@ fn patch_macho_binary_strings_with_cellar(
             continue;
         }
 
-        let shrink = old_bytes.len() - new_bytes.len();
         let mut i = 0;
         while i + old_bytes.len() <= contents.len() {
             if contents[i..i + old_bytes.len()] == *old_bytes
@@ -174,21 +158,7 @@ fn patch_macho_binary_strings_with_cellar(
                     None | Some(0) | Some(b'/')
                 )
             {
-                // Find the end of the containing C string
-                let str_end = contents[i + old_bytes.len()..]
-                    .iter()
-                    .position(|&b| b == 0)
-                    .map(|p| i + old_bytes.len() + p)
-                    .unwrap_or(contents.len());
-
-                // Write new prefix
-                contents[i..i + new_bytes.len()].copy_from_slice(new_bytes);
-                // Shift suffix left to close the gap
-                contents.copy_within(i + old_bytes.len()..str_end, i + new_bytes.len());
-                // Null-pad the freed bytes at the end
-                let pad_start = str_end - shrink;
-                contents[pad_start..str_end].fill(0);
-
+                replace_in_c_string(&mut contents, i, old_bytes.len(), new_bytes);
                 patched = true;
                 i += new_bytes.len();
             } else {
@@ -210,10 +180,7 @@ fn patch_macho_binary_strings_with_cellar(
             }
         })?;
 
-        match std::process::Command::new("codesign")
-            .args(["--force", "--sign", "-", &path.to_string_lossy()])
-            .output()
-        {
+        match adhoc_sign(path) {
             Ok(output) if !output.status.success() => {
                 eprintln!(
                     "Warning: Failed to re-sign {}: {}",
@@ -233,6 +200,39 @@ fn patch_macho_binary_strings_with_cellar(
     }
 
     Ok(())
+}
+
+fn replace_in_c_string(contents: &mut [u8], i: usize, old_len: usize, new_bytes: &[u8]) -> usize {
+    // Find the end of the containing C string (next null byte)
+    let str_end = contents[i + old_len..]
+        .iter()
+        .position(|&b| b == 0)
+        .map(|p| i + old_len + p)
+        .unwrap_or(contents.len());
+
+    // Write new prefix
+    contents[i..i + new_bytes.len()].copy_from_slice(new_bytes);
+    // Shift suffix left to close the gap
+    contents.copy_within(i + old_len..str_end, i + new_bytes.len());
+    // Null-pad the freed bytes at the end of the string field
+    let pad_start = str_end - (old_len - new_bytes.len());
+    contents[pad_start..str_end].fill(0);
+
+    str_end
+}
+
+fn is_macho(data: &[u8]) -> bool {
+    data.len() >= 4
+        && matches!(
+            u32::from_be_bytes([data[0], data[1], data[2], data[3]]),
+            0xfeedface | 0xfeedfacf | 0xcafebabe | 0xcefaedfe | 0xcffaedfe
+        )
+}
+
+fn adhoc_sign(path: &Path) -> std::io::Result<std::process::Output> {
+    std::process::Command::new("codesign")
+        .args(["--force", "--sign", "-", &path.to_string_lossy()])
+        .output()
 }
 
 /// Rewrites the version in `Cellar/<pkg>/<version>/` when it differs from the
@@ -282,24 +282,17 @@ pub fn patch_homebrew_placeholders(
     let cellar_str = cellar_dir.to_string_lossy().to_string();
     let prefix_str = prefix.to_string_lossy().to_string();
 
-    let macho_files: Vec<PathBuf> = walkdir::WalkDir::new(keg_path)
+    let text_files: Vec<PathBuf> = walkdir::WalkDir::new(keg_path)
         .follow_links(false)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            if let Ok(data) = fs::read(e.path())
-                && data.len() >= 4
-            {
-                let magic = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-                return matches!(
-                    magic,
-                    0xfeedface | 0xfeedfacf | 0xcafebabe | 0xcefaedfe | 0xcffaedfe
-                );
-            }
-            false
-        })
         .map(|e| e.path().to_path_buf())
+        .collect();
+    let macho_files: Vec<PathBuf> = text_files
+        .iter()
+        .filter(|path| fs::read(path).is_ok_and(|data| is_macho(&data)))
+        .cloned()
         .collect();
 
     let patch_failures = AtomicUsize::new(0);
@@ -322,14 +315,6 @@ pub fn patch_homebrew_placeholders(
     {
         return Err(e);
     }
-
-    let text_files: Vec<PathBuf> = walkdir::WalkDir::new(keg_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.path().to_path_buf())
-        .collect();
 
     text_files.par_iter().for_each(|path| {
         let _ = patch_text_file_strings(path, &prefix_str, &cellar_str);
@@ -359,71 +344,60 @@ pub fn patch_homebrew_placeholders(
     };
 
     macho_files.par_iter().for_each(|path| {
-        let metadata = match fs::metadata(path) {
-            Ok(m) => m,
-            Err(_) => return,
+        let Ok(metadata) = fs::metadata(path) else {
+            return;
         };
-        let _writable = match WritablePath::from_metadata(path, &metadata) {
-            Ok(writable) => writable,
-            Err(_) => {
+        let Ok(_writable) = WritablePath::from_metadata(path, &metadata) else {
+            patch_failures.fetch_add(1, Ordering::Relaxed);
+            return;
+        };
+
+        let path_str = path.to_string_lossy();
+        let otool = |flag: &str| {
+            Command::new("otool")
+                .args([flag, &path_str])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        };
+        let install_name_tool = |args: &[&str]| {
+            let ok = Command::new("install_name_tool")
+                .args(args)
+                .output()
+                .is_ok();
+            if !ok {
                 patch_failures.fetch_add(1, Ordering::Relaxed);
-                return;
             }
+            ok
         };
 
         let mut patched_any = false;
 
-        if let Ok(output) = Command::new("otool")
-            .args(["-L", &path.to_string_lossy()])
-            .output()
-            && output.status.success()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Some(stdout) = otool("-L") {
             for line in stdout.lines() {
-                let line = line.trim();
                 if let Some(old_path) = line.split_whitespace().next()
                     && let Some(new_path) = patch_path(old_path)
                 {
-                    let result = Command::new("install_name_tool")
-                        .args(["-change", old_path, &new_path, &path.to_string_lossy()])
-                        .output();
-                    if result.is_ok() {
-                        patched_any = true;
-                    } else {
-                        patch_failures.fetch_add(1, Ordering::Relaxed);
-                    }
+                    patched_any |= install_name_tool(&["-change", old_path, &new_path, &path_str]);
                 }
             }
         }
 
-        if let Ok(output) = Command::new("otool")
-            .args(["-D", &path.to_string_lossy()])
-            .output()
-            && output.status.success()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Some(stdout) = otool("-D") {
             for line in stdout.lines().skip(1) {
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
                 }
                 if let Some(new_id) = patch_path(line) {
-                    let result = Command::new("install_name_tool")
-                        .args(["-id", &new_id, &path.to_string_lossy()])
-                        .output();
-                    if result.is_ok() {
-                        patched_any = true;
-                    } else {
-                        patch_failures.fetch_add(1, Ordering::Relaxed);
-                    }
+                    patched_any |= install_name_tool(&["-id", &new_id, &path_str]);
                 }
             }
         }
 
         if patched_any {
-            let _ = Command::new("codesign")
-                .args(["--force", "--sign", "-", &path.to_string_lossy()])
-                .output();
+            let _ = adhoc_sign(path);
         }
     });
 
@@ -466,16 +440,7 @@ pub fn codesign_and_strip_xattrs(keg_path: &Path) -> Result<(), Error> {
         .collect();
 
     bin_files.par_iter().for_each(|path| {
-        let data = match fs::read(path) {
-            Ok(d) if d.len() >= 4 => d,
-            _ => return,
-        };
-        let magic = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-        let is_macho = matches!(
-            magic,
-            0xfeedface | 0xfeedfacf | 0xcafebabe | 0xcefaedfe | 0xcffaedfe
-        );
-        if !is_macho {
+        if !fs::read(path).is_ok_and(|data| is_macho(&data)) {
             return;
         }
 
@@ -489,15 +454,12 @@ pub fn codesign_and_strip_xattrs(keg_path: &Path) -> Result<(), Error> {
             return; // Already signed
         }
 
-        let metadata = match fs::metadata(path) {
-            Ok(m) => m,
-            Err(_) => return,
+        let Ok(metadata) = fs::metadata(path) else {
+            return;
         };
         let _writable = WritablePath::from_metadata(path, &metadata).ok();
 
-        let _ = Command::new("codesign")
-            .args(["--force", "--sign", "-", &path.to_string_lossy()])
-            .output();
+        let _ = adhoc_sign(path);
     });
 
     Ok(())

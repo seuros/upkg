@@ -43,14 +43,7 @@ impl Store {
             return Ok(entry_path);
         }
 
-        let lock_path = self.locks_dir.join(format!("{store_key}.lock"));
-        let lock_file = File::create(&lock_path).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to create lock file: {e}"),
-        })?;
-
-        lock_file.lock().map_err(|e| Error::StoreCorruption {
-            message: format!("failed to acquire lock: {e}"),
-        })?;
+        let _lock = self.lock_entry(store_key)?;
 
         if entry_path.exists() {
             return Ok(entry_path);
@@ -83,6 +76,23 @@ impl Store {
         Ok(entry_path)
     }
 
+    fn lock_path(&self, store_key: &str) -> PathBuf {
+        self.locks_dir.join(format!("{store_key}.lock"))
+    }
+
+    fn lock_entry(&self, store_key: &str) -> Result<File, Error> {
+        let lock_file =
+            File::create(self.lock_path(store_key)).map_err(|e| Error::StoreCorruption {
+                message: format!("failed to create lock file: {e}"),
+            })?;
+
+        lock_file.lock().map_err(|e| Error::StoreCorruption {
+            message: format!("failed to acquire lock: {e}"),
+        })?;
+
+        Ok(lock_file)
+    }
+
     pub fn remove_entry(&self, store_key: &str) -> Result<(), Error> {
         let entry_path = self.entry_path(store_key);
 
@@ -90,14 +100,7 @@ impl Store {
             return Ok(());
         }
 
-        let lock_path = self.locks_dir.join(format!("{store_key}.lock"));
-        let lock_file = File::create(&lock_path).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to create lock file: {e}"),
-        })?;
-
-        lock_file.lock().map_err(|e| Error::StoreCorruption {
-            message: format!("failed to acquire lock: {e}"),
-        })?;
+        let _lock = self.lock_entry(store_key)?;
 
         if entry_path.exists() {
             fs::remove_dir_all(&entry_path).map_err(|e| Error::StoreCorruption {
@@ -105,7 +108,7 @@ impl Store {
             })?;
         }
 
-        let _ = fs::remove_file(&lock_path);
+        let _ = fs::remove_file(self.lock_path(store_key));
 
         Ok(())
     }

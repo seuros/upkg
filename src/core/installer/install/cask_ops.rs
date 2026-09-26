@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 use crate::types::Error;
 
@@ -242,26 +242,14 @@ impl Drop for PreparedInstallerPkgPath {
 pub(in crate::core::installer::install) fn prepare_installer_pkg_path(
     path: &Path,
 ) -> Result<PreparedInstallerPkgPath, Error> {
-    if path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("pkg"))
-        .unwrap_or(false)
-    {
+    if has_pkg_extension(path) {
         return Ok(PreparedInstallerPkgPath {
             path: path.to_path_buf(),
             temp_dir: None,
         });
     }
 
-    let temp_dir = std::env::temp_dir().join(format!(
-        "upkg-pkg-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
+    let temp_dir = crate::clock::unique_temp_dir("pkg");
     fs::create_dir_all(&temp_dir).map_err(|e| Error::StoreCorruption {
         message: format!("failed to create pkg installer temp dir: {e}"),
     })?;
@@ -304,11 +292,7 @@ fn command_output_message(output: &std::process::Output) -> String {
 }
 
 pub(super) fn is_pkg(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("pkg"))
-        .unwrap_or(false)
-        || has_xar_magic(path).unwrap_or(false)
+    has_pkg_extension(path) || has_xar_magic(path).unwrap_or(false)
 }
 
 fn has_xar_magic(path: &Path) -> std::io::Result<bool> {
@@ -318,26 +302,38 @@ fn has_xar_magic(path: &Path) -> std::io::Result<bool> {
     Ok(&magic == b"xar!")
 }
 
-fn pkgutil_ids(pattern: &str) -> Result<Vec<String>, Error> {
-    let output = Command::new("/usr/sbin/pkgutil")
-        .arg(format!("--pkgs={pattern}"))
+fn has_pkg_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("pkg"))
+}
+
+fn pkgutil(args: &[&str]) -> Result<Output, Error> {
+    Command::new("/usr/sbin/pkgutil")
+        .args(args)
         .output()
         .map_err(|e| Error::ExecutionError {
-            message: format!("failed to run pkgutil --pkgs: {e}"),
-        })?;
+            message: format!("failed to run pkgutil {}: {e}", args.join(" ")),
+        })
+}
+
+fn stdout_lines(output: &Output) -> Vec<String> {
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn pkgutil_ids(pattern: &str) -> Result<Vec<String>, Error> {
+    let output = pkgutil(&[&format!("--pkgs={pattern}")])?;
 
     if !output.status.success() {
         return Ok(Vec::new());
     }
 
-    let ids: Vec<String> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .collect();
-
-    Ok(ids)
+    Ok(stdout_lines(&output))
 }
 
 fn remove_pkgutil_files(pkg_id: &str) -> Result<(), Error> {
@@ -345,22 +341,13 @@ fn remove_pkgutil_files(pkg_id: &str) -> Result<(), Error> {
         return Ok(());
     };
 
-    let output = Command::new("/usr/sbin/pkgutil")
-        .args(["--files", pkg_id])
-        .output()
-        .map_err(|e| Error::ExecutionError {
-            message: format!("failed to run pkgutil --files for '{pkg_id}': {e}"),
-        })?;
+    let output = pkgutil(&["--files", pkg_id])?;
 
     if !output.status.success() {
         return Ok(());
     }
 
-    for rel in String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
+    for rel in stdout_lines(&output) {
         let path = location.join(rel);
         if !path.exists() && !path.is_symlink() {
             continue;
@@ -378,12 +365,7 @@ fn remove_pkgutil_files(pkg_id: &str) -> Result<(), Error> {
 }
 
 fn pkgutil_location(pkg_id: &str) -> Result<Option<PathBuf>, Error> {
-    let output = Command::new("/usr/sbin/pkgutil")
-        .args(["--pkg-info", pkg_id])
-        .output()
-        .map_err(|e| Error::ExecutionError {
-            message: format!("failed to run pkgutil --pkg-info for '{pkg_id}': {e}"),
-        })?;
+    let output = pkgutil(&["--pkg-info", pkg_id])?;
 
     if !output.status.success() {
         return Ok(None);
@@ -409,12 +391,7 @@ fn pkgutil_location(pkg_id: &str) -> Result<Option<PathBuf>, Error> {
 }
 
 fn forget_pkgutil_id(pkg_id: &str) -> Result<(), Error> {
-    let output = Command::new("/usr/sbin/pkgutil")
-        .args(["--forget", pkg_id])
-        .output()
-        .map_err(|e| Error::ExecutionError {
-            message: format!("failed to run pkgutil --forget for '{pkg_id}': {e}"),
-        })?;
+    let output = pkgutil(&["--forget", pkg_id])?;
 
     if output.status.success() && !pkgutil_id_exists(pkg_id)? {
         Ok(())
@@ -444,12 +421,7 @@ fn forget_pkgutil_id(pkg_id: &str) -> Result<(), Error> {
 }
 
 fn pkgutil_id_exists(pkg_id: &str) -> Result<bool, Error> {
-    let output = Command::new("/usr/sbin/pkgutil")
-        .args(["--pkg-info", pkg_id])
-        .output()
-        .map_err(|e| Error::ExecutionError {
-            message: format!("failed to run pkgutil --pkg-info for '{pkg_id}': {e}"),
-        })?;
+    let output = pkgutil(&["--pkg-info", pkg_id])?;
     Ok(output.status.success())
 }
 

@@ -111,7 +111,7 @@ pub fn parse_supported_install_plan(source: &str) -> Result<Option<InstallPlan>,
     Ok(Some(InstallPlan { actions }))
 }
 
-fn parse_formula(source: &str) -> Result<ParsedFormula<'_>, Error> {
+pub(crate) fn parse_ruby(source: &str) -> Result<Tree, Error> {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_ruby::LANGUAGE.into())
@@ -119,13 +119,18 @@ fn parse_formula(source: &str) -> Result<ParsedFormula<'_>, Error> {
             message: format!("failed to load Ruby grammar: {e}"),
         })?;
 
-    let tree = parser
+    parser
         .parse(source, None)
         .ok_or_else(|| Error::ExecutionError {
             message: "failed to parse Ruby formula".to_string(),
-        })?;
+        })
+}
 
-    Ok(ParsedFormula { tree, source })
+fn parse_formula(source: &str) -> Result<ParsedFormula<'_>, Error> {
+    Ok(ParsedFormula {
+        tree: parse_ruby(source)?,
+        source,
+    })
 }
 
 fn find_install_method<'a>(root: Node<'a>, source: &'a [u8]) -> Option<Node<'a>> {
@@ -358,7 +363,11 @@ fn parse_rename_pair(
     })
 }
 
-fn parse_string(node: Node<'_>, source: &[u8]) -> Option<String> {
+pub(crate) fn parse_string(node: Node<'_>, source: &[u8]) -> Option<String> {
+    if node.kind() != "string" {
+        return None;
+    }
+
     if let Some(content) = node.child_by_field_name("content")
         && let Ok(value) = content.utf8_text(source)
     {

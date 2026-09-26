@@ -1,77 +1,44 @@
+use crate::api::PackageKindHint;
+use crate::cli::{PackageAction, PackageKind};
 use crate::error::UpkgError;
 
-fn install_options(kind: crate::cli::PackageKind) -> crate::api::InstallOptions {
-    crate::api::InstallOptions {
-        package_kind: match kind {
-            crate::cli::PackageKind::Auto => crate::api::PackageKindHint::Auto,
-            crate::cli::PackageKind::App => crate::api::PackageKindHint::App,
-        },
-        ..crate::api::InstallOptions::default()
+impl From<PackageKind> for PackageKindHint {
+    fn from(kind: PackageKind) -> Self {
+        match kind {
+            PackageKind::Auto => Self::Auto,
+            PackageKind::App => Self::App,
+        }
     }
 }
 
-pub fn install_native(packages: &[String], kind: crate::cli::PackageKind) -> Result<(), UpkgError> {
-    let options = install_options(kind);
-    crate::api::install(packages, &options).map_err(UpkgError::Native)
+pub fn run(action: PackageAction, packages: &[String], kind: PackageKind) -> Result<(), UpkgError> {
+    let options = crate::api::InstallOptions {
+        package_kind: kind.into(),
+        ..crate::api::InstallOptions::default()
+    };
+    match action {
+        PackageAction::Install => crate::api::install(packages, &options),
+        PackageAction::Uninstall => crate::api::uninstall(packages, &options),
+        PackageAction::Upgrade => crate::api::upgrade(packages, &options),
+        PackageAction::Reinstall => crate::api::reinstall(packages, &options),
+    }
+    .map_err(UpkgError::Native)
 }
 
-pub fn uninstall_native(
+pub fn print_dry_run(
+    action: PackageAction,
     packages: &[String],
-    kind: crate::cli::PackageKind,
+    kind: PackageKind,
 ) -> Result<(), UpkgError> {
-    let options = install_options(kind);
-    crate::api::uninstall(packages, &options).map_err(UpkgError::Native)
-}
-
-pub fn upgrade_native(packages: &[String], kind: crate::cli::PackageKind) -> Result<(), UpkgError> {
-    let options = install_options(kind);
-    crate::api::upgrade(packages, &options).map_err(UpkgError::Native)
-}
-
-pub fn reinstall_native(
-    packages: &[String],
-    kind: crate::cli::PackageKind,
-) -> Result<(), UpkgError> {
-    let options = install_options(kind);
-    crate::api::reinstall(packages, &options).map_err(UpkgError::Native)
-}
-
-pub fn print_reinstall_dry_run(
-    packages: &[String],
-    kind: crate::cli::PackageKind,
-) -> Result<(), UpkgError> {
-    print_dry_run("reinstall", packages, kind)
-}
-
-pub fn print_install_dry_run(
-    packages: &[String],
-    kind: crate::cli::PackageKind,
-) -> Result<(), UpkgError> {
-    print_dry_run("install", packages, kind)
-}
-
-pub fn print_uninstall_dry_run(
-    packages: &[String],
-    kind: crate::cli::PackageKind,
-) -> Result<(), UpkgError> {
-    print_dry_run("uninstall", packages, kind)
-}
-
-pub fn print_upgrade_dry_run(
-    packages: &[String],
-    kind: crate::cli::PackageKind,
-) -> Result<(), UpkgError> {
-    print_dry_run("upgrade", packages, kind)
-}
-
-fn print_dry_run(
-    command: &str,
-    packages: &[String],
-    kind: crate::cli::PackageKind,
-) -> Result<(), UpkgError> {
+    let command = match action {
+        PackageAction::Install => "install",
+        PackageAction::Uninstall => "uninstall",
+        PackageAction::Upgrade => "upgrade",
+        PackageAction::Reinstall => "reinstall",
+    };
     let package_args = match kind {
-        crate::cli::PackageKind::Auto => packages.to_vec(),
-        crate::cli::PackageKind::App => packages
+        PackageKind::Auto => packages.to_vec(),
+        PackageKind::App => packages
             .iter()
             .map(|package| crate::package_ref::normalize_app_name(package))
             .collect::<Result<Vec<_>, _>>()
@@ -79,7 +46,7 @@ fn print_dry_run(
     };
 
     let mut rendered = vec!["upkg".to_string(), command.to_string()];
-    if kind == crate::cli::PackageKind::App {
+    if kind == PackageKind::App {
         rendered.push("--app".to_string());
     }
     rendered.extend(package_args);
@@ -92,14 +59,11 @@ fn print_dry_run(
 pub fn search_native(
     query: &str,
     exact: bool,
-    kind: crate::cli::PackageKind,
+    kind: PackageKind,
     refresh: bool,
 ) -> Result<(), UpkgError> {
     let options = crate::api::SearchOptions {
-        package_kind: match kind {
-            crate::cli::PackageKind::Auto => crate::api::PackageKindHint::Auto,
-            crate::cli::PackageKind::App => crate::api::PackageKindHint::App,
-        },
+        package_kind: kind.into(),
         exact,
         refresh,
         ..crate::api::SearchOptions::default()

@@ -1,5 +1,7 @@
 use rusqlite::{Connection, params};
 
+use crate::clock::unix_secs;
+
 pub struct ApiCache {
     conn: Connection,
 }
@@ -51,10 +53,7 @@ impl ApiCache {
     }
 
     pub fn put(&self, url: &str, entry: &CacheEntry) -> Result<(), rusqlite::Error> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+        let now = unix_secs();
 
         self.conn.execute(
             "INSERT OR REPLACE INTO api_cache (url, etag, last_modified, body, cached_at)

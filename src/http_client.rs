@@ -73,31 +73,31 @@ pub struct RedirectHeaders {
     pub user_agent: Option<HeaderValue>,
 }
 
-pub fn build_rama_client() -> RamaClient {
-    EasyHttpWebClient::connector_builder()
+fn build_client(pooled: bool) -> RamaClient {
+    let connector = EasyHttpWebClient::connector_builder()
         .with_default_transport_connector()
         .with_default_dns_connector()
         .without_tls_proxy_support()
         .with_proxy_support()
         .with_tls_support_using_rustls(TlsClientConfig::default_http())
-        .with_default_http_connector(Executor::default())
-        .with_default_connection_pool()
-        .build_client()
-        .boxed()
+        .with_default_http_connector(Executor::default());
+    if pooled {
+        connector
+            .with_default_connection_pool()
+            .build_client()
+            .boxed()
+    } else {
+        connector.without_connection_pool().build_client().boxed()
+    }
+}
+
+pub fn build_rama_client() -> RamaClient {
+    build_client(true)
 }
 
 #[cfg(target_os = "macos")]
 pub fn build_isolated_rama_client() -> RamaClient {
-    EasyHttpWebClient::connector_builder()
-        .with_default_transport_connector()
-        .with_default_dns_connector()
-        .without_tls_proxy_support()
-        .with_proxy_support()
-        .with_tls_support_using_rustls(TlsClientConfig::default_http())
-        .with_default_http_connector(Executor::default())
-        .without_connection_pool()
-        .build_client()
-        .boxed()
+    build_client(false)
 }
 
 pub async fn send_get_with_redirects(

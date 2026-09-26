@@ -28,38 +28,24 @@ impl WindowsManager {
     }
 
     pub fn install_spec(&self, packages: &[String]) -> CommandSpec {
-        let mut args: Vec<String> = match self {
-            Self::Winget => vec![
-                "install".into(),
-                "--silent".into(),
-                "--accept-source-agreements".into(),
-                "--accept-package-agreements".into(),
+        let args: &[&str] = match self {
+            Self::Winget => &[
+                "install",
+                "--silent",
+                "--accept-source-agreements",
+                "--accept-package-agreements",
             ],
-            Self::Choco => vec!["install".into(), "-y".into()],
+            Self::Choco => &["install", "-y"],
         };
-        args.extend(packages.iter().cloned());
-
-        match self {
-            Self::Winget => CommandSpec::new("winget", args),
-            Self::Choco => CommandSpec::new("choco", args),
-        }
+        CommandSpec::with_packages(self.name(), args, packages)
     }
 
     pub fn uninstall_spec(&self, packages: &[String]) -> CommandSpec {
-        let mut args: Vec<String> = match self {
-            Self::Winget => vec![
-                "uninstall".into(),
-                "--silent".into(),
-                "--accept-source-agreements".into(),
-            ],
-            Self::Choco => vec!["uninstall".into(), "-y".into()],
+        let args: &[&str] = match self {
+            Self::Winget => &["uninstall", "--silent", "--accept-source-agreements"],
+            Self::Choco => &["uninstall", "-y"],
         };
-        args.extend(packages.iter().cloned());
-
-        match self {
-            Self::Winget => CommandSpec::new("winget", args),
-            Self::Choco => CommandSpec::new("choco", args),
-        }
+        CommandSpec::with_packages(self.name(), args, packages)
     }
 
     pub fn reinstall_spec(&self, packages: &[String]) -> Result<CommandSpec, UpkgError> {
@@ -67,60 +53,42 @@ impl WindowsManager {
             Self::Winget => Err(UpkgError::Unsupported(
                 "reinstall is not supported by winget; uninstall and install instead",
             )),
-            Self::Choco => {
-                let mut args: Vec<String> = vec!["install".into(), "-y".into(), "--force".into()];
-                args.extend(packages.iter().cloned());
-                Ok(CommandSpec::new("choco", args))
-            }
+            Self::Choco => Ok(CommandSpec::with_packages(
+                self.name(),
+                &["install", "-y", "--force"],
+                packages,
+            )),
         }
     }
 
     pub fn upgrade_spec(&self, packages: &[String]) -> CommandSpec {
-        let mut args: Vec<String> = match self {
-            Self::Winget => vec![
-                "upgrade".into(),
-                "--silent".into(),
-                "--accept-source-agreements".into(),
-                "--accept-package-agreements".into(),
+        let args: &[&str] = match self {
+            Self::Winget => &[
+                "upgrade",
+                "--silent",
+                "--accept-source-agreements",
+                "--accept-package-agreements",
             ],
-            Self::Choco => vec!["upgrade".into(), "-y".into()],
+            Self::Choco => &["upgrade", "-y"],
         };
-        args.extend(packages.iter().cloned());
-
-        match self {
-            Self::Winget => CommandSpec::new("winget", args),
-            Self::Choco => CommandSpec::new("choco", args),
-        }
+        CommandSpec::with_packages(self.name(), args, packages)
     }
 
     pub fn search_spec(&self, query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
-        Ok(match self {
-            Self::Winget => {
-                let mut args = vec!["search".to_string()];
-                if exact {
-                    args.push("-e".to_string());
-                }
-                args.push(query.to_string());
-                CommandSpec::new("winget", args)
-            }
-            Self::Choco => {
-                let mut args = vec!["search".to_string(), query.to_string()];
-                if exact {
-                    args.push("-e".to_string());
-                }
-                CommandSpec::new("choco", args)
-            }
-        })
+        let args: &[&str] = match (self, exact) {
+            (Self::Winget, true) => &["search", "-e", query],
+            (Self::Choco, true) => &["search", query, "-e"],
+            (_, false) => &["search", query],
+        };
+        Ok(CommandSpec::with_packages(self.name(), args, &[]))
     }
 
     pub fn list_spec(&self) -> CommandSpec {
-        match self {
-            Self::Winget => CommandSpec::new("winget", vec!["list".to_string()]),
-            Self::Choco => CommandSpec::new(
-                "choco",
-                vec!["list".to_string(), "--local-only".to_string()],
-            ),
-        }
+        let args: &[&str] = match self {
+            Self::Winget => &["list"],
+            Self::Choco => &["list", "--local-only"],
+        };
+        CommandSpec::with_packages(self.name(), args, &[])
     }
 }
 

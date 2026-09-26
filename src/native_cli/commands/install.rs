@@ -47,14 +47,10 @@ pub async fn execute(
     let mut installed_count = 0usize;
 
     if package_kind == crate::api::PackageKindHint::Auto && !formula_names.is_empty() {
-        let targets = match installer.resolve_auto_install_targets(&formula_names).await {
-            Ok(targets) => targets,
-            Err(e) => {
-                let formula = failure_context_for_error(&e, &formula_names, &formulas);
-                explain_install_failure(&formula, &e);
-                return Err(e);
-            }
-        };
+        let targets = installer
+            .resolve_auto_install_targets(&formula_names)
+            .await
+            .map_err(|e| report_execute_error(e, &formula_names, &formulas))?;
 
         for (original, cask_name) in targets.casks {
             println!(
@@ -74,17 +70,10 @@ pub async fn execute(
         .collect();
 
     if !normalized_names.is_empty() {
-        let plan = match installer
+        let plan = installer
             .plan_with_options(&normalized_names, build_from_source)
             .await
-        {
-            Ok(p) => p,
-            Err(e) => {
-                let formula = failure_context_for_error(&e, &formula_names, &formulas);
-                explain_install_failure(&formula, &e);
-                return Err(e);
-            }
-        };
+            .map_err(|e| report_execute_error(e, &formula_names, &formulas))?;
 
         println!(
             "{} Resolving dependencies ({} packages)...",
@@ -139,6 +128,22 @@ pub async fn execute(
 
 type ProgressBars = Arc<Mutex<HashMap<String, ProgressBar>>>;
 
+fn set_message(
+    bars: &HashMap<String, ProgressBar>,
+    name: &str,
+    message: impl Into<std::borrow::Cow<'static, str>>,
+) {
+    if let Some(pb) = bars.get(name) {
+        pb.set_message(message);
+    }
+}
+
+fn spin(pb: &ProgressBar, style: &ProgressStyle, message: &'static str) {
+    pb.set_style(style.clone());
+    pb.set_message(message);
+    pb.enable_steady_tick(std::time::Duration::from_millis(80));
+}
+
 pub(crate) fn progress_bars() -> (ProgressBars, Arc<ProgressCallback>) {
     let multi = MultiProgress::new();
     let bars: Arc<Mutex<HashMap<String, ProgressBar>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -173,9 +178,7 @@ pub(crate) fn progress_bars() -> (ProgressBars, Arc<ProgressCallback>) {
                     pb
                 } else {
                     let pb = multi_clone.add(ProgressBar::new_spinner());
-                    pb.set_style(spinner_style_clone.clone());
-                    pb.set_message("downloading...");
-                    pb.enable_steady_tick(std::time::Duration::from_millis(80));
+                    spin(&pb, &spinner_style_clone, "downloading...");
                     pb
                 };
                 pb.set_prefix(name.clone());
@@ -197,35 +200,15 @@ pub(crate) fn progress_bars() -> (ProgressBars, Arc<ProgressCallback>) {
                     if total_bytes > 0 {
                         pb.set_position(total_bytes);
                     }
-                    pb.set_style(spinner_style_clone.clone());
-                    pb.set_message("unpacking...");
-                    pb.enable_steady_tick(std::time::Duration::from_millis(80));
+                    spin(pb, &spinner_style_clone, "unpacking...");
                 }
             }
-            InstallProgress::UnpackStarted { name } => {
-                if let Some(pb) = bars.get(&name) {
-                    pb.set_message("unpacking...");
-                }
-            }
-            InstallProgress::UnpackCompleted { name } => {
-                if let Some(pb) = bars.get(&name) {
-                    pb.set_message("unpacked");
-                }
-            }
-            InstallProgress::LinkStarted { name } => {
-                if let Some(pb) = bars.get(&name) {
-                    pb.set_message("linking...");
-                }
-            }
-            InstallProgress::LinkCompleted { name } => {
-                if let Some(pb) = bars.get(&name) {
-                    pb.set_message("linked");
-                }
-            }
+            InstallProgress::UnpackStarted { name } => set_message(&bars, &name, "unpacking..."),
+            InstallProgress::UnpackCompleted { name } => set_message(&bars, &name, "unpacked"),
+            InstallProgress::LinkStarted { name } => set_message(&bars, &name, "linking..."),
+            InstallProgress::LinkCompleted { name } => set_message(&bars, &name, "linked"),
             InstallProgress::LinkSkipped { name, reason } => {
-                if let Some(pb) = bars.get(&name) {
-                    pb.set_message(format!("keg-only ({})", reason));
-                }
+                set_message(&bars, &name, format!("keg-only ({reason})"))
             }
             InstallProgress::InstallCompleted { name } => {
                 if let Some(pb) = bars.get(&name) {

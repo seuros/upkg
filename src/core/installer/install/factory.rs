@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::path::Path;
 
+use crate::clock::unix_secs;
 use crate::core::cellar::link::Linker;
 use crate::core::cellar::materialize::Cellar;
 use crate::core::network::api::ApiClient;
@@ -104,7 +105,7 @@ fn backfill_state_db_if_empty(state_db: &StateDb, prefix: &Path) -> Result<(), E
         return Ok(());
     }
 
-    let installed_at = current_timestamp();
+    let installed_at = unix_secs();
     for keg in scan_installed(&prefix.join("Cellar"))? {
         state_db.record_installed(&InstalledPackage {
             kind: if is_cask_name(&keg.name) {
@@ -183,11 +184,4 @@ fn latest_cask_version(cask_path: &Path) -> Result<Option<String>, Error> {
     }
     versions.sort();
     Ok(versions.pop())
-}
-
-fn current_timestamp() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
