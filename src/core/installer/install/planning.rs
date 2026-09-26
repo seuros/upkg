@@ -104,42 +104,34 @@ impl Installer {
     }
 
     async fn fetch_formula_with_retry(&self, name: &str) -> Result<Formula, Error> {
-        use chrono_machines::ExponentialBackoff;
-        use chrono_machines::backoff::BackoffStrategy;
+        use chrono_machines::{AsyncRetryable, ExponentialBackoff};
 
+        const MAX_ATTEMPTS: u8 = 4;
         let backoff = ExponentialBackoff::new()
             .base_delay_ms(200)
             .multiplier(2.0)
             .max_delay_ms(5_000)
-            .max_attempts(4);
+            .max_attempts(MAX_ATTEMPTS);
 
-        let mut last_err = None;
-        for attempt in 0..backoff.max_attempts {
-            match self.api_client.get_formula(name).await {
-                Ok(f) => return Ok(f),
-                Err(Error::NetworkFailure { .. }) if attempt + 1 < backoff.max_attempts => {
-                    let delay_ms = {
-                        let mut rng = rand::rng();
-                        backoff.delay(attempt + 1, &mut rng).unwrap_or(1_000)
-                    };
-                    eprintln!(
-                        "    Network error fetching {name}, retrying in {delay_ms}ms (attempt {}/{})",
-                        attempt + 1,
-                        backoff.max_attempts
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                    last_err = None;
-                }
-                Err(e) => {
-                    last_err = Some(e);
-                    break;
-                }
-            }
-        }
-
-        Err(last_err.unwrap_or_else(|| Error::NetworkFailure {
-            message: format!("failed to fetch {name} after retries"),
-        }))
+        let label = name.to_owned();
+        (|| self.api_client.get_formula(name))
+            .retry_async(backoff)
+            .when(|e| matches!(e, Error::NetworkFailure { .. }))
+            .notify(move |ctx| {
+                eprintln!(
+                    "    Network error fetching {label}, retrying in {}ms (attempt {}/{MAX_ATTEMPTS})",
+                    ctx.next_delay_ms.unwrap_or_default(),
+                    ctx.attempt,
+                );
+            })
+            .call_async(|ms| tokio::time::sleep(std::time::Duration::from_millis(ms)))
+            .await
+            .map(|outcome| outcome.into_inner())
+            .map_err(|err| {
+                err.into_cause().unwrap_or_else(|| Error::NetworkFailure {
+                    message: format!("failed to fetch {name} after retries"),
+                })
+            })
     }
 
     async fn fetch_all_formulas(

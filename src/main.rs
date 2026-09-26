@@ -39,10 +39,10 @@ use error::UpkgError;
 fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
-        Err(UpkgError::Usage(message)) => {
+        Err(UpkgError::Usage { message, code }) => {
             // usage-rs already supplies the error prefix and help hint.
             eprint!("{message}");
-            ExitCode::from(1)
+            ExitCode::from(code)
         }
         Err(err) => {
             eprintln!("error: {err}");
@@ -52,7 +52,7 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<ExitCode, UpkgError> {
-    let cli = Cli::parse(std::env::args().skip(1))?;
+    let cli = Cli::parse(std::env::args_os().skip(1))?;
 
     match cli.command {
         CommandKind::Install {
@@ -77,12 +77,8 @@ fn run() -> Result<ExitCode, UpkgError> {
             kind,
             refresh,
         } => search(&query, exact, kind, refresh),
-        CommandKind::Help(text) => {
+        CommandKind::Print(text) => {
             print!("{text}");
-            Ok(ExitCode::SUCCESS)
-        }
-        CommandKind::Version => {
-            println!("upkg {}", env!("CARGO_PKG_VERSION"));
             Ok(ExitCode::SUCCESS)
         }
         CommandKind::SelfUpgrade { dry_run } => self_upgrade(dry_run),

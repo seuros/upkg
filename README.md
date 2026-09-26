@@ -138,6 +138,7 @@ upkg search ripgrep
 upkg search --app ghostty
 upkg search --exact git
 upkg --self-upgrade
+upkg completion zsh
 upkg help
 ```
 
@@ -150,7 +151,20 @@ Package commands and search retain flag-like positional values for compatibility
 Use `--` to treat all following tokens literally, including known options
 (for example, `upkg search -- --exact`). Help flags now display help instead
 of being treated as package names or search terms.
-Running `upkg` without a command prints help to stderr and exits with status 1.
+Running `upkg` without a command prints help to stderr and exits with status 2,
+as does any other usage error.
+
+### Shell completions
+
+`upkg completion <shell>` prints a completion script for bash, zsh, fish,
+powershell, elvish, or nu. The script asks the installed `upkg` binary for
+candidates, so it stays current across upgrades.
+
+```bash
+upkg completion zsh > "${fpath[1]}/_upkg"
+upkg completion fish > ~/.config/fish/completions/upkg.fish
+upkg completion bash > ~/.local/share/bash-completion/completions/upkg
+```
 
 ## Search
 

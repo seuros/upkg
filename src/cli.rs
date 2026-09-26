@@ -1,3 +1,5 @@
+use std::ffi::OsString;
+
 use crate::error::UpkgError;
 
 mod parser;
@@ -37,8 +39,7 @@ pub enum CommandKind {
         kind: PackageKind,
         refresh: bool,
     },
-    Help(String),
-    Version,
+    Print(String),
     SelfUpgrade {
         dry_run: bool,
     },
@@ -46,8 +47,12 @@ pub enum CommandKind {
 }
 
 impl Cli {
-    pub fn parse(args: impl Iterator<Item = String>) -> Result<Self, UpkgError> {
-        parser::parse(args)
+    pub fn parse<I>(args: I) -> Result<Self, UpkgError>
+    where
+        I: IntoIterator,
+        I::Item: Into<OsString>,
+    {
+        parser::parse(args.into_iter().map(Into::into))
     }
 }
 
@@ -105,17 +110,11 @@ mod tests {
     #[case(&["--self-upgrade", "--help"], "--dry-run")]
     fn generated_help(#[case] args: &[&str], #[case] expected: &str) {
         let cli = Cli::parse(args.iter().map(|arg| (*arg).to_owned())).unwrap();
-        let CommandKind::Help(text) = cli.command else {
+        let CommandKind::Print(text) = cli.command else {
             panic!("expected help");
         };
         assert!(text.contains(expected), "{text}");
         assert!(text.contains("upkg"), "{text}");
-    }
-
-    #[test]
-    fn short_version_flag() {
-        let cli = Cli::parse(["-V".to_owned()].into_iter()).unwrap();
-        assert!(matches!(cli.command, CommandKind::Version));
     }
 
     #[test]
@@ -308,17 +307,6 @@ mod tests {
                 assert!(!dry_run);
                 assert_eq!(kind, PackageKind::App);
             }
-            _ => panic!("unexpected command"),
-        }
-    }
-
-    #[test]
-    fn parse_version_flag() {
-        let cli = Cli::parse(["--version"].into_iter().map(str::to_string))
-            .expect("parse should succeed");
-
-        match cli.command {
-            CommandKind::Version => {}
             _ => panic!("unexpected command"),
         }
     }

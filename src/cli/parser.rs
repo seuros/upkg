@@ -1,7 +1,8 @@
-use std::ffi::OsStr;
+use std::ffi::OsString;
 
 use super::{Cli, CommandKind, PackageKind};
 use crate::error::UpkgError;
+use usage::embedded::Outcome;
 use usage_rs as usage;
 
 /// Unified package manager frontend
@@ -10,7 +11,13 @@ use usage_rs as usage;
     bin = "upkg",
     version = env!("CARGO_PKG_VERSION"),
     unknown_flags = "error",
-    after_help = "Examples:\n  upkg install curl git\n  upkg install --app ghostty\n  upkg upgrade --dry-run neovim\n  upkg search --exact git\n\nCompatibility: --self-upgrade is an alias for self-upgrade."
+    completion,
+    spec_endpoint = false,
+    example = "upkg install curl git",
+    example = "upkg install --app ghostty",
+    example = "upkg upgrade --dry-run neovim",
+    example = "upkg search --exact git",
+    after_help = "Compatibility: --self-upgrade is an alias for self-upgrade."
 )]
 struct Arguments {
     #[usage(subcommand)]
@@ -39,6 +46,12 @@ enum Commands {
     /// Diagnose the local package manager setup
     #[usage(alias = "doctor")]
     Shaman,
+    /// Print a shell completion script
+    #[usage(
+        example = "upkg completion zsh > \"${fpath[1]}/_upkg\"",
+        example = "upkg completion fish > ~/.config/fish/completions/upkg.fish"
+    )]
+    Completion(Completion),
 }
 
 #[derive(usage::Args)]
@@ -94,6 +107,38 @@ struct SelfUpgrade {
     dry_run: bool,
 }
 
+#[derive(usage::Args)]
+struct Completion {
+    /// Shell to generate the script for
+    #[usage(value_enum)]
+    shell: CompletionShell,
+}
+
+#[derive(usage::ValueEnum)]
+enum CompletionShell {
+    Bash,
+    Zsh,
+    Fish,
+    #[usage(name = "powershell", alias = "pwsh")]
+    PowerShell,
+    Elvish,
+    #[usage(alias = "nushell")]
+    Nu,
+}
+
+impl From<CompletionShell> for usage::complete::Shell {
+    fn from(shell: CompletionShell) -> Self {
+        match shell {
+            CompletionShell::Bash => Self::Bash,
+            CompletionShell::Zsh => Self::Zsh,
+            CompletionShell::Fish => Self::Fish,
+            CompletionShell::PowerShell => Self::PowerShell,
+            CompletionShell::Elvish => Self::Elvish,
+            CompletionShell::Nu => Self::Nu,
+        }
+    }
+}
+
 fn package_kind(app: bool) -> PackageKind {
     if app {
         PackageKind::App
@@ -102,55 +147,57 @@ fn package_kind(app: bool) -> PackageKind {
     }
 }
 
-pub(super) fn parse(args: impl Iterator<Item = String>) -> Result<Cli, UpkgError> {
-    let mut values: Vec<String> = args.collect();
+pub(super) fn parse(args: impl Iterator<Item = OsString>) -> Result<Cli, UpkgError> {
+    let mut argv: Vec<OsString> = args.collect();
     // Normalize only the command token, leaving package names and search terms untouched.
-    if let Some(first) = values.first_mut()
+    if let Some(first) = argv.first_mut()
         && first == "--self-upgrade"
     {
-        *first = "self-upgrade".to_owned();
+        *first = "self-upgrade".into();
     }
-    let argv: Vec<&OsStr> = values.iter().map(OsStr::new).collect();
-    let command = match Arguments::parse_from(&argv) {
-        Ok(arguments) => match arguments.command {
-            Commands::Install(args) => CommandKind::Install {
-                packages: args.packages,
-                dry_run: args.options.dry_run,
-                kind: package_kind(args.options.app),
-            },
-            Commands::Uninstall(args) => CommandKind::Uninstall {
-                packages: args.packages,
-                dry_run: args.options.dry_run,
-                kind: package_kind(args.options.app),
-            },
-            Commands::Upgrade(args) => CommandKind::Upgrade {
-                packages: args.packages,
-                dry_run: args.options.dry_run,
-                kind: package_kind(args.options.app),
-            },
-            Commands::List => CommandKind::List,
-            Commands::Search(args) => CommandKind::Search {
-                query: args.query.join(" "),
-                exact: args.exact,
-                kind: package_kind(args.app),
-                refresh: args.refresh,
-            },
-            Commands::SelfUpgrade(args) => CommandKind::SelfUpgrade {
-                dry_run: args.dry_run,
-            },
-            Commands::Shaman => CommandKind::Shaman,
+    let arguments = match Arguments::embedded_outcome(&argv) {
+        Outcome::Parsed(arguments) => arguments,
+        Outcome::Exit(exit) if exit.stderr => {
+            return Err(UpkgError::Usage {
+                message: exit.text,
+                code: u8::try_from(exit.code).unwrap_or(2),
+            });
+        }
+        Outcome::Exit(exit) => {
+            return Ok(Cli {
+                command: CommandKind::Print(exit.text),
+            });
+        }
+    };
+    let command = match arguments.command {
+        Commands::Install(args) => CommandKind::Install {
+            packages: args.packages,
+            dry_run: args.options.dry_run,
+            kind: package_kind(args.options.app),
         },
-        Err(usage::Error::Help { cmd, long }) => CommandKind::Help(
-            usage::help::render(Arguments::spec(), cmd, long)
-                .expect("help command belongs to the CLI spec"),
-        ),
-        Err(usage::Error::Version { .. }) => CommandKind::Version,
-        Err(error) => {
-            return Err(UpkgError::Usage(usage::render_failure_plain(
-                Arguments::spec(),
-                &argv,
-                &error,
-            )));
+        Commands::Uninstall(args) => CommandKind::Uninstall {
+            packages: args.packages,
+            dry_run: args.options.dry_run,
+            kind: package_kind(args.options.app),
+        },
+        Commands::Upgrade(args) => CommandKind::Upgrade {
+            packages: args.packages,
+            dry_run: args.options.dry_run,
+            kind: package_kind(args.options.app),
+        },
+        Commands::List => CommandKind::List,
+        Commands::Search(args) => CommandKind::Search {
+            query: args.query.join(" "),
+            exact: args.exact,
+            kind: package_kind(args.app),
+            refresh: args.refresh,
+        },
+        Commands::SelfUpgrade(args) => CommandKind::SelfUpgrade {
+            dry_run: args.dry_run,
+        },
+        Commands::Shaman => CommandKind::Shaman,
+        Commands::Completion(args) => {
+            CommandKind::Print(Arguments::completion_script(args.shell.into()))
         }
     };
     Ok(Cli { command })

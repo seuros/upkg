@@ -51,7 +51,7 @@ fn invalid_input_uses_stderr_and_fails() {
             .args(&args)
             .output()
             .unwrap();
-        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
         assert!(output.stdout.is_empty(), "{output:?}");
         let text = String::from_utf8(output.stderr).unwrap();
         if args.is_empty() {
