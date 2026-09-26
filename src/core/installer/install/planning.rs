@@ -45,6 +45,22 @@ impl Installer {
             {
                 continue;
             }
+            // Upgrading a dependency nobody asked for is only worth it when a
+            // bottle exists. Building it from source instead would make an
+            // unrelated install depend on that build, so keep what works.
+            if !build_from_source
+                && !names.contains(&install_name)
+                && !force.contains(&install_name)
+                && select_bottle(&formula).is_err()
+                && let Some(installed) = find_installed(self.cellar.root_dir(), &install_name)
+            {
+                eprintln!(
+                    "    Keeping {install_name} {} (no bottle for {} on this platform)",
+                    installed.version,
+                    formula.effective_version()
+                );
+                continue;
+            }
             let method = if build_from_source {
                 match BuildPlan::from_formula(&formula, &self.prefix) {
                     Some(plan) => InstallMethod::Source(plan),
@@ -185,6 +201,15 @@ impl Installer {
             for (i, result) in results.into_iter().enumerate() {
                 let formula = match result {
                     Ok(f) => f,
+                    // An installed dependency still satisfies the install even
+                    // when its current formula can't be read.
+                    Err(e @ (Error::UnsupportedFormula { .. } | Error::MissingFormula { .. }))
+                        if !names.contains(&batch[i])
+                            && find_installed(self.cellar.root_dir(), &batch[i]).is_some() =>
+                    {
+                        eprintln!("    Keeping installed {} ({e})", batch[i]);
+                        continue;
+                    }
                     Err(e) => return Err(e),
                 };
 
