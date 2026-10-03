@@ -201,6 +201,6 @@ async fn reinstall_requires_an_installed_package() {
         .await
         .unwrap_err();
 
-    assert!(matches!(err, Error::NotInstalled { ref name } if name == "testpkg"));
+    assert_matches!(err, Error::NotInstalled { ref name } if name == "testpkg");
     assert!(!tmp.path().join("upkg/Cellar/testpkg").exists());
 }

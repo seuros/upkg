@@ -92,6 +92,7 @@ impl AndroidManager {
 mod tests {
     use super::*;
     use rstest::rstest;
+    use std::assert_matches;
 
     #[rstest]
     #[case(AndroidManager::Pkg, "pkg")]
@@ -161,7 +162,7 @@ mod tests {
     #[case(AndroidManager::Apt)]
     fn search_spec_rejects_exact(#[case] manager: AndroidManager) {
         let err = manager.search_spec("git", true).expect_err("should reject");
-        assert!(matches!(err, UpkgError::Unsupported(_)));
+        assert_matches!(err, UpkgError::Unsupported(_));
     }
 
     #[test]

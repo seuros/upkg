@@ -291,7 +291,7 @@ async fn uninstalling_non_installed_tap_ref_does_not_remove_core_formula() {
     assert!(installer.is_installed("terraform"));
 
     let err = installer.uninstall("hashicorp/tap/terraform").unwrap_err();
-    assert!(matches!(err, Error::NotInstalled { .. }));
+    assert_matches!(err, Error::NotInstalled { .. });
     assert!(installer.is_installed("terraform"));
 }
 
@@ -408,10 +408,7 @@ async fn requested_formula_without_a_bottle_is_still_planned_from_source() {
     let installer = new_test_context(ApiClient::with_base_url(server.uri()), &tmp).installer;
     let plan = installer.plan(&["deplib".to_string()]).await.unwrap();
     assert_eq!(plan.items.len(), 1);
-    assert!(matches!(
-        plan.items[0].method,
-        crate::types::InstallMethod::Source(_)
-    ));
+    assert_matches!(plan.items[0].method, crate::types::InstallMethod::Source(_));
 }
 
 #[tokio::test]

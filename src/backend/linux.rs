@@ -3,6 +3,7 @@ use std::fs;
 use crate::backend::{CommandSpec, command_exists};
 use crate::error::UpkgError;
 
+#[derive(Debug)]
 pub enum LinuxManager {
     Apt,
     Dnf,
@@ -178,6 +179,7 @@ impl LinuxManager {
 mod tests {
     use super::*;
     use rstest::rstest;
+    use std::assert_matches;
 
     // Test helper that parses content directly instead of reading /etc/os-release
     fn detect_with_os_release(content: &str) -> Result<LinuxManager, UpkgError> {
@@ -236,7 +238,7 @@ mod tests {
     fn detect_unsupported_distro() {
         let result = detect_with_os_release("ID=unknown\n");
         assert!(result.is_err());
-        assert!(matches!(result, Err(UpkgError::Unsupported(_))));
+        assert_matches!(result, Err(UpkgError::Unsupported(_)));
     }
 
     #[rstest]
@@ -336,7 +338,7 @@ mod tests {
     #[case(LinuxManager::Zypper)]
     fn search_spec_rejects_exact_on_unsupported_managers(#[case] manager: LinuxManager) {
         let err = manager.search_spec("git", true).expect_err("should reject");
-        assert!(matches!(err, UpkgError::Unsupported(_)));
+        assert_matches!(err, UpkgError::Unsupported(_));
     }
 
     #[test]

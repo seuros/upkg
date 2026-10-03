@@ -586,6 +586,7 @@ fn basename(path: &str) -> Result<String, Error> {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     #[test]
     fn resolve_cask_uses_platform_variation_url_and_sha() {
@@ -902,7 +903,7 @@ mod tests {
         });
 
         let err = resolve_cask("test", &cask).unwrap_err();
-        assert!(matches!(err, Error::InvalidArgument { .. }));
+        assert_matches!(err, Error::InvalidArgument { .. });
     }
 
     #[test]
@@ -915,7 +916,7 @@ mod tests {
         });
 
         let err = resolve_cask("test", &cask).unwrap_err();
-        assert!(matches!(err, Error::InvalidArgument { .. }));
+        assert_matches!(err, Error::InvalidArgument { .. });
     }
 
     #[test]
@@ -928,6 +929,6 @@ mod tests {
         });
 
         let err = resolve_cask("test", &cask).unwrap_err();
-        assert!(matches!(err, Error::InvalidArgument { .. }));
+        assert_matches!(err, Error::InvalidArgument { .. });
     }
 }

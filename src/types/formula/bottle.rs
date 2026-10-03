@@ -238,6 +238,7 @@ fn select_bottle_with_codename(
 mod tests {
     use super::*;
     use crate::formula::types::{Bottle, BottleFile, BottleStable, KegOnly, Versions};
+    use std::assert_matches;
     use std::collections::BTreeMap;
 
     #[test]
@@ -256,10 +257,10 @@ mod tests {
             let selected = select_bottle(&formula).unwrap();
             assert_eq!(selected.tag, "all");
         } else {
-            assert!(matches!(
+            assert_matches!(
                 select_bottle(&formula),
                 Err(Error::UnsupportedBottle { name }) if name == formula.name
-            ));
+            );
         }
     }
 
@@ -334,10 +335,10 @@ mod tests {
         };
 
         let err = select_bottle(&formula).unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             err,
             Error::UnsupportedBottle { name } if name == "legacy"
-        ));
+        );
     }
 
     #[test]
@@ -374,10 +375,10 @@ mod tests {
         };
 
         let err = select_bottle(&formula).unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             err,
             Error::UnsupportedBottle { name } if name == "legacy"
-        ));
+        );
     }
 
     #[test]

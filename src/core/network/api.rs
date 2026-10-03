@@ -737,6 +737,7 @@ impl Default for ApiClient {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+    use std::assert_matches;
     use tempfile::tempdir;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -827,10 +828,10 @@ mod tests {
         let client = ApiClient::with_base_url(mock_server.uri());
         let err = client.get_formula("nonexistent").await.unwrap_err();
 
-        assert!(matches!(
+        assert_matches!(
             err,
             Error::MissingFormula { name } if name == "nonexistent"
-        ));
+        );
     }
 
     #[tokio::test]
@@ -1266,10 +1267,10 @@ end
             .await
             .unwrap_err();
 
-        assert!(matches!(
+        assert_matches!(
             err,
             Error::MissingFormula { name } if name == "hashicorp/tap/terraform"
-        ));
+        );
     }
 
     #[tokio::test]
@@ -1289,7 +1290,7 @@ end
             .await
             .unwrap_err();
 
-        assert!(matches!(err, Error::NetworkFailure { .. }));
+        assert_matches!(err, Error::NetworkFailure { .. });
     }
 
     #[tokio::test]
@@ -1342,7 +1343,7 @@ end
             .await
             .unwrap_err();
 
-        assert!(matches!(err, Error::ChecksumMismatch { .. }));
+        assert_matches!(err, Error::ChecksumMismatch { .. });
     }
 
     #[tokio::test]
@@ -1373,7 +1374,7 @@ end
             .await
             .unwrap_err();
 
-        assert!(matches!(err, Error::ChecksumMismatch { .. }));
+        assert_matches!(err, Error::ChecksumMismatch { .. });
     }
 
     #[tokio::test]
@@ -1599,7 +1600,7 @@ end
             .await
             .unwrap_err();
 
-        assert!(matches!(err, Error::NetworkFailure { .. }));
+        assert_matches!(err, Error::NetworkFailure { .. });
     }
 
     #[tokio::test]

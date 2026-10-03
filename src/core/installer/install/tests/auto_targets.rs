@@ -153,7 +153,7 @@ async fn auto_targets_report_original_missing_formula_when_cask_is_missing() {
         .await
         .unwrap_err();
 
-    assert!(matches!(err, Error::MissingFormula { name } if name == "ghostty"));
+    assert_matches!(err, Error::MissingFormula { name } if name == "ghostty");
 }
 
 #[tokio::test]

@@ -219,6 +219,7 @@ fn copy_dir_copy_only(src: &Path, dst: &Path) -> Result<(), Error> {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+    use std::assert_matches;
     use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
 
@@ -293,7 +294,7 @@ mod tests {
             .materialize("foo", "1.2.3", &store_entry)
             .unwrap_err();
 
-        assert!(matches!(err, Error::StoreCorruption { .. }));
+        assert_matches!(err, Error::StoreCorruption { .. });
         assert!(!cellar.keg_path("foo", "1.2.3").exists());
     }
 

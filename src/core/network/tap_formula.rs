@@ -568,6 +568,7 @@ fn build_bottle_url(
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     #[test]
     fn parses_tap_formula_reference() {
@@ -804,11 +805,11 @@ end
         };
 
         let err = parse_tap_formula_ruby(&spec, source).unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             err,
             Error::UnsupportedFormula { reason, .. }
             if reason.contains("missing sha256")
-        ));
+        );
     }
 
     #[test]
@@ -831,11 +832,11 @@ end
         };
 
         let err = parse_tap_formula_ruby(&spec, source).unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             err,
             Error::UnsupportedFormula { reason, .. }
             if reason.contains("missing sha256")
-        ));
+        );
     }
 
     #[test]
@@ -918,6 +919,6 @@ end
         };
 
         let err = parse_tap_formula_ruby(&spec, source).unwrap_err();
-        assert!(matches!(err, Error::UnsupportedFormula { .. }));
+        assert_matches!(err, Error::UnsupportedFormula { .. });
     }
 }

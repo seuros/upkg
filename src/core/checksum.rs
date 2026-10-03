@@ -61,6 +61,7 @@ fn normalize_sha256(input: &str) -> Result<String, Error> {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     #[test]
     fn skips_verification_when_none() {
@@ -82,19 +83,19 @@ mod tests {
     #[test]
     fn rejects_invalid_length() {
         let err = verify_sha256_bytes(b"hello", Some("abc")).unwrap_err();
-        assert!(matches!(err, Error::InvalidArgument { .. }));
+        assert_matches!(err, Error::InvalidArgument { .. });
     }
 
     #[test]
     fn rejects_non_hex() {
         let bad = format!("{}{}", "a".repeat(63), "z");
         let err = verify_sha256_bytes(b"hello", Some(&bad)).unwrap_err();
-        assert!(matches!(err, Error::InvalidArgument { .. }));
+        assert_matches!(err, Error::InvalidArgument { .. });
     }
 
     #[test]
     fn rejects_mismatch() {
         let err = verify_sha256_bytes(b"hello", Some(&"0".repeat(64))).unwrap_err();
-        assert!(matches!(err, Error::ChecksumMismatch { .. }));
+        assert_matches!(err, Error::ChecksumMismatch { .. });
     }
 }

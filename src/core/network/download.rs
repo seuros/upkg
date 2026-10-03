@@ -1243,6 +1243,7 @@ impl ParallelDownloader {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+    use std::assert_matches;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tempfile::TempDir;
@@ -1300,7 +1301,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, Error::ChecksumMismatch { .. }));
+        assert_matches!(err, Error::ChecksumMismatch { .. });
 
         let blob_path = tmp
             .path()

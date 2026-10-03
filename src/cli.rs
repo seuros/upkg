@@ -59,6 +59,7 @@ impl Cli {
 mod tests {
     use super::*;
     use rstest::rstest;
+    use std::assert_matches;
 
     #[rstest]
     #[case(&["i", "git"], "install")]
@@ -272,18 +273,18 @@ mod tests {
         let cli =
             Cli::parse(["list"].into_iter().map(str::to_string)).expect("parse should succeed");
 
-        assert!(matches!(cli.command, CommandKind::List));
+        assert_matches!(cli.command, CommandKind::List);
     }
 
     #[test]
     fn parse_shaman_and_doctor_alias() {
         let doctor =
             Cli::parse(["doctor"].into_iter().map(str::to_string)).expect("parse should succeed");
-        assert!(matches!(doctor.command, CommandKind::Shaman));
+        assert_matches!(doctor.command, CommandKind::Shaman);
 
         let shaman =
             Cli::parse(["shaman"].into_iter().map(str::to_string)).expect("parse should succeed");
-        assert!(matches!(shaman.command, CommandKind::Shaman));
+        assert_matches!(shaman.command, CommandKind::Shaman);
     }
 
     #[test]

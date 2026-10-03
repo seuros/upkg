@@ -312,6 +312,7 @@ pub struct DepInfo {
 mod tests {
     use super::*;
     use crate::types::BuildSystem;
+    use std::assert_matches;
 
     fn test_build_plan(prefix: &Path) -> BuildPlan {
         let cellar_path = prefix.join("Cellar").join("foo").join("1.0.0");
@@ -347,7 +348,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(err, Error::UnsupportedFormula { .. }), "{err:?}");
+        assert_matches!(err, Error::UnsupportedFormula { .. }, "{err:?}");
         assert!(!plan.cellar_path.exists());
         assert!(!tmp.path().join("cache/build/foo").exists());
     }

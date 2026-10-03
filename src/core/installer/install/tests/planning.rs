@@ -36,10 +36,7 @@ async fn plan_falls_back_to_source_when_no_bottle() {
 
     assert_eq!(plan.items.len(), 1);
     assert_eq!(plan.items[0].formula.name, "nobottle");
-    assert!(matches!(
-        plan.items[0].method,
-        crate::types::InstallMethod::Source(_)
-    ));
+    assert_matches!(plan.items[0].method, crate::types::InstallMethod::Source(_));
 
     if let crate::types::InstallMethod::Source(ref bp) = plan.items[0].method {
         assert_eq!(bp.source_url, "https://example.com/nobottle-1.0.0.tar.gz");
@@ -95,10 +92,7 @@ async fn plan_prefers_bottle_over_source() {
     let plan = installer.plan(&["hasboth".to_string()]).await.unwrap();
 
     assert_eq!(plan.items.len(), 1);
-    assert!(matches!(
-        plan.items[0].method,
-        crate::types::InstallMethod::Bottle(_)
-    ));
+    assert_matches!(plan.items[0].method, crate::types::InstallMethod::Bottle(_));
 }
 
 #[tokio::test]
@@ -183,8 +177,8 @@ async fn plan_errors_when_no_bottle_and_no_source() {
 
     let result = installer.plan(&["nothing".to_string()]).await;
     assert!(result.is_err());
-    assert!(matches!(
+    assert_matches!(
         result.unwrap_err(),
         crate::types::Error::MissingFormula { .. }
-    ));
+    );
 }

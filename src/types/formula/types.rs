@@ -164,6 +164,7 @@ pub struct BottleFile {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     #[test]
     fn deserialize_formula_fixtures() {
@@ -251,8 +252,9 @@ mod tests {
             }}}
         }"#;
         let formula: Formula = serde_json::from_str(json).unwrap();
-        assert!(
-            matches!(formula.keg_only, KegOnly::Reason(ref s) if s == "it conflicts with PostgreSQL")
+        assert_matches!(
+            formula.keg_only,
+            KegOnly::Reason(ref s) if s == "it conflicts with PostgreSQL"
         );
         assert!(formula.is_keg_only());
     }

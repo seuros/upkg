@@ -1,5 +1,6 @@
 use super::cask_ops::write_json_pretty;
 use super::*;
+use std::assert_matches;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;

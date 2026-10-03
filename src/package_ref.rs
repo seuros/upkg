@@ -62,6 +62,7 @@ pub fn cask_name(token: &str) -> String {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     #[test]
     fn normalize_core_tap_formula() {
@@ -95,6 +96,6 @@ mod tests {
     #[test]
     fn normalize_app_name_rejects_non_cask_tap() {
         let err = normalize_app_name("hashicorp/tap/terraform").unwrap_err();
-        assert!(matches!(err, Error::InvalidArgument { .. }));
+        assert_matches!(err, Error::InvalidArgument { .. });
     }
 }

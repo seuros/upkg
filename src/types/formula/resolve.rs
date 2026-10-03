@@ -111,6 +111,7 @@ fn build_graph(
 mod tests {
     use super::*;
     use crate::formula::types::{Bottle, BottleFile, BottleStable, KegOnly, Versions};
+    use std::assert_matches;
     use std::collections::BTreeMap;
 
     fn formula(name: &str, deps: &[&str]) -> Formula {
@@ -175,7 +176,7 @@ mod tests {
         formulas.insert("gamma".to_string(), formula("gamma", &["alpha"]));
 
         let err = resolve_closure(&["alpha".to_string()], &formulas).unwrap_err();
-        assert!(matches!(err, Error::DependencyCycle { .. }));
+        assert_matches!(err, Error::DependencyCycle { .. });
     }
 
     #[test]
