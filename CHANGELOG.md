@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.0](https://github.com/seuros/upkg/compare/upkg-v0.14.0...upkg-v0.15.0) (2026-10-06)
+
+
+### Features
+
+* **backend:** apk backend, run as root or via doas, apt update on fresh images ([8bc3711](https://github.com/seuros/upkg/commit/8bc3711e4a3a01394e95c380084e9522cdfb65f9))
+* **release:** aarch64-musl and FreeBSD binaries; install.sh FreeBSD, wget/fetch, doas ([3b1a53c](https://github.com/seuros/upkg/commit/3b1a53cf881e88c7d96acc585c416bad089d4b3e))
+
 ## [0.14.0](https://github.com/seuros/upkg/compare/upkg-v0.13.0...upkg-v0.14.0) (2026-09-26)
 
 
