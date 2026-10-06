@@ -334,6 +334,14 @@ fn release_target() -> Option<ReleaseTarget> {
         });
     }
 
+    #[cfg(all(target_os = "linux", target_arch = "aarch64", target_env = "musl"))]
+    {
+        return Some(ReleaseTarget {
+            triple: "aarch64-unknown-linux-musl",
+            archive: ArchiveKind::TarGz,
+        });
+    }
+
     #[allow(unreachable_code)]
     None
 }

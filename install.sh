@@ -6,7 +6,6 @@ INSTALL_DIR="${UPKG_INSTALL_DIR:-/usr/local/bin}"
 BINARY="upkg"
 
 main() {
-    need_cmd curl
     need_cmd tar
     need_cmd uname
 
@@ -22,10 +21,14 @@ main() {
             esac
             # prefer musl on alpine/containers
             if [ -f /etc/alpine-release ] || ! ldd --version >/dev/null 2>&1; then
-                case "$arch" in
-                    x86_64|amd64) target="x86_64-unknown-linux-musl" ;;
-                esac
+                target="${target%-gnu}-musl"
             fi
+            ;;
+        FreeBSD)
+            case "$arch" in
+                x86_64|amd64) target="x86_64-unknown-freebsd" ;;
+                *) err "unsupported architecture: $arch" ;;
+            esac
             ;;
         Darwin)
             case "$arch" in
@@ -34,12 +37,12 @@ main() {
                 *) err "unsupported architecture: $arch" ;;
             esac
             ;;
-        *) err "unsupported OS: $os (supported: Linux, macOS)" ;;
+        *) err "unsupported OS: $os (supported: Linux, macOS, FreeBSD)" ;;
     esac
 
     say "detected target: $target"
 
-    tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+    tag="$(download "https://api.github.com/repos/${REPO}/releases/latest" - \
         | grep '"tag_name"' | head -1 | cut -d'"' -f4)"
     [ -z "$tag" ] && err "failed to fetch latest release tag"
 
@@ -53,7 +56,7 @@ main() {
     trap 'rm -rf "$tmpdir"' EXIT
 
     say "downloading $url"
-    curl -fSL --progress-bar -o "$tmpdir/$archive" "$url"
+    download "$url" "$tmpdir/$archive"
 
     say "extracting to $INSTALL_DIR"
     tar xzf "$tmpdir/$archive" -C "$tmpdir"
@@ -63,7 +66,7 @@ main() {
             :
         else
             say "elevated permissions required to create $INSTALL_DIR"
-            sudo mkdir -p "$INSTALL_DIR"
+            as_root mkdir -p "$INSTALL_DIR"
         fi
     fi
 
@@ -71,7 +74,7 @@ main() {
         install -m 755 "$tmpdir/$BINARY" "$INSTALL_DIR/$BINARY"
     else
         say "elevated permissions required to install to $INSTALL_DIR"
-        sudo install -m 755 "$tmpdir/$BINARY" "$INSTALL_DIR/$BINARY"
+        as_root install -m 755 "$tmpdir/$BINARY" "$INSTALL_DIR/$BINARY"
     fi
 
     say "installed $BINARY $version to $INSTALL_DIR/$BINARY"
@@ -85,6 +88,32 @@ main() {
 need_cmd() {
     if ! command -v "$1" >/dev/null 2>&1; then
         err "required command not found: $1"
+    fi
+}
+
+# download URL FILE; FILE "-" writes to stdout. FreeBSD ships fetch, not curl.
+download() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -o "$2" "$1"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "$2" "$1"
+    elif command -v fetch >/dev/null 2>&1; then
+        fetch -q -o "$2" "$1"
+    else
+        err "required command not found: curl, wget or fetch"
+    fi
+}
+
+# Runs a command as root: directly when already root, else sudo, else doas.
+as_root() {
+    if [ "$(id -u)" = "0" ]; then
+        "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$@"
+    elif command -v doas >/dev/null 2>&1; then
+        doas "$@"
+    else
+        err "root required for: $*; install sudo or doas, or set UPKG_INSTALL_DIR"
     fi
 }
 

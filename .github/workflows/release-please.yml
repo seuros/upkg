@@ -40,6 +40,14 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
             archive: tar.gz
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            archive: tar.gz
+          # No FreeBSD runner exists; cross brings the sysroot and linker.
+          - target: x86_64-unknown-freebsd
+            os: ubuntu-latest
+            archive: tar.gz
+            cross: true
           - target: x86_64-apple-darwin
             os: macos-15-intel
             archive: tar.gz
@@ -61,16 +69,32 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install musl tools
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+        if: endsWith(matrix.target, '-linux-musl')
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --locked
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p upkg
+        shell: bash
+        env:
+          # cc-rs would look for aarch64-linux-musl-gcc; on the arm64 runner the
+          # native musl wrapper is the right compiler.
+          CC_aarch64_unknown_linux_musl: musl-gcc
+        run: |
+          if [ "${{ matrix.cross || false }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} -p upkg
+          else
+            cargo build --release --target ${{ matrix.target }} -p upkg
+          fi
 
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'
