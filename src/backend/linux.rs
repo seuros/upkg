@@ -1,7 +1,12 @@
+use std::ffi::OsString;
 use std::fs;
+use std::path::Path;
 
 use crate::backend::{CommandSpec, command_exists};
 use crate::error::UpkgError;
+
+/// Where apt keeps downloaded package lists; container images ship it empty.
+const APT_LISTS: &str = "/var/lib/apt/lists";
 
 #[derive(Debug)]
 pub enum LinuxManager {
@@ -11,6 +16,7 @@ pub enum LinuxManager {
     Pacman,
     Zypper,
     Opkg,
+    Apk,
 }
 
 fn reject_exact_if(exact: bool, manager: &'static str) -> Result<(), UpkgError> {
@@ -50,7 +56,11 @@ fn anchor_if_exact(query: &str, exact: bool) -> String {
 
 pub fn detect() -> Result<LinuxManager, UpkgError> {
     let os_release = fs::read_to_string("/etc/os-release")?;
+    detect_from(&os_release, command_exists("dnf"))
+}
 
+/// The manager for an `/etc/os-release`; `has_dnf` picks dnf over yum.
+fn detect_from(os_release: &str, has_dnf: bool) -> Result<LinuxManager, UpkgError> {
     if os_release.contains("ID=ubuntu")
         || os_release.contains("ID=debian")
         || os_release.contains("ID_LIKE=debian")
@@ -63,7 +73,7 @@ pub fn detect() -> Result<LinuxManager, UpkgError> {
         || os_release.contains("ID=centos")
         || os_release.contains("ID_LIKE=\"rhel fedora\"")
     {
-        if command_exists("dnf") {
+        if has_dnf {
             return Ok(LinuxManager::Dnf);
         }
         return Ok(LinuxManager::Yum);
@@ -81,7 +91,24 @@ pub fn detect() -> Result<LinuxManager, UpkgError> {
         return Ok(LinuxManager::Opkg);
     }
 
+    if os_release.contains("ID=alpine") || os_release.contains("ID_LIKE=alpine") {
+        return Ok(LinuxManager::Apk);
+    }
+
     Err(UpkgError::Unsupported("unsupported Linux distribution"))
+}
+
+/// Whether apt has fetched package lists at least once.
+fn has_package_lists(dir: &Path) -> bool {
+    fs::read_dir(dir)
+        .is_ok_and(|entries| lists_packages(entries.flatten().map(|entry| entry.file_name())))
+}
+
+/// apt names lists `<repo>_Packages`, plus `.lz4`/`.gz` when compressed.
+fn lists_packages(names: impl IntoIterator<Item = OsString>) -> bool {
+    names
+        .into_iter()
+        .any(|name| name.to_string_lossy().contains("_Packages"))
 }
 
 impl LinuxManager {
@@ -93,6 +120,7 @@ impl LinuxManager {
             Self::Pacman => "pacman",
             Self::Zypper => "zypper",
             Self::Opkg => "opkg",
+            Self::Apk => "apk",
         }
     }
 
@@ -109,8 +137,21 @@ impl LinuxManager {
             Self::Pacman => &["-S", "--noconfirm"],
             Self::Zypper => &["--non-interactive", "install"],
             Self::Opkg => &["install"],
+            // Alpine images ship without an index; fetch it on every install.
+            Self::Apk => &["add", "--update-cache"],
         };
         self.spec(args, packages)
+    }
+
+    /// `apt update` when no package lists were ever fetched. Other managers
+    /// refresh as part of the install (apk) or need no index.
+    pub fn refresh_spec(&self) -> Option<CommandSpec> {
+        match self {
+            Self::Apt if !has_package_lists(Path::new(APT_LISTS)) => {
+                Some(self.spec(&["update"], &[]))
+            }
+            _ => None,
+        }
     }
 
     pub fn uninstall_spec(&self, packages: &[String]) -> CommandSpec {
@@ -119,6 +160,7 @@ impl LinuxManager {
             Self::Pacman => &["-R", "--noconfirm"],
             Self::Zypper => &["--non-interactive", "remove"],
             Self::Opkg => &["remove"],
+            Self::Apk => &["del"],
         };
         self.spec(args, packages)
     }
@@ -131,6 +173,7 @@ impl LinuxManager {
             Self::Pacman => &["-S", "--noconfirm"],
             Self::Zypper => &["--non-interactive", "install", "--force"],
             Self::Opkg => &["install", "--force-reinstall"],
+            Self::Apk => &["fix", "--reinstall"],
         };
         self.spec(args, packages)
     }
@@ -145,6 +188,8 @@ impl LinuxManager {
             Self::Pacman => &["-S", "--noconfirm"],
             Self::Zypper => &["--non-interactive", "update"],
             Self::Opkg => &["upgrade"],
+            Self::Apk if packages.is_empty() => &["upgrade", "--update-cache"],
+            Self::Apk => &["add", "--update-cache", "--upgrade"],
         };
         self.spec(args, packages)
     }
@@ -153,6 +198,11 @@ impl LinuxManager {
         let args = match self {
             Self::Pacman => vec!["-Ss".to_string(), anchor_if_exact(query, exact)],
             Self::Opkg => vec!["find".to_string(), anchor_if_exact(query, exact)],
+            Self::Apk if exact => vec![
+                "search".to_string(),
+                "--exact".to_string(),
+                query.to_string(),
+            ],
             _ => {
                 reject_exact_if(exact, self.name())?;
                 vec!["search".to_string(), query.to_string()]
@@ -171,6 +221,7 @@ impl LinuxManager {
                 CommandSpec::new("zypper", vec!["se".into(), "--installed-only".into()])
             }
             Self::Opkg => CommandSpec::new("opkg", vec!["list-installed".into()]),
+            Self::Apk => CommandSpec::new("apk", vec!["info".into()]),
         }
     }
 }
@@ -180,39 +231,6 @@ mod tests {
     use super::*;
     use rstest::rstest;
     use std::assert_matches;
-
-    // Test helper that parses content directly instead of reading /etc/os-release
-    fn detect_with_os_release(content: &str) -> Result<LinuxManager, UpkgError> {
-        if content.contains("ID=ubuntu")
-            || content.contains("ID=debian")
-            || content.contains("ID_LIKE=debian")
-        {
-            return Ok(LinuxManager::Apt);
-        }
-
-        if content.contains("ID=fedora")
-            || content.contains("ID=rhel")
-            || content.contains("ID=centos")
-            || content.contains("ID_LIKE=\"rhel fedora\"")
-        {
-            // In tests, assume dnf is available for simplicity
-            return Ok(LinuxManager::Dnf);
-        }
-
-        if content.contains("ID=arch") || content.contains("ID_LIKE=arch") {
-            return Ok(LinuxManager::Pacman);
-        }
-
-        if content.contains("ID=opensuse") || content.contains("ID_LIKE=suse") {
-            return Ok(LinuxManager::Zypper);
-        }
-
-        if content.contains("ID=openwrt") || content.contains("ID_LIKE=openwrt") {
-            return Ok(LinuxManager::Opkg);
-        }
-
-        Err(UpkgError::Unsupported("unsupported Linux distribution"))
-    }
 
     #[rstest]
     #[case("ID=ubuntu\n", "apt", "ubuntu")]
@@ -225,20 +243,53 @@ mod tests {
     #[case("ID=manjaro\nID_LIKE=arch\n", "pacman", "arch-like")]
     #[case("ID=opensuse\n", "zypper", "opensuse")]
     #[case("ID=openwrt\n", "opkg", "openwrt")]
+    #[case("ID=alpine\n", "apk", "alpine")]
+    #[case("ID=postmarketos\nID_LIKE=alpine\n", "apk", "alpine-like")]
     fn detect_distro_from_os_release(
         #[case] os_release: &str,
         #[case] expected_manager: &str,
         #[case] _description: &str,
     ) {
-        let manager = detect_with_os_release(os_release).unwrap();
+        let manager = detect_from(os_release, true).unwrap();
         assert_eq!(manager.name(), expected_manager);
     }
 
     #[test]
+    fn detect_falls_back_to_yum_without_dnf() {
+        let manager = detect_from("ID=centos\n", false).unwrap();
+        assert_matches!(manager, LinuxManager::Yum);
+    }
+
+    #[test]
     fn detect_unsupported_distro() {
-        let result = detect_with_os_release("ID=unknown\n");
+        let result = detect_from("ID=unknown\n", true);
         assert!(result.is_err());
         assert_matches!(result, Err(UpkgError::Unsupported(_)));
+    }
+
+    #[test]
+    fn package_lists_need_a_packages_file() {
+        let empty = ["lock", "partial", "auxfiles"].map(OsString::from);
+        assert!(!lists_packages(empty));
+
+        let fetched = [
+            "lock",
+            "deb.debian.org_debian_dists_bookworm_main_binary-arm64_Packages.lz4",
+        ]
+        .map(OsString::from);
+        assert!(lists_packages(fetched));
+    }
+
+    #[test]
+    fn missing_lists_dir_has_no_package_lists() {
+        assert!(!has_package_lists(Path::new("/nonexistent/upkg/apt/lists")));
+    }
+
+    #[test]
+    fn only_apt_needs_a_refresh() {
+        for manager in [LinuxManager::Dnf, LinuxManager::Pacman, LinuxManager::Apk] {
+            assert!(manager.refresh_spec().is_none(), "{manager:?}");
+        }
     }
 
     #[rstest]
@@ -248,6 +299,7 @@ mod tests {
     #[case(LinuxManager::Pacman, vec!["vim".into()], "sudo", vec!["pacman", "-S", "--noconfirm", "vim"])]
     #[case(LinuxManager::Zypper, vec!["gcc".into()], "sudo", vec!["zypper", "--non-interactive", "install", "gcc"])]
     #[case(LinuxManager::Opkg, vec!["ca-certificates".into()], "opkg", vec!["install", "ca-certificates"])]
+    #[case(LinuxManager::Apk, vec!["clang-dev".into()], "sudo", vec!["apk", "add", "--update-cache", "clang-dev"])]
     fn install_spec_generates_correct_commands(
         #[case] manager: LinuxManager,
         #[case] packages: Vec<String>,
@@ -274,6 +326,7 @@ mod tests {
     #[rstest]
     #[case(LinuxManager::Apt, vec!["git".into()], "sudo", vec!["apt", "remove", "-y", "git"])]
     #[case(LinuxManager::Pacman, vec!["vim".into()], "sudo", vec!["pacman", "-R", "--noconfirm", "vim"])]
+    #[case(LinuxManager::Apk, vec!["vim".into()], "sudo", vec!["apk", "del", "vim"])]
     fn uninstall_spec_generates_correct_commands(
         #[case] manager: LinuxManager,
         #[case] packages: Vec<String>,
@@ -294,6 +347,7 @@ mod tests {
     #[case(LinuxManager::Pacman, "sudo", vec!["pacman", "-S", "--noconfirm", "git"])]
     #[case(LinuxManager::Zypper, "sudo", vec!["zypper", "--non-interactive", "install", "--force", "git"])]
     #[case(LinuxManager::Opkg, "opkg", vec!["install", "--force-reinstall", "git"])]
+    #[case(LinuxManager::Apk, "sudo", vec!["apk", "fix", "--reinstall", "git"])]
     fn reinstall_spec_generates_correct_commands(
         #[case] manager: LinuxManager,
         #[case] expected_command: &str,
@@ -313,6 +367,7 @@ mod tests {
     #[case(LinuxManager::Zypper, "ripgrep", "zypper", vec!["search", "ripgrep"])]
     #[case(LinuxManager::Pacman, "ripgrep", "pacman", vec!["-Ss", "ripgrep"])]
     #[case(LinuxManager::Opkg, "ripgrep", "opkg", vec!["find", "ripgrep"])]
+    #[case(LinuxManager::Apk, "ripgrep", "apk", vec!["search", "ripgrep"])]
     fn search_spec_non_exact(
         #[case] manager: LinuxManager,
         #[case] query: &str,
@@ -356,6 +411,13 @@ mod tests {
     }
 
     #[test]
+    fn search_spec_apk_passes_exact_flag() {
+        let spec = LinuxManager::Apk.search_spec("c++.tools", true).unwrap();
+        let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
+        assert_eq!(args, vec!["search", "--exact", "c++.tools"]);
+    }
+
+    #[test]
     fn search_spec_pacman_escapes_regex_metacharacters_in_exact() {
         let spec = LinuxManager::Pacman.search_spec("c++.tools", true).unwrap();
         let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
@@ -370,5 +432,14 @@ mod tests {
 
         let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
         assert_eq!(args, vec!["apt", "upgrade", "-y"]);
+    }
+
+    #[rstest]
+    #[case(vec![], vec!["apk", "upgrade", "--update-cache"])]
+    #[case(vec!["git".into()], vec!["apk", "add", "--update-cache", "--upgrade", "git"])]
+    fn upgrade_spec_apk(#[case] packages: Vec<String>, #[case] expected_args: Vec<&str>) {
+        let spec = LinuxManager::Apk.upgrade_spec(&packages);
+        let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
+        assert_eq!(args, expected_args);
     }
 }

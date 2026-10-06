@@ -10,9 +10,9 @@ pub mod ravenports;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[cfg(not(target_os = "macos"))]
 use std::env;
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[cfg(not(target_os = "macos"))]
 use std::path::Path;
 #[cfg(not(target_os = "macos"))]
 use std::process::Command;
@@ -30,6 +30,40 @@ pub enum Backend {
     FreeBsd,
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     Ravenports,
+}
+
+/// How a command that needs root is run.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Escalation {
+    /// Already root (containers, CI): run the command as is.
+    Root,
+    Sudo,
+    /// No sudo but doas, as on Alpine and the BSDs.
+    Doas,
+}
+
+#[cfg(unix)]
+impl Escalation {
+    /// Root, else sudo, else doas. Falls back to sudo when neither exists,
+    /// so the error names the missing tool.
+    pub fn detect() -> Self {
+        if is_root() {
+            Self::Root
+        } else if !command_exists("sudo") && command_exists("doas") {
+            Self::Doas
+        } else {
+            Self::Sudo
+        }
+    }
+}
+
+#[cfg(unix)]
+fn is_root() -> bool {
+    Command::new("id")
+        .arg("-u")
+        .output()
+        .is_ok_and(|output| output.stdout.trim_ascii() == b"0")
 }
 
 #[derive(Debug)]
@@ -56,6 +90,37 @@ impl CommandSpec {
         format!("{} {}", self.program, self.args.join(" "))
             .trim()
             .to_string()
+    }
+
+    /// Rewrites a `sudo` prefix: dropped for root, swapped for doas.
+    #[cfg(unix)]
+    pub fn escalate(self, escalation: Escalation) -> Self {
+        if self.program != "sudo" {
+            return self;
+        }
+        match escalation {
+            Escalation::Sudo => self,
+            Escalation::Doas => Self::new("doas", self.args),
+            Escalation::Root => {
+                let mut args = self.args.into_iter();
+                match args.next() {
+                    Some(program) => Self::new(program, args.collect::<Vec<_>>()),
+                    None => Self::new("sudo", Vec::<String>::new()),
+                }
+            }
+        }
+    }
+
+    /// The command as the current user can run it.
+    pub fn for_current_user(self) -> Self {
+        #[cfg(unix)]
+        {
+            self.escalate(Escalation::detect())
+        }
+        #[cfg(not(unix))]
+        {
+            self
+        }
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -216,6 +281,17 @@ impl Backend {
         }
     }
 
+    /// An index refresh to run before installing, when the manager has no
+    /// package lists yet (fresh containers).
+    pub fn refresh_spec(&self) -> Option<CommandSpec> {
+        match self {
+            #[cfg(target_os = "linux")]
+            Self::Linux(manager) => manager.refresh_spec(),
+            #[allow(unreachable_patterns)]
+            _ => None,
+        }
+    }
+
     pub fn search_spec(&self, query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
         match self {
             #[cfg(target_os = "android")]
@@ -247,7 +323,7 @@ impl Backend {
     }
 }
 
-#[cfg(any(target_os = "android", target_os = "linux", target_os = "windows"))]
+#[cfg(not(target_os = "macos"))]
 pub fn command_exists(name: &str) -> bool {
     if name.contains(std::path::MAIN_SEPARATOR) {
         return Path::new(name).is_file();
@@ -292,6 +368,34 @@ mod tests {
     fn command_spec_render_formats_command() {
         let spec = CommandSpec::new("git", vec!["status".to_string(), "--short".to_string()]);
         assert_eq!(spec.render(), "git status --short");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn escalate_drops_sudo_for_root() {
+        let spec = CommandSpec::new("sudo", vec!["apt".into(), "install".into(), "git".into()]);
+        let spec = spec.escalate(Escalation::Root);
+        assert_eq!(spec.command(), "apt");
+        assert_eq!(spec.args(), &["install", "git"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn escalate_swaps_sudo_for_doas() {
+        let spec = CommandSpec::new("sudo", vec!["apk".into(), "add".into(), "git".into()]);
+        let spec = spec.escalate(Escalation::Doas);
+        assert_eq!(spec.command(), "doas");
+        assert_eq!(spec.args(), &["apk", "add", "git"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn escalate_keeps_sudo_and_unprivileged_commands() {
+        let spec = CommandSpec::new("sudo", vec!["pkg".into(), "install".into()]);
+        assert_eq!(spec.escalate(Escalation::Sudo).render(), "sudo pkg install");
+
+        let spec = CommandSpec::new("apt", vec!["search".into(), "git".into()]);
+        assert_eq!(spec.escalate(Escalation::Root).render(), "apt search git");
     }
 
     #[test]

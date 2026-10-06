@@ -104,11 +104,21 @@ fn package(
             PackageAction::Uninstall => backend.uninstall_spec(packages),
             PackageAction::Upgrade => backend.upgrade_spec(packages),
             PackageAction::Reinstall => backend.reinstall_spec(packages)?,
+        }
+        .for_current_user();
+        let refresh = match action {
+            PackageAction::Uninstall => None,
+            _ => backend
+                .refresh_spec()
+                .map(backend::CommandSpec::for_current_user),
         };
         if dry_run {
-            return print_dry_run(&backend, &spec);
+            return print_dry_run(&backend, refresh.iter().chain([&spec]));
         }
-        execute_spec(backend, spec)
+        if let Some(refresh) = refresh {
+            execute_spec(&backend, refresh)?;
+        }
+        execute_spec(&backend, spec)
     }
 }
 
@@ -123,7 +133,7 @@ fn list() -> Result<ExitCode, UpkgError> {
     {
         let backend = Backend::detect()?;
         let spec = backend.list_spec();
-        execute_spec(backend, spec)
+        execute_spec(&backend, spec)
     }
 }
 
@@ -154,9 +164,14 @@ fn search(
 }
 
 #[cfg(not(target_os = "macos"))]
-fn print_dry_run(backend: &Backend, spec: &backend::CommandSpec) -> Result<ExitCode, UpkgError> {
+fn print_dry_run<'a>(
+    backend: &Backend,
+    specs: impl IntoIterator<Item = &'a backend::CommandSpec>,
+) -> Result<ExitCode, UpkgError> {
     println!("backend: {}", backend.name());
-    println!("dry-run: {}", spec.render());
+    for spec in specs {
+        println!("dry-run: {}", spec.render());
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -184,7 +199,7 @@ fn reject_app_kind(kind: PackageKind) -> Result<(), UpkgError> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn execute_spec(backend: Backend, spec: backend::CommandSpec) -> Result<ExitCode, UpkgError> {
+fn execute_spec(backend: &Backend, spec: backend::CommandSpec) -> Result<ExitCode, UpkgError> {
     let status = spec.into_command().status()?;
     if status.success() {
         Ok(ExitCode::SUCCESS)
