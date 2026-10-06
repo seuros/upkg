@@ -78,15 +78,5 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 #[cfg(all(test, target_os = "macos"))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unsupported_bottle_display_includes_name() {
-        let err = Error::UnsupportedBottle {
-            name: "libheif".to_string(),
-        };
-
-        assert!(err.to_string().contains("libheif"));
-    }
-}
+#[path = "errors/tests.rs"]
+mod tests;
