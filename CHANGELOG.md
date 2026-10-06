@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/seuros/upkg/compare/upkg-v0.15.0...upkg-v0.15.1) (2026-10-06)
+
+
+### Bug Fixes
+
+* **install:** read tag_name from single-line release JSON ([4cd3dee](https://github.com/seuros/upkg/commit/4cd3dee01ad55c77388063db6ca08e6986de5ef7))
+
 ## [0.15.0](https://github.com/seuros/upkg/compare/upkg-v0.14.0...upkg-v0.15.0) (2026-10-06)
 
 
