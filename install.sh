@@ -42,8 +42,10 @@ main() {
 
     say "detected target: $target"
 
+    # GitHub pretty-prints JSON for curl but sends one line to other clients
+    # (FreeBSD fetch): split on commas so tag_name gets a line of its own.
     tag="$(download "https://api.github.com/repos/${REPO}/releases/latest" - \
-        | grep '"tag_name"' | head -1 | cut -d'"' -f4)"
+        | tr ',' '\n' | grep '"tag_name"' | head -1 | cut -d'"' -f4)"
     [ -z "$tag" ] && err "failed to fetch latest release tag"
 
     version="${tag#upkg-}"
