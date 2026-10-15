@@ -1,4 +1,5 @@
 use super::*;
+use crate::checksum::sha256_hex_bytes;
 use std::assert_matches;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -9,12 +10,6 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 // MOCKED: wiremock stands in for bottle hosts; blobs land in a TempDir cache.
 const HELLO_WORLD: &[u8] = b"hello world";
 const HELLO_WORLD_SHA256: &str = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
-
-fn sha256_hex(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    finalize_sha256_hex(hasher)
-}
 
 fn downloader(tmp: &TempDir) -> Downloader {
     Downloader::new(BlobCache::new(tmp.path()).unwrap())
@@ -188,7 +183,7 @@ async fn peak_concurrent_downloads_within_limit() {
 async fn same_blob_requested_multiple_times_fetches_once() {
     let mock_server = MockServer::start().await;
     let content = b"deduplicated content";
-    let actual_sha256 = sha256_hex(content);
+    let actual_sha256 = sha256_hex_bytes(content);
 
     Mock::given(method("GET"))
         .and(path("/dedup.tar.gz"))
@@ -245,7 +240,7 @@ async fn chunked_download_for_large_files() {
 
     let tmp = TempDir::new().unwrap();
     let url = format!("{}/large.tar.gz", mock_server.uri());
-    let downloaded = download_ok(&downloader(&tmp), &url, &sha256_hex(&large_content)).await;
+    let downloaded = download_ok(&downloader(&tmp), &url, &sha256_hex_bytes(&large_content)).await;
 
     let range_count = range_requests.load(Ordering::SeqCst);
     assert!(
@@ -267,7 +262,7 @@ async fn fallback_to_normal_download_when_ranges_not_supported() {
 
     let tmp = TempDir::new().unwrap();
     let url = format!("{}/large.tar.gz", mock_server.uri());
-    let downloaded = download_ok(&downloader(&tmp), &url, &sha256_hex(&large_content)).await;
+    let downloaded = download_ok(&downloader(&tmp), &url, &sha256_hex_bytes(&large_content)).await;
 
     assert_eq!(downloaded, large_content);
 }
@@ -295,7 +290,7 @@ async fn small_files_dont_use_chunked_download() {
 
     let tmp = TempDir::new().unwrap();
     let url = format!("{}/small.tar.gz", mock_server.uri());
-    let downloaded = download_ok(&downloader(&tmp), &url, &sha256_hex(&small_content)).await;
+    let downloaded = download_ok(&downloader(&tmp), &url, &sha256_hex_bytes(&small_content)).await;
 
     assert_eq!(
         range_used.load(Ordering::SeqCst),
@@ -334,7 +329,7 @@ async fn chunked_download_respects_concurrency_limit() {
 
     let tmp = TempDir::new().unwrap();
     let url = format!("{}/large.tar.gz", mock_server.uri());
-    let downloaded = download_ok(&downloader(&tmp), &url, &sha256_hex(&large_content)).await;
+    let downloaded = download_ok(&downloader(&tmp), &url, &sha256_hex_bytes(&large_content)).await;
 
     let peak = max_concurrent.load(Ordering::SeqCst);
     assert!(
@@ -391,7 +386,7 @@ async fn download_retries_on_transient_network_failure() {
 
     let tmp = TempDir::new().unwrap();
     let url = format!("{}/flaky.tar.gz", mock_server.uri());
-    let result = downloader(&tmp).download(&url, &sha256_hex(content)).await;
+    let result = downloader(&tmp).download(&url, &sha256_hex_bytes(content)).await;
 
     assert!(result.is_ok(), "Download should succeed after retries");
     assert!(
@@ -425,7 +420,7 @@ async fn download_follows_redirects() {
 
     let tmp = TempDir::new().unwrap();
     let url = format!("{}/start.tar.gz", mock_server.uri());
-    let result = downloader(&tmp).download(&url, &sha256_hex(content)).await;
+    let result = downloader(&tmp).download(&url, &sha256_hex_bytes(content)).await;
 
     assert!(result.is_ok(), "Should follow redirects");
     assert_eq!(std::fs::read(result.unwrap()).unwrap(), content);

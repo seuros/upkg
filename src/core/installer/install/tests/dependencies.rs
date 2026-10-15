@@ -80,7 +80,7 @@ async fn uninstall_accepts_full_tap_reference_after_install() {
     let tmp = TempDir::new().unwrap();
 
     let bottle = create_bottle_tarball("terraform");
-    let sha = sha256_hex(&bottle);
+    let sha = sha256_hex_bytes(&bottle);
     let tag = get_test_bottle_tag();
 
     let tap_formula_rb = format!(

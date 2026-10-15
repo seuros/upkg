@@ -27,7 +27,7 @@ async fn mount_postgres(server: &MockServer, name: &str) {
         "keg_only": name.contains('@'),
         "bottle": { "stable": { "files": {
             get_test_bottle_tag(): { "url": format!("{}/postgres.tar.gz", server.uri()),
-                                    "sha256": sha256_hex(&bottle) }
+                                    "sha256": sha256_hex_bytes(&bottle) }
         }}},
         "post_install_steps": [
             {"type":"link_dir", "source":{"base":"prefix","path":"share/postgresql"},
@@ -134,7 +134,7 @@ async fn source_install_also_applies_and_records_declarative_runtime_links() {
         "name":"sourcepkg", "versions":{"stable":"1.0"}, "dependencies":[],
         "bottle":{"stable":{"files":{}}},
         "urls":{"stable":{"url":format!("{}/source.tar.gz", server.uri()),
-                          "checksum":sha256_hex(&source)}},
+                          "checksum":sha256_hex_bytes(&source)}},
         "ruby_source_path":ruby.to_str().unwrap(),
         "post_install_steps":[
             {"type":"link_dir", "source":{"base":"prefix","path":"share/runtime"},

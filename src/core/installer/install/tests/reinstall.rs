@@ -9,7 +9,7 @@ async fn mount_testpkg(server: &MockServer, bottle: &[u8], bottle_status: u16) {
         "testpkg",
         "1.0.0",
         &[],
-        &sha256_hex(bottle),
+        &sha256_hex_bytes(bottle),
         response,
     )
     .await;

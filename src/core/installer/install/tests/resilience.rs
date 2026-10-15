@@ -74,7 +74,7 @@ async fn streaming_extraction_processes_as_downloads_complete() {
 
     mount_bottled(&mock_server, "fastpkg", "1.0.0", &[]).await;
     let slow_bottle = create_bottle_tarball("slowpkg");
-    let slow_sha = sha256_hex(&slow_bottle);
+    let slow_sha = sha256_hex_bytes(&slow_bottle);
     let slow_download = ResponseTemplate::new(200)
         .set_body_bytes(slow_bottle)
         .set_delay(Duration::from_millis(100));
@@ -115,7 +115,7 @@ async fn retries_on_corrupted_download() {
     let tmp = TempDir::new().unwrap();
 
     let bottle = create_bottle_tarball("retrypkg");
-    let bottle_sha = sha256_hex(&bottle);
+    let bottle_sha = sha256_hex_bytes(&bottle);
     let attempt_count = Arc::new(AtomicUsize::new(0));
     let attempt_clone = attempt_count.clone();
     let counting_download = move |_: &wiremock::Request| {

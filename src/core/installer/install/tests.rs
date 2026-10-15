@@ -36,12 +36,7 @@ pub(super) fn create_bottle_tarball(formula_name: &str) -> Vec<u8> {
     )])
 }
 
-pub(super) fn sha256_hex(data: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    crate::checksum::finalize_sha256_hex(hasher)
-}
+pub(super) use crate::checksum::sha256_hex_bytes;
 
 pub(super) fn get_test_bottle_tag() -> String {
     crate::types::formula::bottle::current_platform_bottle_tag()
@@ -195,7 +190,7 @@ pub(super) async fn mount_bottled(
     deps: &[&str],
 ) -> String {
     let bottle = create_bottle_tarball(name);
-    let sha = sha256_hex(&bottle);
+    let sha = sha256_hex_bytes(&bottle);
     let response = ResponseTemplate::new(200).set_body_bytes(bottle);
     mount_bottle_response(server, name, version, deps, &sha, response).await;
     sha

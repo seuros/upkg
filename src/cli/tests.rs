@@ -19,12 +19,7 @@ fn parse(args: &[&str]) -> Result<Cli, UpkgError> {
 fn aliases(#[case] args: &[&str], #[case] expected: &str) {
     let cli = parse(args).unwrap();
     let name = match cli.command {
-        CommandKind::Package { action, .. } => match action {
-            PackageAction::Install => "install",
-            PackageAction::Uninstall => "uninstall",
-            PackageAction::Upgrade => "upgrade",
-            PackageAction::Reinstall => "reinstall",
-        },
+        CommandKind::Package { action, .. } => action.as_str(),
         CommandKind::List => "list",
         CommandKind::Shaman => "shaman",
         CommandKind::SelfUpgrade { dry_run: true } => "self-upgrade",
