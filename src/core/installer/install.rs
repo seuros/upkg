@@ -31,6 +31,7 @@ use crate::core::network::api::ApiClient;
 use crate::core::network::download::{DownloadRequest, ParallelDownloader};
 #[cfg(test)]
 use crate::core::storage::blob::BlobCache;
+use crate::core::storage::fs_util::{StoreContext, dir_paths, file_name_str};
 use crate::core::storage::receipt::{
     InstallReceipt, InstalledKeg, find_installed, read_receipt, scan_installed, write_receipt,
 };
@@ -248,21 +249,12 @@ impl Installer {
         }
 
         for version_dir in cask_versions(&caskroom_path)? {
-            for entry in fs::read_dir(&version_dir).map_err(|e| Error::StoreCorruption {
-                message: format!(
-                    "failed to read cask version directory '{}': {e}",
-                    version_dir.display()
-                ),
-            })? {
-                let path = match entry {
-                    Ok(entry) => entry.path(),
-                    Err(_) => continue,
-                };
+            for path in dir_paths(&version_dir, "cask version directory")? {
                 if !path.is_symlink() {
                     continue;
                 }
-                let target = fs::read_link(&path).map_err(|e| Error::StoreCorruption {
-                    message: format!("failed to read cask symlink '{}': {e}", path.display()),
+                let target = fs::read_link(&path).store_context(|| {
+                    format!("failed to read cask symlink '{}'", path.display())
                 })?;
                 if target.extension().and_then(|ext| ext.to_str()) == Some("app")
                     && target.starts_with(cask_app_dir(&self.prefix))
@@ -273,11 +265,11 @@ impl Installer {
             }
         }
 
-        fs::remove_dir_all(&caskroom_path).map_err(|e| Error::StoreCorruption {
-            message: format!(
-                "failed to remove caskroom path '{}': {e}",
+        fs::remove_dir_all(&caskroom_path).store_context(|| {
+            format!(
+                "failed to remove caskroom path '{}'",
                 caskroom_path.display()
-            ),
+            )
         })?;
         self.state_db.remove_installed(&cask_name(&token))?;
 
@@ -293,17 +285,8 @@ impl Installer {
             return Ok(requested.to_string());
         }
 
-        for entry in fs::read_dir(&caskroom_root).map_err(|e| Error::StoreCorruption {
-            message: format!(
-                "failed to read caskroom root '{}': {e}",
-                caskroom_root.display()
-            ),
-        })? {
-            let path = match entry {
-                Ok(entry) if entry.path().is_dir() => entry.path(),
-                _ => continue,
-            };
-            let Some(token) = path.file_name().and_then(|name| name.to_str()) else {
+        for path in dir_paths(&caskroom_root, "caskroom root")?.filter(|path| path.is_dir()) {
+            let Some(token) = file_name_str(&path) else {
                 continue;
             };
             let Some(cask_json) = load_latest_cask_metadata_json(&path, token)? else {
@@ -335,24 +318,15 @@ impl Installer {
             return Ok(removed);
         }
 
-        for entry in fs::read_dir(&store_dir).map_err(|e| Error::StoreCorruption {
-            message: format!(
-                "failed to read store directory '{}': {e}",
-                store_dir.display()
-            ),
-        })? {
-            let entry = entry.map_err(|e| Error::StoreCorruption {
-                message: format!("failed to read store entry: {e}"),
-            })?;
-            let path = entry.path();
+        let entries = fs::read_dir(&store_dir).store_context(|| {
+            format!("failed to read store directory '{}'", store_dir.display())
+        })?;
+        for entry in entries {
+            let path = entry.store_context(|| "failed to read store entry")?.path();
             if !path.is_dir() {
                 continue;
             }
-            let Some(store_key) = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(str::to_string)
-            else {
+            let Some(store_key) = file_name_str(&path).map(str::to_string) else {
                 continue;
             };
             if !referenced.contains(&store_key) {
@@ -422,9 +396,8 @@ impl Installer {
         let caskroom_path = self.prefix.join("Caskroom").join(&cask.token);
         let staged_path = caskroom_path.join(&cask.version);
 
-        fs::create_dir_all(&staged_path).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to create cask staging directory: {e}"),
-        })?;
+        fs::create_dir_all(&staged_path)
+            .store_context(|| "failed to create cask staging directory")?;
 
         if !cask.pkgs.is_empty()
             && cask.apps.is_empty()

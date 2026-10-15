@@ -3,6 +3,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use crate::core::storage::fs_util::StoreContext;
 use crate::types::Error;
 
 #[path = "cask_ops/metadata.rs"]
@@ -23,9 +24,7 @@ pub(super) fn stage_cask_binaries(
     keg_path: &Path,
     cask: &crate::core::installer::cask::ResolvedCask,
 ) -> Result<(), Error> {
-    fs::create_dir_all(keg_path).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create cask keg: {e}"),
-    })?;
+    fs::create_dir_all(keg_path).store_context(|| "failed to create cask keg")?;
 
     for binary in &cask.binaries {
         let source = resolve_cask_link_source_path(source_root, prefix, cask, &binary.source)?;
@@ -39,33 +38,24 @@ pub(super) fn stage_cask_binaries(
         }
 
         let target = cask_prefix_target(keg_path, &binary.target)?;
-        if target.exists() || target.is_symlink() {
-            remove_path_if_exists(&target)?;
-        }
-        let parent = target.parent().ok_or_else(|| Error::StoreCorruption {
-            message: format!("target '{}' has no parent", target.display()),
-        })?;
-        fs::create_dir_all(parent).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to create cask binary target directory: {e}"),
-        })?;
+        remove_path_if_exists(&target)?;
+        let parent = target_parent(&target)?;
+        fs::create_dir_all(parent)
+            .store_context(|| "failed to create cask binary target directory")?;
 
-        fs::copy(&source, &target).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to stage cask binary '{}': {e}", binary.target),
-        })?;
+        fs::copy(&source, &target)
+            .store_context(|| format!("failed to stage cask binary '{}'", binary.target))?;
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let mut perms = fs::metadata(&target)
-                .map_err(|e| Error::StoreCorruption {
-                    message: format!("failed to read staged cask binary metadata: {e}"),
-                })?
+                .store_context(|| "failed to read staged cask binary metadata")?
                 .permissions();
             if perms.mode() & 0o111 == 0 {
                 perms.set_mode(0o755);
-                fs::set_permissions(&target, perms).map_err(|e| Error::StoreCorruption {
-                    message: format!("failed to make staged cask binary executable: {e}"),
-                })?;
+                fs::set_permissions(&target, perms)
+                    .store_context(|| "failed to make staged cask binary executable")?;
             }
         }
     }
@@ -106,20 +96,17 @@ pub(super) fn stage_cask_postflight_symlinks(
             remove_path_if_exists(&target)?;
         }
 
-        let parent = target.parent().ok_or_else(|| Error::StoreCorruption {
-            message: format!("target '{}' has no parent", target.display()),
-        })?;
-        fs::create_dir_all(parent).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to create cask postflight target directory: {e}"),
-        })?;
+        let parent = target_parent(&target)?;
+        fs::create_dir_all(parent)
+            .store_context(|| "failed to create cask postflight target directory")?;
 
         #[cfg(unix)]
-        std::os::unix::fs::symlink(&source, &target).map_err(|e| Error::StoreCorruption {
-            message: format!(
-                "failed to link cask postflight target '{}' to '{}': {e}",
+        std::os::unix::fs::symlink(&source, &target).store_context(|| {
+            format!(
+                "failed to link cask postflight target '{}' to '{}'",
                 target.display(),
                 source.display()
-            ),
+            )
         })?;
     }
 
@@ -250,9 +237,7 @@ pub(in crate::core::installer::install) fn prepare_installer_pkg_path(
     }
 
     let temp_dir = crate::clock::unique_temp_dir("pkg");
-    fs::create_dir_all(&temp_dir).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create pkg installer temp dir: {e}"),
-    })?;
+    fs::create_dir_all(&temp_dir).store_context(|| "failed to create pkg installer temp dir")?;
 
     let installer_path = temp_dir.join(
         path.file_stem()
@@ -264,11 +249,8 @@ pub(in crate::core::installer::install) fn prepare_installer_pkg_path(
     );
 
     if std::os::unix::fs::symlink(path, &installer_path).is_err() {
-        fs::copy(path, &installer_path).map_err(|e| Error::StoreCorruption {
-            message: format!(
-                "failed to prepare pkg '{}' for installer: {e}",
-                path.display()
-            ),
+        fs::copy(path, &installer_path).store_context(|| {
+            format!("failed to prepare pkg '{}' for installer", path.display())
         })?;
     }
 
@@ -352,9 +334,8 @@ fn remove_pkgutil_files(pkg_id: &str) -> Result<(), Error> {
         if !path.exists() && !path.is_symlink() {
             continue;
         }
-        let metadata = fs::symlink_metadata(&path).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to read pkgutil path '{}': {e}", path.display()),
-        })?;
+        let metadata = fs::symlink_metadata(&path)
+            .store_context(|| format!("failed to read pkgutil path '{}'", path.display()))?;
         if metadata.is_dir() && !metadata.file_type().is_symlink() {
             continue;
         }
@@ -571,12 +552,8 @@ pub(super) fn stage_cask_apps(
     cask: &crate::core::installer::cask::ResolvedCask,
 ) -> Result<(), Error> {
     let app_dir = cask_app_dir(prefix);
-    fs::create_dir_all(&app_dir).map_err(|e| Error::StoreCorruption {
-        message: format!(
-            "failed to create app directory '{}': {e}",
-            app_dir.display()
-        ),
-    })?;
+    fs::create_dir_all(&app_dir)
+        .store_context(|| format!("failed to create app directory '{}'", app_dir.display()))?;
 
     for app in &cask.apps {
         let source = resolve_cask_source_path(source_root, cask, &app.source)?;
@@ -608,14 +585,12 @@ pub(super) fn stage_cask_apps(
 
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(&target, &staged_app).map_err(|e| {
-                Error::StoreCorruption {
-                    message: format!(
-                        "failed to link staged app '{}' to '{}': {e}",
-                        staged_app.display(),
-                        target.display()
-                    ),
-                }
+            std::os::unix::fs::symlink(&target, &staged_app).store_context(|| {
+                format!(
+                    "failed to link staged app '{}' to '{}'",
+                    staged_app.display(),
+                    target.display()
+                )
             })?;
         }
     }
@@ -654,21 +629,18 @@ pub(super) fn stage_cask_linked_artifacts(
             remove_path_if_exists(&target)?;
         }
 
-        let parent = target.parent().ok_or_else(|| Error::StoreCorruption {
-            message: format!("target '{}' has no parent", target.display()),
-        })?;
-        fs::create_dir_all(parent).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to create cask artifact target directory: {e}"),
-        })?;
+        let parent = target_parent(&target)?;
+        fs::create_dir_all(parent)
+            .store_context(|| "failed to create cask artifact target directory")?;
 
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(&source, &target).map_err(|e| Error::StoreCorruption {
-                message: format!(
-                    "failed to link cask artifact '{}' to '{}': {e}",
+            std::os::unix::fs::symlink(&source, &target).store_context(|| {
+                format!(
+                    "failed to link cask artifact '{}' to '{}'",
                     target.display(),
                     source.display()
-                ),
+                )
             })?;
         }
     }
@@ -726,27 +698,27 @@ pub(super) fn remove_path_if_exists(path: &Path) -> Result<(), Error> {
         return Ok(());
     }
 
-    let metadata = fs::symlink_metadata(path).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to read path '{}': {e}", path.display()),
-    })?;
+    let metadata = fs::symlink_metadata(path)
+        .store_context(|| format!("failed to read path '{}'", path.display()))?;
 
     if metadata.is_dir() && !metadata.file_type().is_symlink() {
         fs::remove_dir_all(path)
     } else {
         fs::remove_file(path)
     }
-    .map_err(|e| Error::StoreCorruption {
-        message: format!("failed to remove '{}': {e}", path.display()),
+    .store_context(|| format!("failed to remove '{}'", path.display()))
+}
+
+fn target_parent(target: &Path) -> Result<&Path, Error> {
+    target.parent().ok_or_else(|| Error::StoreCorruption {
+        message: format!("target '{}' has no parent", target.display()),
     })
 }
 
 fn copy_path_preserving_metadata(source: &Path, target: &Path) -> Result<(), Error> {
-    let parent = target.parent().ok_or_else(|| Error::StoreCorruption {
-        message: format!("target '{}' has no parent", target.display()),
-    })?;
-    fs::create_dir_all(parent).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create target parent '{}': {e}", parent.display()),
-    })?;
+    let parent = target_parent(target)?;
+    fs::create_dir_all(parent)
+        .store_context(|| format!("failed to create target parent '{}'", parent.display()))?;
 
     let output = Command::new("/bin/cp")
         .arg("-pR")

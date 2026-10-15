@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::core::cellar::materialize::Cellar;
 use crate::core::progress::InstallProgress;
+use crate::core::storage::fs_util::StoreContext;
 use crate::core::storage::receipt::find_installed;
 use crate::types::{BuildPlan, Error};
 
@@ -161,30 +162,21 @@ impl Installer {
 
         // Debris from an earlier failed build; nothing worth restoring.
         if fs::read_dir(keg_path).is_ok_and(|mut entries| entries.next().is_none()) {
-            fs::remove_dir(keg_path).map_err(|e| Error::StoreCorruption {
-                message: format!(
-                    "failed to remove empty keg for '{}@{}': {}",
-                    formula_name, version, e
-                ),
+            fs::remove_dir(keg_path).store_context(|| {
+                format!("failed to remove empty keg for '{formula_name}@{version}'")
             })?;
             return Ok(None);
         }
 
         let backup_path = Self::source_keg_backup_path(keg_path);
         if backup_path.exists() {
-            fs::remove_dir_all(&backup_path).map_err(|e| Error::StoreCorruption {
-                message: format!(
-                    "failed to remove stale source-build backup for '{}@{}': {}",
-                    formula_name, version, e
-                ),
+            fs::remove_dir_all(&backup_path).store_context(|| {
+                format!("failed to remove stale source-build backup for '{formula_name}@{version}'")
             })?;
         }
 
-        fs::rename(keg_path, &backup_path).map_err(|e| Error::StoreCorruption {
-            message: format!(
-                "failed to backup existing keg for '{}@{}': {}",
-                formula_name, version, e
-            ),
+        fs::rename(keg_path, &backup_path).store_context(|| {
+            format!("failed to backup existing keg for '{formula_name}@{version}'")
         })?;
 
         Ok(Some(backup_path))
@@ -197,19 +189,15 @@ impl Installer {
         version: &str,
     ) -> Result<(), Error> {
         if keg_path.exists() {
-            fs::remove_dir_all(keg_path).map_err(|e| Error::StoreCorruption {
-                message: format!(
-                    "failed to remove failed source-build output for '{}@{}': {}",
-                    formula_name, version, e
-                ),
+            fs::remove_dir_all(keg_path).store_context(|| {
+                format!(
+                    "failed to remove failed source-build output for '{formula_name}@{version}'"
+                )
             })?;
         }
 
-        fs::rename(backup_path, keg_path).map_err(|e| Error::StoreCorruption {
-            message: format!(
-                "failed to restore previous keg for '{}@{}': {}",
-                formula_name, version, e
-            ),
+        fs::rename(backup_path, keg_path).store_context(|| {
+            format!("failed to restore previous keg for '{formula_name}@{version}'")
         })
     }
 
@@ -222,11 +210,8 @@ impl Installer {
             return Ok(());
         }
 
-        fs::remove_dir_all(backup_path).map_err(|e| Error::StoreCorruption {
-            message: format!(
-                "failed to remove source-build backup for '{}@{}': {}",
-                formula_name, version, e
-            ),
+        fs::remove_dir_all(backup_path).store_context(|| {
+            format!("failed to remove source-build backup for '{formula_name}@{version}'")
         })
     }
 
