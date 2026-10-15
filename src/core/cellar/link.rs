@@ -342,6 +342,10 @@ impl Linker {
     }
 }
 
+#[cfg(test)]
+#[path = "link/test_support.rs"]
+mod test_support;
+
 #[cfg(all(test, target_os = "macos"))]
 #[path = "link/tests.rs"]
 mod tests;

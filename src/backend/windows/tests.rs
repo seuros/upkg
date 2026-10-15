@@ -1,4 +1,5 @@
 use super::*;
+use crate::backend::test_support::assert_spec;
 use rstest::rstest;
 
 #[rstest]
@@ -17,23 +18,20 @@ fn install_spec_generates_correct_commands(
     #[case] expected_command: &str,
     #[case] expected_args: Vec<&str>,
 ) {
-    let spec = manager.install_spec(&packages);
-    assert_eq!(spec.command(), expected_command);
-
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, expected_args);
+    assert_spec(
+        &manager.install_spec(&packages),
+        expected_command,
+        &expected_args,
+    );
 }
 
 #[test]
 fn install_spec_handles_multiple_packages() {
-    let manager = WindowsManager::Winget;
     let packages = vec!["nodejs".into(), "python".into(), "git".into()];
-    let spec = manager.install_spec(&packages);
-
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
+    let spec = WindowsManager::Winget.install_spec(&packages);
     assert_eq!(
-        args,
-        vec![
+        spec.args(),
+        [
             "install",
             "--silent",
             "--accept-source-agreements",
@@ -54,11 +52,11 @@ fn uninstall_spec_generates_correct_commands(
     #[case] expected_command: &str,
     #[case] expected_args: Vec<&str>,
 ) {
-    let spec = manager.uninstall_spec(&packages);
-    assert_eq!(spec.command(), expected_command);
-
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, expected_args);
+    assert_spec(
+        &manager.uninstall_spec(&packages),
+        expected_command,
+        &expected_args,
+    );
 }
 
 #[rstest]
@@ -73,9 +71,7 @@ fn search_spec_generates_correct_commands(
     #[case] expected_args: Vec<&str>,
 ) {
     let spec = manager.search_spec("ripgrep", exact).unwrap();
-    assert_eq!(spec.command(), expected_command);
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, expected_args);
+    assert_spec(&spec, expected_command, &expected_args);
 }
 
 #[rstest]
@@ -86,9 +82,5 @@ fn list_spec_generates_correct_commands(
     #[case] expected_command: &str,
     #[case] expected_args: Vec<&str>,
 ) {
-    let spec = manager.list_spec();
-    assert_eq!(spec.command(), expected_command);
-
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, expected_args);
+    assert_spec(&manager.list_spec(), expected_command, &expected_args);
 }

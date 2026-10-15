@@ -354,4 +354,6 @@ pub fn command_exists(name: &str) -> bool {
 }
 
 #[cfg(test)]
+mod test_support;
+#[cfg(test)]
 mod tests;

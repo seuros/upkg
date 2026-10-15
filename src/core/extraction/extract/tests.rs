@@ -1,30 +1,33 @@
 use super::*;
-use flate2::Compression;
-use flate2::write::GzEncoder;
+use crate::core::extraction::test_support::{gzip, tar_gz};
+use rstest::rstest;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
 use tar::Builder;
 use tempfile::TempDir;
 
-fn create_test_tarball(entries: Vec<(&str, &[u8], Option<u32>)>) -> Vec<u8> {
-    let mut builder = Builder::new(Vec::new());
+type Extract = fn(&Path, &Path) -> Result<(), Error>;
 
-    for (path, content, mode) in entries {
-        let mut header = tar::Header::new_gnu();
-        header.set_path(path).unwrap();
-        header.set_size(content.len() as u64);
-        header.set_mode(mode.unwrap_or(0o644));
-        header.set_cksum();
-        builder.append(&header, content).unwrap();
-    }
+/// Fresh temp dir with an empty `extracted/` destination inside it.
+fn dest_dir() -> (TempDir, PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let dest = tmp.path().join("extracted");
+    fs::create_dir(&dest).unwrap();
+    (tmp, dest)
+}
 
-    let tar_data = builder.into_inner().unwrap();
-
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&tar_data).unwrap();
-    encoder.finish().unwrap()
+/// Writes `archive` as `<tmp>/<file_name>` and runs `extract` into `<tmp>/extracted`.
+fn unpack(
+    archive: &[u8],
+    file_name: &str,
+    extract: Extract,
+) -> (TempDir, PathBuf, Result<(), Error>) {
+    let (tmp, dest) = dest_dir();
+    let archive_path = tmp.path().join(file_name);
+    fs::write(&archive_path, archive).unwrap();
+    let result = extract(&archive_path, &dest);
+    (tmp, dest, result)
 }
 
 fn create_tarball_with_symlink(name: &str, target: &str) -> Vec<u8> {
@@ -39,11 +42,7 @@ fn create_tarball_with_symlink(name: &str, target: &str) -> Vec<u8> {
 
     builder.append_link(&mut header, name, target).unwrap();
 
-    let tar_data = builder.into_inner().unwrap();
-
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&tar_data).unwrap();
-    encoder.finish().unwrap()
+    gzip(&builder.into_inner().unwrap())
 }
 
 fn create_test_zip(entries: Vec<(&str, &[u8])>) -> Vec<u8> {
@@ -62,16 +61,10 @@ fn create_test_zip(entries: Vec<(&str, &[u8])>) -> Vec<u8> {
 
 #[test]
 fn extracts_file_with_content() {
-    let tmp = TempDir::new().unwrap();
-    let tarball = create_test_tarball(vec![("hello.txt", b"Hello, World!", None)]);
+    let tarball = tar_gz(&[("hello.txt", b"Hello, World!", 0o644)]);
 
-    let tarball_path = tmp.path().join("test.tar.gz");
-    fs::write(&tarball_path, &tarball).unwrap();
-
-    let dest = tmp.path().join("extracted");
-    fs::create_dir(&dest).unwrap();
-
-    extract_tarball(&tarball_path, &dest).unwrap();
+    let (_tmp, dest, result) = unpack(&tarball, "test.tar.gz", extract_tarball);
+    result.unwrap();
 
     let content = fs::read_to_string(dest.join("hello.txt")).unwrap();
     assert_eq!(content, "Hello, World!");
@@ -79,16 +72,10 @@ fn extracts_file_with_content() {
 
 #[test]
 fn extracts_zip_file_with_content() {
-    let tmp = TempDir::new().unwrap();
     let zip_data = create_test_zip(vec![("op", b"#!/bin/sh\necho op")]);
 
-    let zip_path = tmp.path().join("test.zip");
-    fs::write(&zip_path, &zip_data).unwrap();
-
-    let dest = tmp.path().join("extracted");
-    fs::create_dir(&dest).unwrap();
-
-    extract_archive(&zip_path, &dest).unwrap();
+    let (_tmp, dest, result) = unpack(&zip_data, "test.zip", extract_archive);
+    result.unwrap();
 
     let content = fs::read_to_string(dest.join("op")).unwrap();
     assert_eq!(content, "#!/bin/sh\necho op");
@@ -96,16 +83,10 @@ fn extracts_zip_file_with_content() {
 
 #[test]
 fn preserves_executable_bit() {
-    let tmp = TempDir::new().unwrap();
-    let tarball = create_test_tarball(vec![("script.sh", b"#!/bin/sh\necho hi", Some(0o755))]);
+    let tarball = tar_gz(&[("script.sh", b"#!/bin/sh\necho hi", 0o755)]);
 
-    let tarball_path = tmp.path().join("test.tar.gz");
-    fs::write(&tarball_path, &tarball).unwrap();
-
-    let dest = tmp.path().join("extracted");
-    fs::create_dir(&dest).unwrap();
-
-    extract_tarball(&tarball_path, &dest).unwrap();
+    let (_tmp, dest, result) = unpack(&tarball, "test.tar.gz", extract_tarball);
+    result.unwrap();
 
     let metadata = fs::metadata(dest.join("script.sh")).unwrap();
     let mode = metadata.permissions().mode();
@@ -118,16 +99,10 @@ fn preserves_executable_bit() {
 
 #[test]
 fn preserves_symlink() {
-    let tmp = TempDir::new().unwrap();
     let tarball = create_tarball_with_symlink("link", "target.txt");
 
-    let tarball_path = tmp.path().join("test.tar.gz");
-    fs::write(&tarball_path, &tarball).unwrap();
-
-    let dest = tmp.path().join("extracted");
-    fs::create_dir(&dest).unwrap();
-
-    extract_tarball(&tarball_path, &dest).unwrap();
+    let (_tmp, dest, result) = unpack(&tarball, "test.tar.gz", extract_tarball);
+    result.unwrap();
 
     let link_path = dest.join("link");
     assert!(
@@ -169,50 +144,24 @@ fn create_malicious_tarball(path: &[u8]) -> Vec<u8> {
 
     tar_data[512..516].copy_from_slice(b"evil");
 
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&tar_data).unwrap();
-    encoder.finish().unwrap()
+    gzip(&tar_data)
 }
 
-#[test]
-fn rejects_path_traversal() {
-    let tmp = TempDir::new().unwrap();
+#[rstest]
+#[case::path_traversal(b"../evil.txt", "evil.tar.gz", "path traversal")]
+#[case::absolute_path(b"/etc/passwd", "absolute.tar.gz", "absolute path")]
+fn rejects_unsafe_entry(
+    #[case] entry: &[u8],
+    #[case] file_name: &str,
+    #[case] expected_error: &str,
+) {
+    let tarball = create_malicious_tarball(entry);
 
-    let tarball = create_malicious_tarball(b"../evil.txt");
-
-    let tarball_path = tmp.path().join("evil.tar.gz");
-    fs::write(&tarball_path, &tarball).unwrap();
-
-    let dest = tmp.path().join("extracted");
-    fs::create_dir(&dest).unwrap();
-
-    let result = extract_tarball(&tarball_path, &dest);
-    assert!(result.is_err());
+    let (_tmp, _dest, result) = unpack(&tarball, file_name, extract_tarball);
 
     let err = result.unwrap_err();
-    assert!(err.to_string().contains("path traversal"));
+    assert!(err.to_string().contains(expected_error), "{err}");
 }
-
-#[test]
-fn rejects_absolute_path() {
-    let tmp = TempDir::new().unwrap();
-
-    let tarball = create_malicious_tarball(b"/etc/passwd");
-
-    let tarball_path = tmp.path().join("absolute.tar.gz");
-    fs::write(&tarball_path, &tarball).unwrap();
-
-    let dest = tmp.path().join("extracted");
-    fs::create_dir(&dest).unwrap();
-
-    let result = extract_tarball(&tarball_path, &dest);
-    assert!(result.is_err());
-
-    let err = result.unwrap_err();
-    assert!(err.to_string().contains("absolute path"));
-}
-
-use rstest::rstest;
 
 #[rstest]
 #[case("/foo/./bar/./baz", "/foo/bar/baz", "removes dot components")]
@@ -240,36 +189,13 @@ fn path_normalization(#[case] input: &str, #[case] expected: &str, #[case] _desc
     assert_eq!(normalized, PathBuf::from(expected));
 }
 
-#[test]
-fn validate_path_rejects_normalized_escape() {
-    let tmp = TempDir::new().unwrap();
-    let dest = tmp.path().join("extracted");
-    fs::create_dir(&dest).unwrap();
+#[rstest]
+#[case::rejects_normalized_escape("foo/../../etc/passwd", false)]
+#[case::accepts_safe_nested_paths("foo/bar/baz.txt", true)]
+#[case::accepts_paths_with_dots_in_names("foo/file.tar.gz", true)]
+fn validate_path_cases(#[case] path: &str, #[case] accepted: bool) {
+    let (_tmp, dest) = dest_dir();
 
-    let tricky_path = PathBuf::from("foo/../../etc/passwd");
-
-    let result = validate_path(&tricky_path, &dest);
-    assert!(result.is_err());
-}
-
-#[test]
-fn validate_path_accepts_safe_nested_paths() {
-    let tmp = TempDir::new().unwrap();
-    let dest = tmp.path().join("extracted");
-    fs::create_dir(&dest).unwrap();
-
-    let safe_path = PathBuf::from("foo/bar/baz.txt");
-    let result = validate_path(&safe_path, &dest);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn validate_path_accepts_paths_with_dots_in_names() {
-    let tmp = TempDir::new().unwrap();
-    let dest = tmp.path().join("extracted");
-    fs::create_dir(&dest).unwrap();
-
-    let safe_path = PathBuf::from("foo/file.tar.gz");
-    let result = validate_path(&safe_path, &dest);
-    assert!(result.is_ok());
+    let result = validate_path(&PathBuf::from(path), &dest);
+    assert_eq!(result.is_ok(), accepted, "{path}: {result:?}");
 }

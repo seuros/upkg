@@ -1,28 +1,15 @@
 use super::*;
-use flate2::Compression;
-use flate2::write::GzEncoder;
-use std::io::Write;
+use crate::core::extraction::test_support::tar_gz;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
-use tar::Builder;
 use tempfile::TempDir;
 
-fn create_test_tarball(content: &[u8]) -> Vec<u8> {
-    let mut builder = Builder::new(Vec::new());
-
-    let mut header = tar::Header::new_gnu();
-    header.set_path("test.txt").unwrap();
-    header.set_size(content.len() as u64);
-    header.set_mode(0o644);
-    header.set_cksum();
-    builder.append(&header, content).unwrap();
-
-    let tar_data = builder.into_inner().unwrap();
-
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&tar_data).unwrap();
-    encoder.finish().unwrap()
+/// Writes a blob holding a single `test.txt` with `content` to `<tmp>/test.tar.gz`.
+fn write_blob(tmp: &TempDir, content: &[u8]) -> PathBuf {
+    let blob_path = tmp.path().join("test.tar.gz");
+    fs::write(&blob_path, tar_gz(&[("test.txt", content, 0o644)])).unwrap();
+    blob_path
 }
 
 #[test]
@@ -30,9 +17,7 @@ fn second_call_is_noop() {
     let tmp = TempDir::new().unwrap();
     let store = Store::new(tmp.path()).unwrap();
 
-    let tarball = create_test_tarball(b"hello world");
-    let blob_path = tmp.path().join("test.tar.gz");
-    fs::write(&blob_path, &tarball).unwrap();
+    let blob_path = write_blob(&tmp, b"hello world");
 
     let store_key = "abc123";
 
@@ -53,9 +38,7 @@ fn concurrent_calls_unpack_once() {
     let tmp = TempDir::new().unwrap();
     let store = Arc::new(Store::new(tmp.path()).unwrap());
 
-    let tarball = create_test_tarball(b"concurrent test");
-    let blob_path = tmp.path().join("test.tar.gz");
-    fs::write(&blob_path, &tarball).unwrap();
+    let blob_path = write_blob(&tmp, b"concurrent test");
 
     let store_key = "concurrent123";
     let unpack_count = Arc::new(AtomicUsize::new(0));
@@ -103,9 +86,7 @@ fn has_entry_returns_correct_state() {
 
     assert!(!store.has_entry(store_key));
 
-    let tarball = create_test_tarball(b"exists");
-    let blob_path = tmp.path().join("test.tar.gz");
-    fs::write(&blob_path, &tarball).unwrap();
+    let blob_path = write_blob(&tmp, b"exists");
 
     store.ensure_entry(store_key, &blob_path).unwrap();
 

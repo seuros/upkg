@@ -25,6 +25,10 @@ pub fn formula_token(name: &str) -> &str {
         .unwrap_or("")
 }
 
+#[cfg(test)]
+#[path = "formula/test_support.rs"]
+pub(crate) mod test_support;
+
 #[cfg(all(test, target_os = "macos"))]
 #[path = "formula/tests.rs"]
 mod tests;

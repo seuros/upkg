@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::cellar::link::test_support::write_keg;
 use std::assert_matches;
 use tempfile::TempDir;
 
@@ -20,25 +21,34 @@ fn steps() -> Vec<PostInstallStep> {
 }
 
 fn fixture(tmp: &TempDir, version: &str) -> (Linker, PathBuf) {
-    let keg = tmp.path().join("Cellar/postgresql@18").join(version);
-    for (name, data) in [
-        ("share/postgresql/postgres.bki", "bootstrap"),
-        ("share/postgresql/extension/plpgsql.control", "extension"),
-        ("lib/postgresql/plpgsql.so", "library"),
-        ("bin/initdb", "#!/bin/sh\nexit 1\n"),
-    ] {
-        let path = keg.join(name);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, data).unwrap();
-    }
+    let keg = write_keg(
+        tmp.path(),
+        &format!("postgresql@18/{version}"),
+        &[
+            ("share/postgresql/postgres.bki", b"bootstrap"),
+            ("share/postgresql/extension/plpgsql.control", b"extension"),
+            ("lib/postgresql/plpgsql.so", b"library"),
+            ("bin/initdb", b"#!/bin/sh\nexit 1\n"),
+        ],
+    );
     (Linker::new(tmp.path()).unwrap(), keg)
+}
+
+/// Applies the postgres `steps()` plan to `keg`, which must succeed.
+fn apply(linker: &Linker, keg: &Path) {
+    linker.apply_post_install(keg, &steps()).unwrap();
+}
+
+/// Removes the postgres `steps()` plan for `keg`, which must succeed.
+fn remove(linker: &Linker, keg: &Path) {
+    linker.remove_post_install(keg, &steps()).unwrap();
 }
 
 #[test]
 fn postgres_runtime_files_are_linked_without_global_binaries_or_database_initialization() {
     let tmp = TempDir::new().unwrap();
     let (linker, keg) = fixture(&tmp, "18.6");
-    linker.apply_post_install(&keg, &steps()).unwrap();
+    apply(&linker, &keg);
     assert_eq!(
         fs::read_to_string(tmp.path().join("share/postgresql@18/postgres.bki")).unwrap(),
         "bootstrap",
@@ -53,17 +63,17 @@ fn postgres_runtime_files_are_linked_without_global_binaries_or_database_initial
     assert!(!tmp.path().join("bin/initdb").exists());
     assert!(tmp.path().join("var/log").is_dir());
     assert!(!tmp.path().join("var/postgresql@18").exists());
-    linker.apply_post_install(&keg, &steps()).unwrap();
+    apply(&linker, &keg);
 }
 
 #[test]
 fn upgrade_replaces_own_links_and_old_uninstall_does_not_remove_new_links() {
     let tmp = TempDir::new().unwrap();
     let (linker, old) = fixture(&tmp, "18.5");
-    linker.apply_post_install(&old, &steps()).unwrap();
+    apply(&linker, &old);
     let (_, new) = fixture(&tmp, "18.6");
-    linker.apply_post_install(&new, &steps()).unwrap();
-    linker.remove_post_install(&old, &steps()).unwrap();
+    apply(&linker, &new);
+    remove(&linker, &old);
     assert_eq!(
         fs::canonicalize(tmp.path().join("share/postgresql@18/postgres.bki")).unwrap(),
         fs::canonicalize(new.join("share/postgresql/postgres.bki")).unwrap(),
@@ -75,7 +85,7 @@ fn upgrade_replaces_own_links_and_old_uninstall_does_not_remove_new_links() {
 fn unlink_preserves_extensions_and_user_data() {
     let tmp = TempDir::new().unwrap();
     let (linker, keg) = fixture(&tmp, "18.6");
-    linker.apply_post_install(&keg, &steps()).unwrap();
+    apply(&linker, &keg);
     let extra = tmp
         .path()
         .join("share/postgresql@18/extension/custom.control");
@@ -83,7 +93,7 @@ fn unlink_preserves_extensions_and_user_data() {
     let data = tmp.path().join("var/postgresql@18");
     fs::create_dir_all(&data).unwrap();
     fs::write(data.join("PG_VERSION"), "18").unwrap();
-    linker.remove_post_install(&keg, &steps()).unwrap();
+    remove(&linker, &keg);
     assert!(!tmp.path().join("share/postgresql@18/postgres.bki").exists());
     assert!(!tmp.path().join("bin/initdb-18").exists());
     assert_eq!(fs::read_to_string(extra).unwrap(), "user extension");
@@ -146,7 +156,7 @@ fn unknown_declarative_hooks_remain_non_executable() {
 fn unlink_damaged_keg_removes_own_dangling_links_but_not_unrelated_dangling_links() {
     let tmp = TempDir::new().unwrap();
     let (linker, keg) = fixture(&tmp, "18.6");
-    linker.apply_post_install(&keg, &steps()).unwrap();
+    apply(&linker, &keg);
     let unrelated = tmp
         .path()
         .join("share/postgresql@18/extension/custom.control");
@@ -154,7 +164,7 @@ fn unlink_damaged_keg_removes_own_dangling_links_but_not_unrelated_dangling_link
     fs::remove_dir_all(keg.join("share")).unwrap();
     fs::remove_dir_all(keg.join("lib")).unwrap();
     fs::remove_dir_all(keg.join("bin")).unwrap();
-    linker.remove_post_install(&keg, &steps()).unwrap();
+    remove(&linker, &keg);
     assert!(
         !tmp.path()
             .join("share/postgresql@18/postgres.bki")

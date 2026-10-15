@@ -1,65 +1,41 @@
 use super::*;
+use crate::backend::test_support::{assert_exact_search_uses_dash_e, assert_spec};
 
 #[test]
 fn install_spec_generates_correct_command() {
-    let packages = vec!["git".into()];
-    let spec = install_spec(&packages);
-
-    assert_eq!(spec.command(), RVN_PATH);
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, vec!["install", "-y", "git"]);
+    let spec = install_spec(&["git".into()]);
+    assert_spec(&spec, RVN_PATH, &["install", "-y", "git"]);
 }
 
 #[test]
 fn install_spec_handles_multiple_packages() {
-    let packages = vec!["vim".into(), "curl".into(), "wget".into()];
-    let spec = install_spec(&packages);
-
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, vec!["install", "-y", "vim", "curl", "wget"]);
+    let spec = install_spec(&["vim".into(), "curl".into(), "wget".into()]);
+    assert_eq!(spec.args(), ["install", "-y", "vim", "curl", "wget"]);
 }
 
 #[test]
 fn install_spec_handles_empty_packages() {
-    let packages: Vec<String> = vec![];
-    let spec = install_spec(&packages);
-
-    assert_eq!(spec.command(), RVN_PATH);
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, vec!["install", "-y"]);
+    assert_spec(&install_spec(&[]), RVN_PATH, &["install", "-y"]);
 }
 
 #[test]
 fn uninstall_spec_generates_correct_command() {
-    let packages = vec!["git".into()];
-    let spec = uninstall_spec(&packages);
-
-    assert_eq!(spec.command(), RVN_PATH);
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, vec!["remove", "-y", "git"]);
+    let spec = uninstall_spec(&["git".into()]);
+    assert_spec(&spec, RVN_PATH, &["remove", "-y", "git"]);
 }
 
 #[test]
 fn search_spec_non_exact() {
     let spec = search_spec("ripgrep", false).unwrap();
-    assert_eq!(spec.command(), RVN_PATH);
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, vec!["search", "ripgrep"]);
+    assert_spec(&spec, RVN_PATH, &["search", "ripgrep"]);
 }
 
 #[test]
 fn search_spec_exact() {
-    let spec = search_spec("git", true).unwrap();
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, vec!["search", "-e", "git"]);
+    assert_exact_search_uses_dash_e(search_spec);
 }
 
 #[test]
 fn upgrade_spec_handles_empty_packages() {
-    let packages: Vec<String> = vec![];
-    let spec = upgrade_spec(&packages);
-
-    assert_eq!(spec.command(), RVN_PATH);
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, vec!["upgrade", "-y"]);
+    assert_spec(&upgrade_spec(&[]), RVN_PATH, &["upgrade", "-y"]);
 }

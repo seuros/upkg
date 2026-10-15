@@ -1,4 +1,5 @@
 use super::*;
+use crate::backend::test_support::assert_spec;
 use rstest::rstest;
 use std::assert_matches;
 
@@ -18,21 +19,18 @@ fn install_spec_generates_correct_commands(
     #[case] expected_command: &str,
     #[case] expected_args: Vec<&str>,
 ) {
-    let spec = manager.install_spec(&packages);
-    assert_eq!(spec.command(), expected_command);
-
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, expected_args);
+    assert_spec(
+        &manager.install_spec(&packages),
+        expected_command,
+        &expected_args,
+    );
 }
 
 #[test]
 fn install_spec_handles_multiple_packages() {
-    let manager = AndroidManager::Pkg;
     let packages = vec!["vim".into(), "wget".into(), "git".into()];
-    let spec = manager.install_spec(&packages);
-
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, vec!["install", "-y", "vim", "wget", "git"]);
+    let spec = AndroidManager::Pkg.install_spec(&packages);
+    assert_eq!(spec.args(), ["install", "-y", "vim", "wget", "git"]);
 }
 
 #[rstest]
@@ -44,11 +42,11 @@ fn uninstall_spec_generates_correct_commands(
     #[case] expected_command: &str,
     #[case] expected_args: Vec<&str>,
 ) {
-    let spec = manager.uninstall_spec(&packages);
-    assert_eq!(spec.command(), expected_command);
-
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, expected_args);
+    assert_spec(
+        &manager.uninstall_spec(&packages),
+        expected_command,
+        &expected_args,
+    );
 }
 
 #[rstest]
@@ -60,9 +58,7 @@ fn search_spec_non_exact(
     #[case] expected_args: Vec<&str>,
 ) {
     let spec = manager.search_spec("ripgrep", false).unwrap();
-    assert_eq!(spec.command(), expected_command);
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, expected_args);
+    assert_spec(&spec, expected_command, &expected_args);
 }
 
 #[rstest]
@@ -75,10 +71,6 @@ fn search_spec_rejects_exact(#[case] manager: AndroidManager) {
 
 #[test]
 fn upgrade_spec_handles_empty_packages() {
-    let manager = AndroidManager::Pkg;
-    let packages: Vec<String> = vec![];
-    let spec = manager.upgrade_spec(&packages);
-
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, vec!["upgrade", "-y"]);
+    let spec = AndroidManager::Pkg.upgrade_spec(&[]);
+    assert_eq!(spec.args(), ["upgrade", "-y"]);
 }

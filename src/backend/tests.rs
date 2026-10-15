@@ -1,10 +1,10 @@
 use super::*;
+use test_support::assert_spec;
 
 #[test]
 fn command_spec_new_creates_spec() {
     let spec = CommandSpec::new("ls", vec!["-la".to_string()]);
-    assert_eq!(spec.command(), "ls");
-    assert_eq!(spec.args(), &["-la"]);
+    assert_spec(&spec, "ls", &["-la"]);
 }
 
 #[test]
@@ -17,18 +17,18 @@ fn command_spec_render_formats_command() {
 #[test]
 fn escalate_drops_sudo_for_root() {
     let spec = CommandSpec::new("sudo", vec!["apt".into(), "install".into(), "git".into()]);
-    let spec = spec.escalate(Escalation::Root);
-    assert_eq!(spec.command(), "apt");
-    assert_eq!(spec.args(), &["install", "git"]);
+    assert_spec(&spec.escalate(Escalation::Root), "apt", &["install", "git"]);
 }
 
 #[cfg(unix)]
 #[test]
 fn escalate_swaps_sudo_for_doas() {
     let spec = CommandSpec::new("sudo", vec!["apk".into(), "add".into(), "git".into()]);
-    let spec = spec.escalate(Escalation::Doas);
-    assert_eq!(spec.command(), "doas");
-    assert_eq!(spec.args(), &["apk", "add", "git"]);
+    assert_spec(
+        &spec.escalate(Escalation::Doas),
+        "doas",
+        &["apk", "add", "git"],
+    );
 }
 
 #[cfg(unix)]

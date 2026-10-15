@@ -1,6 +1,9 @@
 use super::*;
 use rstest::rstest;
-use std::assert_matches;
+
+fn parse(args: &[&str]) -> Result<Cli, UpkgError> {
+    Cli::parse(args.iter().copied())
+}
 
 #[rstest]
 #[case(&["i", "git"], "install")]
@@ -8,11 +11,13 @@ use std::assert_matches;
 #[case(&["rm", "git"], "uninstall")]
 #[case(&["update"], "upgrade")]
 #[case(&["reinstall", "git"], "reinstall")]
+#[case(&["list"], "list")]
 #[case(&["ls"], "list")]
+#[case(&["shaman"], "shaman")]
 #[case(&["doctor"], "shaman")]
 #[case(&["--self-upgrade", "--dry-run"], "self-upgrade")]
 fn aliases(#[case] args: &[&str], #[case] expected: &str) {
-    let cli = Cli::parse(args.iter().map(|arg| (*arg).to_owned())).unwrap();
+    let cli = parse(args).unwrap();
     let name = match cli.command {
         CommandKind::Package { action, .. } => match action {
             PackageAction::Install => "install",
@@ -32,16 +37,20 @@ fn aliases(#[case] args: &[&str], #[case] expected: &str) {
 #[case(&[], "command")]
 #[case(&["nonesuch"], "nonesuch")]
 #[case(&["--unknown"], "--unknown")]
+#[case(&["install"], "<PACKAGES>")]
 #[case(&["install", "--app"], "<PACKAGES>")]
+#[case(&["uninstall"], "<PACKAGES>")]
 #[case(&["uninstall", "--dry-run"], "<PACKAGES>")]
 #[case(&["reinstall"], "<PACKAGES>")]
+#[case(&["search"], "<QUERY>")]
 #[case(&["search", "--exact"], "<QUERY>")]
 #[case(&["list", "extra"], "extra")]
 #[case(&["shaman", "extra"], "extra")]
+#[case(&["shaman", "--verbose"], "--verbose")]
 #[case(&["self-upgrade", "--app"], "--app")]
 #[case(&["--self-upgrade", "extra"], "extra")]
 fn invalid_arguments(#[case] args: &[&str], #[case] expected: &str) {
-    let error = Cli::parse(args.iter().map(|arg| (*arg).to_owned())).unwrap_err();
+    let error = parse(args).unwrap_err();
     assert!(error.to_string().contains(expected), "{error}");
 }
 
@@ -55,7 +64,7 @@ fn invalid_arguments(#[case] args: &[&str], #[case] expected: &str) {
 #[case(&["search", "--help"], "--refresh")]
 #[case(&["--self-upgrade", "--help"], "--dry-run")]
 fn generated_help(#[case] args: &[&str], #[case] expected: &str) {
-    let cli = Cli::parse(args.iter().map(|arg| (*arg).to_owned())).unwrap();
+    let cli = parse(args).unwrap();
     let CommandKind::Print(text) = cli.command else {
         panic!("expected help");
     };
@@ -63,34 +72,44 @@ fn generated_help(#[case] args: &[&str], #[case] expected: &str) {
     assert!(text.contains("upkg"), "{text}");
 }
 
-#[test]
-fn package_options_can_follow_values_and_repeat() {
-    let cli = Cli::parse(
-        [
-            "install",
-            "git",
-            "--dry-run",
-            "curl",
-            "--app",
-            "--dry-run",
-            "--app",
-        ]
-        .into_iter()
-        .map(str::to_owned),
-    )
-    .unwrap();
+#[rstest]
+#[case::install_with_dry_run(
+    &["install", "--dry-run", "git"],
+    PackageAction::Install, &["git"], true, PackageKind::Auto
+)]
+#[case::uninstall_with_dry_run(
+    &["uninstall", "--dry-run", "git"],
+    PackageAction::Uninstall, &["git"], true, PackageKind::Auto
+)]
+#[case::upgrade_allows_no_package(&["upgrade"], PackageAction::Upgrade, &[], false, PackageKind::Auto)]
+#[case::install_app_hint(
+    &["install", "--app", "ghostty"],
+    PackageAction::Install, &["ghostty"], false, PackageKind::App
+)]
+#[case::options_can_follow_values_and_repeat(
+    &["install", "git", "--dry-run", "curl", "--app", "--dry-run", "--app"],
+    PackageAction::Install, &["git", "curl"], true, PackageKind::App
+)]
+fn package_command(
+    #[case] args: &[&str],
+    #[case] expected_action: PackageAction,
+    #[case] expected_packages: &[&str],
+    #[case] expected_dry_run: bool,
+    #[case] expected_kind: PackageKind,
+) {
     let CommandKind::Package {
-        action: PackageAction::Install,
+        action,
         packages,
         dry_run,
         kind,
-    } = cli.command
+    } = parse(args).expect("parse should succeed").command
     else {
-        panic!("expected install");
+        panic!("expected package command");
     };
-    assert_eq!(packages, ["git", "curl"]);
-    assert!(dry_run);
-    assert_eq!(kind, PackageKind::App);
+    assert_eq!(action, expected_action);
+    assert_eq!(packages, expected_packages);
+    assert_eq!(dry_run, expected_dry_run);
+    assert_eq!(kind, expected_kind);
 }
 
 #[rstest]
@@ -99,12 +118,7 @@ fn package_options_can_follow_values_and_repeat() {
 #[case("upgrade")]
 #[case("reinstall")]
 fn package_double_dash(#[case] command: &str) {
-    let cli = Cli::parse(
-        [command, "--", "--app", "--help"]
-            .into_iter()
-            .map(str::to_owned),
-    )
-    .unwrap();
+    let cli = parse(&[command, "--", "--app", "--help"]).unwrap();
     let CommandKind::Package { packages, kind, .. } = cli.command else {
         panic!("expected package command");
     };
@@ -119,7 +133,7 @@ fn package_double_dash(#[case] command: &str) {
 #[case("reinstall")]
 #[case("search")]
 fn unknown_flags_remain_positional_values(#[case] command: &str) {
-    let cli = Cli::parse([command, "--unknown"].into_iter().map(str::to_owned)).unwrap();
+    let cli = parse(&[command, "--unknown"]).unwrap();
     match cli.command {
         CommandKind::Package { packages, .. } => assert_eq!(packages, ["--unknown"]),
         CommandKind::Search { query, .. } => assert_eq!(query, "--unknown"),
@@ -127,251 +141,50 @@ fn unknown_flags_remain_positional_values(#[case] command: &str) {
     }
 }
 
-#[test]
-fn parse_install_with_dry_run() {
-    let cli = Cli::parse(
-        ["install", "--dry-run", "git"]
-            .into_iter()
-            .map(str::to_string),
-    )
-    .expect("parse should succeed");
-
-    match cli.command {
-        CommandKind::Package {
-            action: PackageAction::Install,
-            packages,
-            dry_run,
-            kind,
-        } => {
-            assert_eq!(packages, vec!["git"]);
-            assert!(dry_run);
-            assert_eq!(kind, PackageKind::Auto);
-        }
-        _ => panic!("unexpected command"),
-    }
+#[rstest]
+#[case::simple(&["search", "ripgrep"], "ripgrep", false, false, PackageKind::Auto)]
+#[case::joins_multi_word_query(
+    &["search", "visual", "studio", "code"],
+    "visual studio code", false, false, PackageKind::Auto
+)]
+#[case::alias_and_flags(
+    &["s", "--app", "--exact", "--refresh", "ghostty"],
+    "ghostty", true, true, PackageKind::App
+)]
+#[case::double_dash_passes_through_flag_like_queries(
+    &["search", "--", "--exact"],
+    "--exact", false, false, PackageKind::Auto
+)]
+#[case::short_exact_flag(&["search", "-e", "git"], "git", true, false, PackageKind::Auto)]
+fn search_command(
+    #[case] args: &[&str],
+    #[case] expected_query: &str,
+    #[case] expected_exact: bool,
+    #[case] expected_refresh: bool,
+    #[case] expected_kind: PackageKind,
+) {
+    let CommandKind::Search {
+        query,
+        exact,
+        kind,
+        refresh,
+    } = parse(args).expect("parse ok").command
+    else {
+        panic!("expected search command");
+    };
+    assert_eq!(query, expected_query);
+    assert_eq!(exact, expected_exact);
+    assert_eq!(refresh, expected_refresh);
+    assert_eq!(kind, expected_kind);
 }
 
-#[test]
-fn parse_install_requires_package() {
-    let err =
-        Cli::parse(["install"].into_iter().map(str::to_string)).expect_err("parse should fail");
-    assert!(err.to_string().contains("<PACKAGES>"));
-}
-
-#[test]
-fn parse_uninstall_with_dry_run() {
-    let cli = Cli::parse(
-        ["uninstall", "--dry-run", "git"]
-            .into_iter()
-            .map(str::to_string),
-    )
-    .expect("parse should succeed");
-
-    match cli.command {
-        CommandKind::Package {
-            action: PackageAction::Uninstall,
-            packages,
-            dry_run,
-            kind,
-        } => {
-            assert_eq!(packages, vec!["git"]);
-            assert!(dry_run);
-            assert_eq!(kind, PackageKind::Auto);
-        }
-        _ => panic!("unexpected command"),
-    }
-}
-
-#[test]
-fn parse_uninstall_requires_package() {
-    let err =
-        Cli::parse(["uninstall"].into_iter().map(str::to_string)).expect_err("parse should fail");
-    assert!(err.to_string().contains("<PACKAGES>"));
-}
-
-#[test]
-fn parse_upgrade_allows_no_package() {
-    let cli =
-        Cli::parse(["upgrade"].into_iter().map(str::to_string)).expect("parse should succeed");
-
-    match cli.command {
-        CommandKind::Package {
-            action: PackageAction::Upgrade,
-            packages,
-            dry_run,
-            kind,
-        } => {
-            assert!(packages.is_empty());
-            assert!(!dry_run);
-            assert_eq!(kind, PackageKind::Auto);
-        }
-        _ => panic!("unexpected command"),
-    }
-}
-
-#[test]
-fn parse_list() {
-    let cli = Cli::parse(["list"].into_iter().map(str::to_string)).expect("parse should succeed");
-
-    assert_matches!(cli.command, CommandKind::List);
-}
-
-#[test]
-fn parse_shaman_and_doctor_alias() {
-    let doctor =
-        Cli::parse(["doctor"].into_iter().map(str::to_string)).expect("parse should succeed");
-    assert_matches!(doctor.command, CommandKind::Shaman);
-
-    let shaman =
-        Cli::parse(["shaman"].into_iter().map(str::to_string)).expect("parse should succeed");
-    assert_matches!(shaman.command, CommandKind::Shaman);
-}
-
-#[test]
-fn parse_shaman_rejects_arguments() {
-    let err = Cli::parse(["shaman", "--verbose"].into_iter().map(str::to_string))
-        .expect_err("shaman should reject arguments");
-    assert!(err.to_string().contains("--verbose"));
-}
-
-#[test]
-fn parse_install_app_hint() {
-    let cli = Cli::parse(
-        ["install", "--app", "ghostty"]
-            .into_iter()
-            .map(str::to_string),
-    )
-    .expect("parse should succeed");
-
-    match cli.command {
-        CommandKind::Package {
-            action: PackageAction::Install,
-            packages,
-            dry_run,
-            kind,
-        } => {
-            assert_eq!(packages, vec!["ghostty"]);
-            assert!(!dry_run);
-            assert_eq!(kind, PackageKind::App);
-        }
-        _ => panic!("unexpected command"),
-    }
-}
-
-#[test]
-fn parse_self_upgrade_flag() {
-    let cli = Cli::parse(["--self-upgrade"].into_iter().map(str::to_string))
-        .expect("parse should succeed");
-
-    match cli.command {
-        CommandKind::SelfUpgrade { dry_run } => assert!(!dry_run),
-        _ => panic!("unexpected command"),
-    }
-}
-
-#[test]
-fn parse_search_simple() {
-    let cli = Cli::parse(["search", "ripgrep"].into_iter().map(str::to_string)).expect("parse ok");
-
-    match cli.command {
-        CommandKind::Search {
-            query,
-            exact,
-            kind,
-            refresh,
-        } => {
-            assert_eq!(query, "ripgrep");
-            assert!(!exact);
-            assert!(!refresh);
-            assert_eq!(kind, PackageKind::Auto);
-        }
-        _ => panic!("unexpected command"),
-    }
-}
-
-#[test]
-fn parse_search_joins_multi_word_query() {
-    let cli = Cli::parse(
-        ["search", "visual", "studio", "code"]
-            .into_iter()
-            .map(str::to_string),
-    )
-    .expect("parse ok");
-
-    match cli.command {
-        CommandKind::Search { query, .. } => assert_eq!(query, "visual studio code"),
-        _ => panic!("unexpected command"),
-    }
-}
-
-#[test]
-fn parse_search_alias_and_flags() {
-    let cli = Cli::parse(
-        ["s", "--app", "--exact", "--refresh", "ghostty"]
-            .into_iter()
-            .map(str::to_string),
-    )
-    .expect("parse ok");
-
-    match cli.command {
-        CommandKind::Search {
-            query,
-            exact,
-            kind,
-            refresh,
-        } => {
-            assert_eq!(query, "ghostty");
-            assert!(exact);
-            assert!(refresh);
-            assert_eq!(kind, PackageKind::App);
-        }
-        _ => panic!("unexpected command"),
-    }
-}
-
-#[test]
-fn parse_search_double_dash_passes_through_flag_like_queries() {
-    let cli =
-        Cli::parse(["search", "--", "--exact"].into_iter().map(str::to_string)).expect("parse ok");
-
-    match cli.command {
-        CommandKind::Search { query, exact, .. } => {
-            assert_eq!(query, "--exact");
-            assert!(!exact);
-        }
-        _ => panic!("unexpected command"),
-    }
-}
-
-#[test]
-fn parse_search_requires_query() {
-    let err =
-        Cli::parse(["search"].into_iter().map(str::to_string)).expect_err("search needs a query");
-    assert!(err.to_string().contains("<QUERY>"));
-}
-
-#[test]
-fn parse_search_short_exact_flag() {
-    let cli =
-        Cli::parse(["search", "-e", "git"].into_iter().map(str::to_string)).expect("parse ok");
-
-    match cli.command {
-        CommandKind::Search { exact, .. } => assert!(exact),
-        _ => panic!("unexpected command"),
-    }
-}
-
-#[test]
-fn parse_self_upgrade_dry_run() {
-    let cli = Cli::parse(
-        ["self-upgrade", "--dry-run"]
-            .into_iter()
-            .map(str::to_string),
-    )
-    .expect("parse should succeed");
-
-    match cli.command {
-        CommandKind::SelfUpgrade { dry_run } => assert!(dry_run),
-        _ => panic!("unexpected command"),
-    }
+#[rstest]
+#[case(&["--self-upgrade"], false)]
+#[case(&["self-upgrade", "--dry-run"], true)]
+fn self_upgrade_command(#[case] args: &[&str], #[case] expected_dry_run: bool) {
+    let CommandKind::SelfUpgrade { dry_run } = parse(args).expect("parse should succeed").command
+    else {
+        panic!("expected self-upgrade command");
+    };
+    assert_eq!(dry_run, expected_dry_run);
 }
