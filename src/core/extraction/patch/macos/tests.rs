@@ -3,6 +3,16 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use tempfile::TempDir;
 
+const NEW_PREFIX: &str = "/opt/upkg/prefix";
+
+/// Writes `<tmp>/test_binary`: the Mach-O magic followed by `parts`.
+fn write_macho(tmp: &TempDir, parts: &[&[u8]]) -> std::path::PathBuf {
+    let path = tmp.path().join("test_binary");
+    let contents = [b"\xfe\xed\xfa\xcf".as_slice(), &parts.concat()].concat();
+    fs::write(&path, contents).unwrap();
+    path
+}
+
 #[test]
 fn fix_version_segment_fixes_mismatched_paths() {
     let cases = [
@@ -47,23 +57,13 @@ fn fix_version_segment_leaves_opt_install_names_alone() {
 #[test]
 fn test_patch_macho_preserves_execute_bit() {
     let tmp = TempDir::new().unwrap();
-    let test_file = tmp.path().join("test_binary");
-
-    let old_prefix = "/home/linuxbrew/.linuxbrew";
-    let new_prefix = "/opt/upkg/prefix";
-
-    let mut contents = Vec::new();
-    contents.extend_from_slice(b"\xfe\xed\xfa\xcf");
-    contents.extend_from_slice(old_prefix.as_bytes());
-    contents.extend_from_slice(b"/bin/hello\0");
-
-    fs::write(&test_file, &contents).unwrap();
+    let test_file = write_macho(&tmp, &[b"/home/linuxbrew/.linuxbrew", b"/bin/hello\0"]);
 
     let mut perms = fs::metadata(&test_file).unwrap().permissions();
     perms.set_mode(0o755);
     fs::set_permissions(&test_file, perms).unwrap();
 
-    patch_macho_binary_strings(&test_file, new_prefix).unwrap();
+    patch_macho_binary_strings(&test_file, NEW_PREFIX).unwrap();
 
     let mode = fs::metadata(&test_file).unwrap().permissions().mode();
     assert!(
@@ -76,52 +76,45 @@ fn test_patch_macho_preserves_execute_bit() {
 #[test]
 fn test_patch_macho_binary_strings() {
     let tmp = TempDir::new().unwrap();
-    let test_file = tmp.path().join("test_binary");
-
     let old_prefix = "/home/linuxbrew/.linuxbrew";
-    let new_prefix = "/opt/upkg/prefix";
+    let test_file = write_macho(
+        &tmp,
+        &[
+            b"some random data\0",
+            old_prefix.as_bytes(),
+            b"/opt/git/libexec/git-core\0",
+            b"more data\0",
+            old_prefix.as_bytes(),
+            b"/lib/libfoo.dylib\0",
+            b"end\0",
+        ],
+    );
 
-    let mut contents = Vec::new();
-    contents.extend_from_slice(b"\xfe\xed\xfa\xcf");
-    contents.extend_from_slice(b"some random data\0");
-    contents.extend_from_slice(old_prefix.as_bytes());
-    contents.extend_from_slice(b"/opt/git/libexec/git-core\0");
-    contents.extend_from_slice(b"more data\0");
-    contents.extend_from_slice(old_prefix.as_bytes());
-    contents.extend_from_slice(b"/lib/libfoo.dylib\0");
-    contents.extend_from_slice(b"end\0");
-
-    fs::write(&test_file, &contents).unwrap();
-
-    let result = patch_macho_binary_strings(&test_file, new_prefix);
+    let result = patch_macho_binary_strings(&test_file, NEW_PREFIX);
     assert!(result.is_ok());
 
     let patched = fs::read(&test_file).unwrap();
     let patched_str = String::from_utf8_lossy(&patched);
 
-    assert!(patched_str.contains(new_prefix));
+    assert!(patched_str.contains(NEW_PREFIX));
     assert!(!patched_str.contains(old_prefix));
 }
 
 #[test]
 fn test_patch_macho_skips_when_new_prefix_longer() {
     let tmp = TempDir::new().unwrap();
-    let test_file = tmp.path().join("test_binary");
+    let test_file = write_macho(
+        &tmp,
+        &[
+            b"some random data\0",
+            b"/opt/homebrew",
+            b"/opt/git/libexec/git-core\0",
+            b"more data\0",
+        ],
+    );
+    let original = fs::read(&test_file).unwrap();
 
-    let old_prefix = "/opt/homebrew";
-    let new_prefix = "/opt/upkg/prefix";
-
-    let mut contents = Vec::new();
-    contents.extend_from_slice(b"\xfe\xed\xfa\xcf");
-    contents.extend_from_slice(b"some random data\0");
-    contents.extend_from_slice(old_prefix.as_bytes());
-    contents.extend_from_slice(b"/opt/git/libexec/git-core\0");
-    contents.extend_from_slice(b"more data\0");
-
-    let original = contents.clone();
-    fs::write(&test_file, &contents).unwrap();
-
-    let result = patch_macho_binary_strings(&test_file, new_prefix);
+    let result = patch_macho_binary_strings(&test_file, NEW_PREFIX);
     assert!(
         result.is_ok(),
         "should skip when new prefix is longer than old prefix"

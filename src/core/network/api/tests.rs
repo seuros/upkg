@@ -1,8 +1,69 @@
 use super::*;
 use std::assert_matches;
+use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 use wiremock::matchers::{header, method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockBuilder, MockServer, ResponseTemplate};
+
+// MOCKED: wiremock stands in for the formula API, tap raw hosts, and index URLs.
+const FOO_FIXTURE: &str = include_str!("../../../fixtures/formula_foo.json");
+const FOO_ETAG: &str = "\"abc123\"";
+const TERRAFORM_TAP_RB: &str = r#"
+class Terraform < Formula
+  version "1.10.0"
+  bottle do
+    root_url "https://ghcr.io/v2/hashicorp/tap"
+    sha256 arm64_sonoma: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  end
+end
+"#;
+
+fn get(route: &str) -> MockBuilder {
+    Mock::given(method("GET")).and(path(route))
+}
+
+async fn mount_get(server: &MockServer, route: &str, response: ResponseTemplate) {
+    get(route).respond_with(response).mount(server).await;
+}
+
+fn tap_client(server: &MockServer) -> ApiClient {
+    ApiClient::with_base_url(server.uri()).with_tap_raw_base_url(server.uri())
+}
+
+/// Writes `eugene1g/homebrew-safehouse/Formula/agent-safehouse.rb` under `tap_root`.
+fn write_local_tap_formula(tap_root: &Path, body: &str) -> PathBuf {
+    let formula_dir = tap_root
+        .join("eugene1g")
+        .join("homebrew-safehouse")
+        .join("Formula");
+    std::fs::create_dir_all(&formula_dir).unwrap();
+    let formula_path = formula_dir.join("agent-safehouse.rb");
+    std::fs::write(&formula_path, body).unwrap();
+    formula_path
+}
+
+/// `/foo.json` answering 200 with the fixture body and an `ETag`.
+fn foo_with_etag() -> Mock {
+    get("/foo.json").respond_with(
+        ResponseTemplate::new(200)
+            .set_body_string(FOO_FIXTURE)
+            .insert_header("etag", FOO_ETAG),
+    )
+}
+
+/// `/foo.json` answering 304 only when revalidated with the stored `ETag`.
+fn foo_not_modified() -> Mock {
+    get("/foo.json")
+        .and(header("If-None-Match", FOO_ETAG))
+        .respond_with(ResponseTemplate::new(304))
+}
+
+/// Client with an in-memory cache, primed by one successful `get_formula("foo")`.
+async fn primed_cached_client(server: &MockServer) -> ApiClient {
+    let client = ApiClient::with_base_url(server.uri()).with_cache(ApiCache::in_memory().unwrap());
+    client.get_formula("foo").await.unwrap();
+    client
+}
 
 #[test]
 fn ruby_source_locator_parses_all_supported_kinds() {
@@ -57,14 +118,12 @@ fn ruby_source_locator_resolves_urls_exhaustively() {
 #[tokio::test]
 async fn fetches_formula_from_mock_server() {
     let mock_server = MockServer::start().await;
-
-    let fixture = include_str!("../../../fixtures/formula_foo.json");
-
-    Mock::given(method("GET"))
-        .and(path("/foo.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(fixture))
-        .mount(&mock_server)
-        .await;
+    mount_get(
+        &mock_server,
+        "/foo.json",
+        ResponseTemplate::new(200).set_body_string(FOO_FIXTURE),
+    )
+    .await;
 
     let client = ApiClient::with_base_url(mock_server.uri());
     let formula = client.get_formula("foo").await.unwrap();
@@ -76,12 +135,12 @@ async fn fetches_formula_from_mock_server() {
 #[tokio::test]
 async fn returns_missing_formula_on_404() {
     let mock_server = MockServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/nonexistent.json"))
-        .respond_with(ResponseTemplate::new(404))
-        .mount(&mock_server)
-        .await;
+    mount_get(
+        &mock_server,
+        "/nonexistent.json",
+        ResponseTemplate::new(404),
+    )
+    .await;
 
     let client = ApiClient::with_base_url(mock_server.uri());
     let err = client.get_formula("nonexistent").await.unwrap_err();
@@ -96,15 +155,8 @@ async fn returns_missing_formula_on_404() {
 async fn resolves_short_name_from_local_tap_after_core_404() {
     let mock_server = MockServer::start().await;
     let tap_root = tempdir().unwrap();
-    let formula_dir = tap_root
-        .path()
-        .join("eugene1g")
-        .join("homebrew-safehouse")
-        .join("Formula");
-    std::fs::create_dir_all(&formula_dir).unwrap();
-    let formula_path = formula_dir.join("agent-safehouse.rb");
-    std::fs::write(
-        &formula_path,
+    let formula_path = write_local_tap_formula(
+        tap_root.path(),
         r#"
 class AgentSafehouse < Formula
   desc "macOS sandbox wrapper for coding agents"
@@ -118,14 +170,13 @@ class AgentSafehouse < Formula
   end
 end
 "#,
+    );
+    mount_get(
+        &mock_server,
+        "/agent-safehouse.json",
+        ResponseTemplate::new(404),
     )
-    .unwrap();
-
-    Mock::given(method("GET"))
-        .and(path("/agent-safehouse.json"))
-        .respond_with(ResponseTemplate::new(404))
-        .mount(&mock_server)
-        .await;
+    .await;
 
     let client = ApiClient::with_base_url(mock_server.uri())
         .with_tap_roots(vec![tap_root.path().to_path_buf()]);
@@ -142,15 +193,8 @@ end
 #[tokio::test]
 async fn resolves_short_name_from_local_tap_after_core_network_failure() {
     let tap_root = tempdir().unwrap();
-    let formula_dir = tap_root
-        .path()
-        .join("eugene1g")
-        .join("homebrew-safehouse")
-        .join("Formula");
-    std::fs::create_dir_all(&formula_dir).unwrap();
-    let formula_path = formula_dir.join("agent-safehouse.rb");
-    std::fs::write(
-        &formula_path,
+    let formula_path = write_local_tap_formula(
+        tap_root.path(),
         r#"
 class AgentSafehouse < Formula
   url "https://github.com/eugene1g/agent-safehouse/releases/download/v0.9.0/safehouse.sh"
@@ -162,8 +206,7 @@ class AgentSafehouse < Formula
   end
 end
 "#,
-    )
-    .unwrap();
+    );
 
     let client = ApiClient::with_base_url("http://127.0.0.1:1".to_string())
         .with_tap_roots(vec![tap_root.path().to_path_buf()]);
@@ -196,22 +239,9 @@ async fn fetch_formula_rb_accepts_local_paths() {
 #[tokio::test]
 async fn first_request_stores_etag() {
     let mock_server = MockServer::start().await;
-    let fixture = include_str!("../../../fixtures/formula_foo.json");
+    foo_with_etag().mount(&mock_server).await;
 
-    Mock::given(method("GET"))
-        .and(path("/foo.json"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(fixture)
-                .insert_header("etag", "\"abc123\""),
-        )
-        .mount(&mock_server)
-        .await;
-
-    let cache = ApiCache::in_memory().unwrap();
-    let client = ApiClient::with_base_url(mock_server.uri()).with_cache(cache);
-
-    let _ = client.get_formula("foo").await.unwrap();
+    let client = primed_cached_client(&mock_server).await;
 
     let cached = client
         .cache
@@ -219,39 +249,17 @@ async fn first_request_stores_etag() {
         .unwrap()
         .get(&format!("{}/foo.json", mock_server.uri()))
         .unwrap();
-    assert_eq!(cached.etag, Some("\"abc123\"".to_string()));
+    assert_eq!(cached.etag.as_deref(), Some(FOO_ETAG));
 }
 
 #[tokio::test]
 async fn second_request_sends_if_none_match() {
     let mock_server = MockServer::start().await;
-    let fixture = include_str!("../../../fixtures/formula_foo.json");
+    foo_with_etag().expect(1).mount(&mock_server).await;
 
-    Mock::given(method("GET"))
-        .and(path("/foo.json"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(fixture)
-                .insert_header("etag", "\"abc123\""),
-        )
-        .expect(1)
-        .mount(&mock_server)
-        .await;
-
-    let cache = ApiCache::in_memory().unwrap();
-    let client = ApiClient::with_base_url(mock_server.uri()).with_cache(cache);
-
-    let _ = client.get_formula("foo").await.unwrap();
-
+    let client = primed_cached_client(&mock_server).await;
     mock_server.reset().await;
-
-    Mock::given(method("GET"))
-        .and(path("/foo.json"))
-        .and(header("If-None-Match", "\"abc123\""))
-        .respond_with(ResponseTemplate::new(304))
-        .expect(1)
-        .mount(&mock_server)
-        .await;
+    foo_not_modified().expect(1).mount(&mock_server).await;
 
     let formula = client.get_formula("foo").await.unwrap();
     assert_eq!(formula.name, "foo");
@@ -260,31 +268,11 @@ async fn second_request_sends_if_none_match() {
 #[tokio::test]
 async fn uses_cached_body_on_304() {
     let mock_server = MockServer::start().await;
-    let fixture = include_str!("../../../fixtures/formula_foo.json");
+    foo_with_etag().mount(&mock_server).await;
 
-    Mock::given(method("GET"))
-        .and(path("/foo.json"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(fixture)
-                .insert_header("etag", "\"abc123\""),
-        )
-        .mount(&mock_server)
-        .await;
-
-    let cache = ApiCache::in_memory().unwrap();
-    let client = ApiClient::with_base_url(mock_server.uri()).with_cache(cache);
-
-    let _ = client.get_formula("foo").await.unwrap();
-
+    let client = primed_cached_client(&mock_server).await;
     mock_server.reset().await;
-
-    Mock::given(method("GET"))
-        .and(path("/foo.json"))
-        .and(header("If-None-Match", "\"abc123\""))
-        .respond_with(ResponseTemplate::new(304))
-        .mount(&mock_server)
-        .await;
+    foo_not_modified().mount(&mock_server).await;
 
     let formula = client.get_formula("foo").await.unwrap();
     assert_eq!(formula.name, "foo");
@@ -304,16 +292,17 @@ class Terraform < Formula
   end
 end
 "#;
+    mount_get(
+        &mock_server,
+        "/hashicorp/homebrew-tap/main/Formula/terraform.rb",
+        ResponseTemplate::new(200).set_body_string(rb),
+    )
+    .await;
 
-    Mock::given(method("GET"))
-        .and(path("/hashicorp/homebrew-tap/main/Formula/terraform.rb"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(rb))
-        .mount(&mock_server)
-        .await;
-
-    let client =
-        ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
-    let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
+    let formula = tap_client(&mock_server)
+        .get_formula("hashicorp/tap/terraform")
+        .await
+        .unwrap();
 
     assert_eq!(formula.name, "terraform");
     assert_eq!(formula.versions.stable, "1.10.0");
@@ -341,18 +330,14 @@ class OhMyPosh < Formula
   depends_on "go@1.26" => :build
 end
 "#;
+    mount_get(
+        &mock_server,
+        "/jandedobbeleer/homebrew-oh-my-posh/main/oh-my-posh.rb",
+        ResponseTemplate::new(200).set_body_string(rb),
+    )
+    .await;
 
-    Mock::given(method("GET"))
-        .and(path(
-            "/jandedobbeleer/homebrew-oh-my-posh/main/oh-my-posh.rb",
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_string(rb))
-        .mount(&mock_server)
-        .await;
-
-    let client =
-        ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
-    let formula = client
+    let formula = tap_client(&mock_server)
         .get_formula("jandedobbeleer/oh-my-posh/oh-my-posh")
         .await
         .unwrap();
@@ -372,155 +357,65 @@ end
 #[tokio::test]
 async fn falls_back_to_master_when_main_missing_for_tap_formula() {
     let mock_server = MockServer::start().await;
-    let rb = r#"
-class Terraform < Formula
-  version "1.10.0"
-  bottle do
-    root_url "https://ghcr.io/v2/hashicorp/tap"
-    sha256 arm64_sonoma: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  end
-end
-"#;
+    mount_get(
+        &mock_server,
+        "/hashicorp/homebrew-tap/main/Formula/terraform.rb",
+        ResponseTemplate::new(404),
+    )
+    .await;
+    mount_get(
+        &mock_server,
+        "/hashicorp/homebrew-tap/master/Formula/terraform.rb",
+        ResponseTemplate::new(200).set_body_string(TERRAFORM_TAP_RB),
+    )
+    .await;
 
-    Mock::given(method("GET"))
-        .and(path("/hashicorp/homebrew-tap/main/Formula/terraform.rb"))
-        .respond_with(ResponseTemplate::new(404))
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/hashicorp/homebrew-tap/master/Formula/terraform.rb"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(rb))
-        .mount(&mock_server)
-        .await;
-
-    let client =
-        ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
-    let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
+    let formula = tap_client(&mock_server)
+        .get_formula("hashicorp/tap/terraform")
+        .await
+        .unwrap();
 
     assert_eq!(formula.name, "terraform");
     assert_eq!(formula.versions.stable, "1.10.0");
 }
 
 #[tokio::test]
-async fn resolves_tap_formula_from_letter_subdirectory_path() {
-    let mock_server = MockServer::start().await;
-    let rb = r#"
-class Terraform < Formula
-  version "1.10.0"
-  bottle do
-    root_url "https://ghcr.io/v2/hashicorp/tap"
-    sha256 arm64_sonoma: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  end
-end
-"#;
+async fn resolves_tap_formula_from_candidate_paths() {
+    const CANDIDATES: &[&str] = &[
+        // letter subdirectory
+        "/hashicorp/homebrew-tap/main/Formula/t/terraform.rb",
+        // HomebrewFormula directory
+        "/hashicorp/homebrew-tap/main/HomebrewFormula/terraform.rb",
+        // HomebrewFormula letter subdirectory
+        "/hashicorp/homebrew-tap/main/HomebrewFormula/t/terraform.rb",
+        // repository root
+        "/hashicorp/homebrew-tap/main/terraform.rb",
+    ];
 
-    Mock::given(method("GET"))
-        .and(path("/hashicorp/homebrew-tap/main/Formula/t/terraform.rb"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(rb))
-        .mount(&mock_server)
+    for route in CANDIDATES {
+        let mock_server = MockServer::start().await;
+        mount_get(
+            &mock_server,
+            route,
+            ResponseTemplate::new(200).set_body_string(TERRAFORM_TAP_RB),
+        )
         .await;
 
-    let client =
-        ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
-    let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
+        let formula = tap_client(&mock_server)
+            .get_formula("hashicorp/tap/terraform")
+            .await
+            .unwrap();
 
-    assert_eq!(formula.name, "terraform");
-    assert_eq!(formula.versions.stable, "1.10.0");
-}
-
-#[tokio::test]
-async fn resolves_tap_formula_from_homebrewformula_directory() {
-    let mock_server = MockServer::start().await;
-    let rb = r#"
-class Terraform < Formula
-  version "1.10.0"
-  bottle do
-    root_url "https://ghcr.io/v2/hashicorp/tap"
-    sha256 arm64_sonoma: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  end
-end
-"#;
-
-    Mock::given(method("GET"))
-        .and(path(
-            "/hashicorp/homebrew-tap/main/HomebrewFormula/terraform.rb",
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_string(rb))
-        .mount(&mock_server)
-        .await;
-
-    let client =
-        ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
-    let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
-
-    assert_eq!(formula.name, "terraform");
-    assert_eq!(formula.versions.stable, "1.10.0");
-}
-
-#[tokio::test]
-async fn resolves_tap_formula_from_homebrewformula_letter_subdirectory_path() {
-    let mock_server = MockServer::start().await;
-    let rb = r#"
-class Terraform < Formula
-  version "1.10.0"
-  bottle do
-    root_url "https://ghcr.io/v2/hashicorp/tap"
-    sha256 arm64_sonoma: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  end
-end
-"#;
-
-    Mock::given(method("GET"))
-        .and(path(
-            "/hashicorp/homebrew-tap/main/HomebrewFormula/t/terraform.rb",
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_string(rb))
-        .mount(&mock_server)
-        .await;
-
-    let client =
-        ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
-    let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
-
-    assert_eq!(formula.name, "terraform");
-    assert_eq!(formula.versions.stable, "1.10.0");
-}
-
-#[tokio::test]
-async fn resolves_tap_formula_from_repository_root() {
-    let mock_server = MockServer::start().await;
-    let rb = r#"
-class Terraform < Formula
-  version "1.10.0"
-  bottle do
-    root_url "https://ghcr.io/v2/hashicorp/tap"
-    sha256 arm64_sonoma: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  end
-end
-"#;
-
-    Mock::given(method("GET"))
-        .and(path("/hashicorp/homebrew-tap/main/terraform.rb"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(rb))
-        .mount(&mock_server)
-        .await;
-
-    let client =
-        ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
-    let formula = client.get_formula("hashicorp/tap/terraform").await.unwrap();
-
-    assert_eq!(formula.name, "terraform");
-    assert_eq!(formula.versions.stable, "1.10.0");
+        assert_eq!(formula.name, "terraform", "route: {route}");
+        assert_eq!(formula.versions.stable, "1.10.0", "route: {route}");
+    }
 }
 
 #[tokio::test]
 async fn returns_missing_formula_when_all_tap_candidates_are_404() {
     let mock_server = MockServer::start().await;
 
-    let client =
-        ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
-    let err = client
+    let err = tap_client(&mock_server)
         .get_formula("hashicorp/tap/terraform")
         .await
         .unwrap_err();
@@ -534,16 +429,14 @@ async fn returns_missing_formula_when_all_tap_candidates_are_404() {
 #[tokio::test]
 async fn does_not_return_missing_formula_when_a_non_404_tap_status_is_seen() {
     let mock_server = MockServer::start().await;
+    mount_get(
+        &mock_server,
+        "/hashicorp/homebrew-tap/main/Formula/terraform.rb",
+        ResponseTemplate::new(500),
+    )
+    .await;
 
-    Mock::given(method("GET"))
-        .and(path("/hashicorp/homebrew-tap/main/Formula/terraform.rb"))
-        .respond_with(ResponseTemplate::new(500))
-        .mount(&mock_server)
-        .await;
-
-    let client =
-        ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
-    let err = client
+    let err = tap_client(&mock_server)
         .get_formula("hashicorp/tap/terraform")
         .await
         .unwrap_err();
@@ -554,13 +447,12 @@ async fn does_not_return_missing_formula_when_a_non_404_tap_status_is_seen() {
 #[tokio::test]
 async fn fetch_formula_rb_supports_absolute_url_paths() {
     let mock_server = MockServer::start().await;
-    let ruby_body = "class Foo < Formula\nend\n";
-
-    Mock::given(method("GET"))
-        .and(path("/custom/foo.rb"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(ruby_body))
-        .mount(&mock_server)
-        .await;
+    mount_get(
+        &mock_server,
+        "/custom/foo.rb",
+        ResponseTemplate::new(200).set_body_string("class Foo < Formula\nend\n"),
+    )
+    .await;
 
     let cache_dir = tempdir().unwrap();
     let client = ApiClient::new();
@@ -580,13 +472,12 @@ async fn fetch_formula_rb_supports_absolute_url_paths() {
 #[tokio::test]
 async fn fetch_formula_rb_from_network_rejects_checksum_mismatch() {
     let mock_server = MockServer::start().await;
-    let ruby_body = "class Foo < Formula\nend\n";
-
-    Mock::given(method("GET"))
-        .and(path("/Formula/f/foo.rb"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(ruby_body))
-        .mount(&mock_server)
-        .await;
+    mount_get(
+        &mock_server,
+        "/Formula/f/foo.rb",
+        ResponseTemplate::new(200).set_body_string("class Foo < Formula\nend\n"),
+    )
+    .await;
 
     let cache_dir = tempdir().unwrap();
     let client = ApiClient::new();
@@ -645,12 +536,12 @@ async fn fetches_cask_json() {
   "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "artifacts": [{"app":["iTerm.app"]}]
 }"#;
-
-    Mock::given(method("GET"))
-        .and(path("/iterm2.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(cask_json))
-        .mount(&mock_server)
-        .await;
+    mount_get(
+        &mock_server,
+        "/iterm2.json",
+        ResponseTemplate::new(200).set_body_string(cask_json),
+    )
+    .await;
 
     let client = ApiClient::with_base_url(mock_server.uri()).with_cask_base_url(mock_server.uri());
     let cask = client.get_cask("iterm2").await.unwrap();
@@ -658,17 +549,48 @@ async fn fetches_cask_json() {
     assert_eq!(cask["version"], "3.5.0");
 }
 
-fn write_stale_meta(cache_dir: &std::path::Path, slug: &str, etag: Option<&str>) {
-    let meta = IndexMeta {
-        etag: etag.map(|s| s.to_string()),
-        last_modified: Some("Wed, 01 Jan 2020 00:00:00 GMT".to_string()),
-        fetched_at: 0,
-    };
+/// Seeds `formula.json` with `body` and `formula.meta.json` with `meta`.
+fn write_cached_index(cache_dir: &Path, body: &str, meta: &IndexMeta) {
+    std::fs::write(cache_dir.join("formula.json"), body).unwrap();
     std::fs::write(
-        cache_dir.join(format!("{slug}.meta.json")),
-        serde_json::to_string(&meta).unwrap(),
+        cache_dir.join("formula.meta.json"),
+        serde_json::to_string(meta).unwrap(),
     )
     .unwrap();
+}
+
+/// Meta fetched just now, so it is within the freshness window.
+fn fresh_meta(etag: &str) -> IndexMeta {
+    IndexMeta {
+        etag: Some(etag.to_string()),
+        last_modified: None,
+        fetched_at: now_secs(),
+    }
+}
+
+/// Meta fetched at the epoch, so it always needs revalidation.
+fn stale_meta(etag: Option<&str>) -> IndexMeta {
+    IndexMeta {
+        etag: etag.map(str::to_string),
+        last_modified: Some("Wed, 01 Jan 2020 00:00:00 GMT".to_string()),
+        fetched_at: 0,
+    }
+}
+
+fn read_index_meta(cache_dir: &Path) -> IndexMeta {
+    let raw = std::fs::read_to_string(cache_dir.join("formula.meta.json")).unwrap();
+    serde_json::from_str(&raw).unwrap()
+}
+
+async fn fetch_formula_index(
+    server: &MockServer,
+    cache_dir: &Path,
+    refresh: bool,
+) -> Result<String, Error> {
+    let url = format!("{}/formula.json", server.uri());
+    ApiClient::new()
+        .fetch_index(&url, cache_dir, "formula", refresh)
+        .await
 }
 
 #[tokio::test]
@@ -676,8 +598,7 @@ async fn fetch_index_writes_body_and_meta_on_fresh_200() {
     let mock_server = MockServer::start().await;
     let cache_dir = tempdir().unwrap();
 
-    Mock::given(method("GET"))
-        .and(path("/formula.json"))
+    get("/formula.json")
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_string("[]")
@@ -688,17 +609,13 @@ async fn fetch_index_writes_body_and_meta_on_fresh_200() {
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new();
-    let url = format!("{}/formula.json", mock_server.uri());
-    let body = client
-        .fetch_index(&url, cache_dir.path(), "formula", false)
+    let body = fetch_formula_index(&mock_server, cache_dir.path(), false)
         .await
         .unwrap();
 
     assert_eq!(body, "[]");
     assert!(cache_dir.path().join("formula.json").exists());
-    let meta_raw = std::fs::read_to_string(cache_dir.path().join("formula.meta.json")).unwrap();
-    let meta: IndexMeta = serde_json::from_str(&meta_raw).unwrap();
+    let meta = read_index_meta(cache_dir.path());
     assert_eq!(meta.etag.as_deref(), Some("\"abc123\""));
     assert_eq!(
         meta.last_modified.as_deref(),
@@ -711,30 +628,15 @@ async fn fetch_index_writes_body_and_meta_on_fresh_200() {
 async fn fetch_index_uses_cache_when_fresh_no_network() {
     let mock_server = MockServer::start().await;
     let cache_dir = tempdir().unwrap();
+    write_cached_index(cache_dir.path(), "[\"cached\"]", &fresh_meta("\"old\""));
 
-    std::fs::write(cache_dir.path().join("formula.json"), "[\"cached\"]").unwrap();
-    let meta = IndexMeta {
-        etag: Some("\"old\"".to_string()),
-        last_modified: None,
-        fetched_at: now_secs(),
-    };
-    std::fs::write(
-        cache_dir.path().join("formula.meta.json"),
-        serde_json::to_string(&meta).unwrap(),
-    )
-    .unwrap();
-
-    Mock::given(method("GET"))
-        .and(path("/formula.json"))
+    get("/formula.json")
         .respond_with(ResponseTemplate::new(500))
         .expect(0)
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new();
-    let url = format!("{}/formula.json", mock_server.uri());
-    let body = client
-        .fetch_index(&url, cache_dir.path(), "formula", false)
+    let body = fetch_formula_index(&mock_server, cache_dir.path(), false)
         .await
         .unwrap();
 
@@ -745,30 +647,26 @@ async fn fetch_index_uses_cache_when_fresh_no_network() {
 async fn fetch_index_revalidates_with_304_when_stale() {
     let mock_server = MockServer::start().await;
     let cache_dir = tempdir().unwrap();
+    write_cached_index(
+        cache_dir.path(),
+        "[\"cached\"]",
+        &stale_meta(Some("\"etag-v1\"")),
+    );
 
-    std::fs::write(cache_dir.path().join("formula.json"), "[\"cached\"]").unwrap();
-    write_stale_meta(cache_dir.path(), "formula", Some("\"etag-v1\""));
-
-    Mock::given(method("GET"))
-        .and(path("/formula.json"))
+    get("/formula.json")
         .and(header("if-none-match", "\"etag-v1\""))
         .respond_with(ResponseTemplate::new(304))
         .expect(1)
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new();
-    let url = format!("{}/formula.json", mock_server.uri());
-    let body = client
-        .fetch_index(&url, cache_dir.path(), "formula", false)
+    let body = fetch_formula_index(&mock_server, cache_dir.path(), false)
         .await
         .unwrap();
 
     assert_eq!(body, "[\"cached\"]");
-    let meta_raw = std::fs::read_to_string(cache_dir.path().join("formula.meta.json")).unwrap();
-    let meta: IndexMeta = serde_json::from_str(&meta_raw).unwrap();
     assert!(
-        meta.fetched_at > 0,
+        read_index_meta(cache_dir.path()).fetched_at > 0,
         "fetched_at should be refreshed after 304"
     );
 }
@@ -777,21 +675,9 @@ async fn fetch_index_revalidates_with_304_when_stale() {
 async fn fetch_index_refresh_forces_revalidation_even_when_fresh() {
     let mock_server = MockServer::start().await;
     let cache_dir = tempdir().unwrap();
+    write_cached_index(cache_dir.path(), "[\"old\"]", &fresh_meta("\"etag-v1\""));
 
-    std::fs::write(cache_dir.path().join("formula.json"), "[\"old\"]").unwrap();
-    let meta = IndexMeta {
-        etag: Some("\"etag-v1\"".to_string()),
-        last_modified: None,
-        fetched_at: now_secs(),
-    };
-    std::fs::write(
-        cache_dir.path().join("formula.meta.json"),
-        serde_json::to_string(&meta).unwrap(),
-    )
-    .unwrap();
-
-    Mock::given(method("GET"))
-        .and(path("/formula.json"))
+    get("/formula.json")
         .and(header("if-none-match", "\"etag-v1\""))
         .respond_with(
             ResponseTemplate::new(200)
@@ -802,75 +688,52 @@ async fn fetch_index_refresh_forces_revalidation_even_when_fresh() {
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new();
-    let url = format!("{}/formula.json", mock_server.uri());
-    let body = client
-        .fetch_index(&url, cache_dir.path(), "formula", true)
+    let body = fetch_formula_index(&mock_server, cache_dir.path(), true)
         .await
         .unwrap();
 
     assert_eq!(body, "[\"new\"]");
-    let meta_raw = std::fs::read_to_string(cache_dir.path().join("formula.meta.json")).unwrap();
-    let meta: IndexMeta = serde_json::from_str(&meta_raw).unwrap();
-    assert_eq!(meta.etag.as_deref(), Some("\"etag-v2\""));
+    assert_eq!(
+        read_index_meta(cache_dir.path()).etag.as_deref(),
+        Some("\"etag-v2\"")
+    );
 }
 
 #[tokio::test]
-async fn fetch_index_returns_stale_on_server_error() {
-    let mock_server = MockServer::start().await;
-    let cache_dir = tempdir().unwrap();
+async fn fetch_index_server_error_falls_back_to_stale_cache_or_fails() {
+    // (has stale cache, expected body) — `None` means a network error is expected.
+    const CASES: &[(bool, Option<&str>)] = &[(true, Some("[\"cached\"]")), (false, None)];
 
-    std::fs::write(cache_dir.path().join("formula.json"), "[\"cached\"]").unwrap();
-    write_stale_meta(cache_dir.path(), "formula", None);
+    for &(seed_cache, expected) in CASES {
+        let mock_server = MockServer::start().await;
+        let cache_dir = tempdir().unwrap();
+        if seed_cache {
+            write_cached_index(cache_dir.path(), "[\"cached\"]", &stale_meta(None));
+        }
+        mount_get(&mock_server, "/formula.json", ResponseTemplate::new(503)).await;
 
-    Mock::given(method("GET"))
-        .and(path("/formula.json"))
-        .respond_with(ResponseTemplate::new(503))
-        .mount(&mock_server)
-        .await;
+        let result = fetch_formula_index(&mock_server, cache_dir.path(), false).await;
 
-    let client = ApiClient::new();
-    let url = format!("{}/formula.json", mock_server.uri());
-    let body = client
-        .fetch_index(&url, cache_dir.path(), "formula", false)
-        .await
-        .unwrap();
-
-    assert_eq!(body, "[\"cached\"]");
-}
-
-#[tokio::test]
-async fn fetch_index_server_error_without_cache_returns_network_error() {
-    let mock_server = MockServer::start().await;
-    let cache_dir = tempdir().unwrap();
-
-    Mock::given(method("GET"))
-        .and(path("/formula.json"))
-        .respond_with(ResponseTemplate::new(503))
-        .mount(&mock_server)
-        .await;
-
-    let client = ApiClient::new();
-    let url = format!("{}/formula.json", mock_server.uri());
-    let err = client
-        .fetch_index(&url, cache_dir.path(), "formula", false)
-        .await
-        .unwrap_err();
-
-    assert_matches!(err, Error::NetworkFailure { .. });
+        match expected {
+            Some(body) => assert_eq!(result.unwrap(), body, "seed_cache: {seed_cache}"),
+            None => assert_matches!(result, Err(Error::NetworkFailure { .. })),
+        }
+    }
 }
 
 #[tokio::test]
 async fn fetch_index_stale_on_network_failure() {
     let cache_dir = tempdir().unwrap();
-    std::fs::write(cache_dir.path().join("formula.json"), "[\"cached\"]").unwrap();
-    write_stale_meta(cache_dir.path(), "formula", None);
+    write_cached_index(cache_dir.path(), "[\"cached\"]", &stale_meta(None));
 
     // Point at an unreachable port to force a connection failure.
-    let client = ApiClient::new();
-    let url = "http://127.0.0.1:1/formula.json";
-    let body = client
-        .fetch_index(url, cache_dir.path(), "formula", false)
+    let body = ApiClient::new()
+        .fetch_index(
+            "http://127.0.0.1:1/formula.json",
+            cache_dir.path(),
+            "formula",
+            false,
+        )
         .await
         .unwrap();
 

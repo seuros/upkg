@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::core::storage::fs_util::{StoreContext, dir_paths, file_name_str};
 use crate::types::{Error, formula_token};
 
 #[derive(Debug, Clone)]
@@ -17,16 +18,15 @@ pub struct InstallReceipt {
     pub version: String,
     pub store_key: String,
     pub installed_at: i64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub post_install_steps: Vec<crate::types::formula::PostInstallStep>,
 }
 
 pub fn write_receipt(keg_path: &Path, receipt: &InstallReceipt) -> Result<(), Error> {
     let path = receipt_path(keg_path);
-    let data = serde_json::to_vec_pretty(receipt).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to serialize INSTALL_RECEIPT.json: {e}"),
-    })?;
-    fs::write(&path, data).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to write {}: {e}", path.display()),
-    })
+    let data = serde_json::to_vec_pretty(receipt)
+        .store_context(|| "failed to serialize INSTALL_RECEIPT.json")?;
+    fs::write(&path, data).store_context(|| format!("failed to write {}", path.display()))
 }
 
 pub fn read_receipt(keg_path: &Path) -> Option<InstallReceipt> {
@@ -45,45 +45,15 @@ pub fn scan_installed(cellar: &Path) -> Result<Vec<InstalledKeg>, Error> {
     }
 
     let mut out = Vec::new();
-    for formula_dir in fs::read_dir(cellar).map_err(|e| Error::StoreCorruption {
-        message: format!(
-            "failed to read cellar directory '{}': {e}",
-            cellar.display()
-        ),
-    })? {
-        let formula_dir = match formula_dir {
-            Ok(v) => v.path(),
-            Err(_) => continue,
-        };
-        if !formula_dir.is_dir() {
-            continue;
-        }
+    for formula_dir in dir_paths(cellar, "cellar directory")?.filter(|path| path.is_dir()) {
+        let formula_name = file_name_str(&formula_dir).unwrap_or_default().to_string();
 
-        let formula_name = formula_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default()
-            .to_string();
-
-        for version_dir in fs::read_dir(&formula_dir).map_err(|e| Error::StoreCorruption {
-            message: format!(
-                "failed to read formula directory '{}': {e}",
-                formula_dir.display()
-            ),
-        })? {
-            let version_dir = match version_dir {
-                Ok(v) => v.path(),
-                Err(_) => continue,
-            };
+        for version_dir in dir_paths(&formula_dir, "formula directory")? {
             if !version_dir.is_dir() || is_keg_backup(&version_dir) {
                 continue;
             }
 
-            let version = version_dir
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default()
-                .to_string();
+            let version = file_name_str(&version_dir).unwrap_or_default().to_string();
 
             if let Some(receipt) = read_receipt(&version_dir) {
                 out.push(InstalledKeg {
@@ -109,10 +79,7 @@ pub fn scan_installed(cellar: &Path) -> Result<Vec<InstalledKeg>, Error> {
 /// Kegs set aside while a source build or reinstall runs; they are restored or
 /// removed afterwards and must never be reported as installed.
 fn is_keg_backup(version_dir: &Path) -> bool {
-    version_dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| n.contains(".upkg-backup-"))
+    file_name_str(version_dir).is_some_and(|n| n.contains(".upkg-backup-"))
 }
 
 /// Anything besides a receipt counts; an empty directory is debris from an

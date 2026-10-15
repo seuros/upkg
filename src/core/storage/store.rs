@@ -3,6 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::core::extraction::extract::extract_archive;
+use crate::core::storage::fs_util::StoreContext;
 use crate::types::Error;
 
 pub struct Store {
@@ -57,9 +58,7 @@ impl Store {
             let _ = fs::remove_dir_all(&tmp_dir);
         }
 
-        fs::create_dir_all(&tmp_dir).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to create temp directory: {e}"),
-        })?;
+        fs::create_dir_all(&tmp_dir).store_context(|| "failed to create temp directory")?;
 
         if let Err(e) = extract_archive(blob_path, &tmp_dir) {
             let _ = fs::remove_dir_all(&tmp_dir);
@@ -81,14 +80,12 @@ impl Store {
     }
 
     fn lock_entry(&self, store_key: &str) -> Result<File, Error> {
-        let lock_file =
-            File::create(self.lock_path(store_key)).map_err(|e| Error::StoreCorruption {
-                message: format!("failed to create lock file: {e}"),
-            })?;
+        let lock_file = File::create(self.lock_path(store_key))
+            .store_context(|| "failed to create lock file")?;
 
-        lock_file.lock().map_err(|e| Error::StoreCorruption {
-            message: format!("failed to acquire lock: {e}"),
-        })?;
+        lock_file
+            .lock()
+            .store_context(|| "failed to acquire lock")?;
 
         Ok(lock_file)
     }
@@ -103,9 +100,7 @@ impl Store {
         let _lock = self.lock_entry(store_key)?;
 
         if entry_path.exists() {
-            fs::remove_dir_all(&entry_path).map_err(|e| Error::StoreCorruption {
-                message: format!("failed to remove store entry: {e}"),
-            })?;
+            fs::remove_dir_all(&entry_path).store_context(|| "failed to remove store entry")?;
         }
 
         let _ = fs::remove_file(self.lock_path(store_key));

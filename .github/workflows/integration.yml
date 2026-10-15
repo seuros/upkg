@@ -69,3 +69,9 @@ jobs:
       - name: Dry run app install (macOS)
         if: runner.os == 'macOS'
         run: upkg install --app --dry-run firefox
+
+      - name: PostgreSQL runtime paths (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          upkg install postgresql@18
+          cargo test --locked --test postgresql -- --ignored --nocapture

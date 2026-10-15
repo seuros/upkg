@@ -22,30 +22,23 @@ fn failure_context_uses_formula_named_by_error() {
 }
 
 #[test]
-fn dependency_cellar_path_uses_formula_token_for_tap_name() {
+fn dependency_cellar_path_uses_the_formula_token() {
+    const CASES: &[(&str, &str, &str)] = &[
+        // Tap references keep only the formula token from the install record.
+        (
+            "hashicorp/tap/terraform",
+            "1.10.0",
+            "Cellar/terraform/1.10.0",
+        ),
+        // Core names, including versioned ones, are used as-is.
+        ("openssl@3", "3.3.2", "Cellar/openssl@3/3.3.2"),
+    ];
     let tmp = TempDir::new().unwrap();
     let cellar = Cellar::new(tmp.path()).unwrap();
-    let path = dependency_cellar_path(&cellar, "hashicorp/tap/terraform", "1.10.0");
-
-    assert!(path.ends_with("Cellar/terraform/1.10.0"));
-}
-
-#[test]
-fn dependency_cellar_path_keeps_core_formula_name() {
-    let tmp = TempDir::new().unwrap();
-    let cellar = Cellar::new(tmp.path()).unwrap();
-    let path = dependency_cellar_path(&cellar, "openssl@3", "3.3.2");
-
-    assert!(path.ends_with("Cellar/openssl@3/3.3.2"));
-}
-
-#[test]
-fn dependency_cellar_path_uses_name_from_install_record() {
-    let tmp = TempDir::new().unwrap();
-    let cellar = Cellar::new(tmp.path()).unwrap();
-    let path = dependency_cellar_path(&cellar, "hashicorp/tap/terraform", "1.10.0");
-
-    assert!(path.ends_with("Cellar/terraform/1.10.0"));
+    for (name, version, expected) in CASES {
+        let path = dependency_cellar_path(&cellar, name, version);
+        assert!(path.ends_with(expected), "{name}@{version}: {path:?}");
+    }
 }
 
 #[test]

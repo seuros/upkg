@@ -1,5 +1,7 @@
 #[path = "storage/blob.rs"]
 pub mod blob;
+#[path = "storage/fs_util.rs"]
+pub(crate) mod fs_util;
 #[path = "storage/receipt.rs"]
 pub mod receipt;
 #[path = "storage/state_db.rs"]

@@ -101,6 +101,8 @@ pub struct Formula {
     pub requirements: Vec<serde_json::Value>,
     #[serde(default)]
     pub variations: Option<serde_json::Value>,
+    #[serde(default)]
+    pub post_install_steps: Vec<super::post_install::PostInstallStep>,
 }
 
 impl Formula {
@@ -114,6 +116,15 @@ impl Formula {
 
     pub fn is_keg_only(&self) -> bool {
         self.name.contains('@') || !matches!(self.keg_only, KegOnly::No)
+    }
+
+    /// Why linking is skipped for a keg-only formula, for progress output.
+    pub fn keg_only_reason(&self) -> String {
+        match &self.keg_only {
+            KegOnly::Reason(s) => s.clone(),
+            _ if self.name.contains('@') => "versioned formula".to_string(),
+            _ => "keg-only formula".to_string(),
+        }
     }
 
     pub fn source_url(&self) -> Option<&SourceUrl> {

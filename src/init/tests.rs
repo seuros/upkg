@@ -7,8 +7,76 @@ use tempfile::TempDir;
 
 static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+const UPKG_DIR: &str = "/home/user/.upkg";
+const UPKG_BIN: &str = "/home/user/.upkg/bin";
+
 fn env_lock() -> MutexGuard<'static, ()> {
     ENV_LOCK.lock().unwrap()
+}
+
+fn set_mode(path: &Path, mode: u32) {
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(mode);
+    fs::set_permissions(path, perms).unwrap();
+}
+
+/// `(root, prefix)` paths under `tmp`; nothing is created on disk.
+fn layout(tmp: &TempDir) -> (PathBuf, PathBuf) {
+    (tmp.path().join("root"), tmp.path().join("prefix"))
+}
+
+fn create_managed_dirs(root: &Path, prefix: &Path) {
+    for dir in managed_dirs(root, prefix) {
+        fs::create_dir_all(dir).unwrap();
+    }
+}
+
+/// Temp `$HOME` with existing root/prefix dirs and `HOME`/`SHELL` exported.
+/// Holds the env lock for its whole lifetime.
+struct ShellHome {
+    tmp: TempDir,
+    root: PathBuf,
+    prefix: PathBuf,
+    _env_lock: MutexGuard<'static, ()>,
+}
+
+impl ShellHome {
+    fn new(shell: &str) -> Self {
+        let env_lock = env_lock();
+        let tmp = TempDir::new().unwrap();
+        let (root, prefix) = layout(&tmp);
+        fs::create_dir(&prefix).unwrap();
+        fs::create_dir(&root).unwrap();
+
+        // SAFETY: tests that touch the process environment serialize on ENV_LOCK.
+        unsafe {
+            std::env::set_var("HOME", tmp.path().to_str().unwrap());
+            std::env::set_var("SHELL", shell);
+        }
+
+        Self {
+            tmp,
+            root,
+            prefix,
+            _env_lock: env_lock,
+        }
+    }
+
+    fn home(&self) -> &Path {
+        self.tmp.path()
+    }
+
+    fn add_to_path(&self, no_modify_path: bool) {
+        add_to_path(&self.prefix, UPKG_DIR, UPKG_BIN, &self.root, no_modify_path).unwrap();
+    }
+}
+
+/// Runs `add_to_path` for bash and returns the fixture plus the written `.bashrc`.
+fn bashrc_after_add_to_path() -> (ShellHome, String) {
+    let home = ShellHome::new("/bin/bash");
+    home.add_to_path(false);
+    let content = fs::read_to_string(home.home().join(".bashrc")).unwrap();
+    (home, content)
 }
 
 #[test]
@@ -23,21 +91,14 @@ fn needs_init_when_directories_missing() {
 #[test]
 fn needs_init_when_not_writable() {
     let tmp = TempDir::new().unwrap();
-    let root = tmp.path().join("root");
-    let prefix = tmp.path().join("prefix");
+    let (root, prefix) = layout(&tmp);
 
     fs::create_dir(&root).unwrap();
     fs::create_dir(&prefix).unwrap();
 
-    let mut root_perms = fs::metadata(&root).unwrap().permissions();
-    root_perms.set_mode(0o555);
-    fs::set_permissions(&root, root_perms).unwrap();
-
+    set_mode(&root, 0o555);
     let result = needs_init(&root, &prefix);
-
-    let mut root_perms = fs::metadata(&root).unwrap().permissions();
-    root_perms.set_mode(0o755);
-    fs::set_permissions(&root, root_perms).unwrap();
+    set_mode(&root, 0o755);
 
     assert!(result);
 }
@@ -45,14 +106,9 @@ fn needs_init_when_not_writable() {
 #[test]
 fn no_init_needed_when_writable() {
     let tmp = TempDir::new().unwrap();
-    let root = tmp.path().join("root");
-    let prefix = tmp.path().join("prefix");
+    let (root, prefix) = layout(&tmp);
 
-    fs::create_dir(&root).unwrap();
-    fs::create_dir(&prefix).unwrap();
-    for dir in managed_dirs(&root, &prefix) {
-        fs::create_dir_all(dir).unwrap();
-    }
+    create_managed_dirs(&root, &prefix);
 
     assert!(!needs_init(&root, &prefix));
 }
@@ -60,12 +116,9 @@ fn no_init_needed_when_writable() {
 #[test]
 fn needs_init_when_db_dir_missing() {
     let tmp = TempDir::new().unwrap();
-    let root = tmp.path().join("root");
-    let prefix = tmp.path().join("prefix");
+    let (root, prefix) = layout(&tmp);
 
-    for dir in managed_dirs(&root, &prefix) {
-        fs::create_dir_all(dir).unwrap();
-    }
+    create_managed_dirs(&root, &prefix);
     fs::remove_dir(root.join("db")).unwrap();
 
     assert!(needs_init(&root, &prefix));
@@ -90,15 +143,9 @@ fn is_writable_returns_false_for_readonly_dir() {
     let readonly = tmp.path().join("readonly");
     fs::create_dir(&readonly).unwrap();
 
-    let mut perms = fs::metadata(&readonly).unwrap().permissions();
-    perms.set_mode(0o555);
-    fs::set_permissions(&readonly, perms).unwrap();
-
+    set_mode(&readonly, 0o555);
     assert!(!is_writable(&readonly));
-
-    let mut perms = fs::metadata(&readonly).unwrap().permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&readonly, perms).unwrap();
+    set_mode(&readonly, 0o755);
 }
 
 #[test]
@@ -110,34 +157,14 @@ fn shell_quote_round_trips_single_quotes() {
 
 #[test]
 fn add_to_path_writes_core_env_vars_with_guarded_ca_setup() {
-    let _env_lock = env_lock();
-    let tmp = TempDir::new().unwrap();
-    let home = tmp.path();
-    let prefix = tmp.path().join("prefix");
-    let root = tmp.path().join("root");
-    let shell_config = home.join(".bashrc");
-    let upkg_dir = "/home/user/.upkg";
-    let upkg_bin = "/home/user/.upkg/bin";
+    let (home, content) = bashrc_after_add_to_path();
 
-    fs::create_dir(&prefix).unwrap();
-    fs::create_dir(&root).unwrap();
-
-    unsafe {
-        std::env::set_var("HOME", home.to_str().unwrap());
-    }
-    unsafe {
-        std::env::set_var("SHELL", "/bin/bash");
-    }
-
-    add_to_path(&prefix, upkg_dir, upkg_bin, &root, false).unwrap();
-
-    let content = fs::read_to_string(&shell_config).unwrap();
     assert!(content.contains(UPKG_BLOCK_START));
     assert!(content.contains(UPKG_BLOCK_END));
     assert!(content.contains("export UPKG_DIR=/home/user/.upkg"));
     assert!(content.contains("export UPKG_BIN=/home/user/.upkg/bin"));
-    assert!(content.contains(&format!("export UPKG_ROOT={}", root.display())));
-    assert!(content.contains(&format!("export UPKG_PREFIX={}", prefix.display())));
+    assert!(content.contains(&format!("export UPKG_ROOT={}", home.root.display())));
+    assert!(content.contains(&format!("export UPKG_PREFIX={}", home.prefix.display())));
     assert!(content.contains("export PKG_CONFIG_PATH="));
     assert!(content.contains("/lib/pkgconfig"));
     assert!(
@@ -154,28 +181,8 @@ fn add_to_path_writes_core_env_vars_with_guarded_ca_setup() {
 
 #[test]
 fn add_to_path_includes_path_append_function() {
-    let _env_lock = env_lock();
-    let tmp = TempDir::new().unwrap();
-    let home = tmp.path();
-    let prefix = tmp.path().join("prefix");
-    let root = tmp.path().join("root");
-    let shell_config = home.join(".bashrc");
-    let upkg_dir = "/home/user/.upkg";
-    let upkg_bin = "/home/user/.upkg/bin";
+    let (_home, content) = bashrc_after_add_to_path();
 
-    fs::create_dir(&prefix).unwrap();
-    fs::create_dir(&root).unwrap();
-
-    unsafe {
-        std::env::set_var("HOME", home.to_str().unwrap());
-    }
-    unsafe {
-        std::env::set_var("SHELL", "/bin/bash");
-    }
-
-    add_to_path(&prefix, upkg_dir, upkg_bin, &root, false).unwrap();
-
-    let content = fs::read_to_string(&shell_config).unwrap();
     assert!(content.contains("_upkg_path_append()"));
     assert!(content.contains("case \":${PATH}:"));
     assert!(content.contains("_upkg_path_append"));
@@ -183,78 +190,25 @@ fn add_to_path_includes_path_append_function() {
 
 #[test]
 fn add_to_path_adds_both_paths() {
-    let _env_lock = env_lock();
-    let tmp = TempDir::new().unwrap();
-    let home = tmp.path();
-    let prefix = tmp.path().join("prefix");
-    let root = tmp.path().join("root");
-    let shell_config = home.join(".bashrc");
-    let upkg_dir = "/home/user/.upkg";
-    let upkg_bin = "/home/user/.upkg/bin";
+    let (_home, content) = bashrc_after_add_to_path();
 
-    fs::create_dir(&prefix).unwrap();
-    fs::create_dir(&root).unwrap();
-
-    unsafe {
-        std::env::set_var("HOME", home.to_str().unwrap());
-    }
-    unsafe {
-        std::env::set_var("SHELL", "/bin/bash");
-    }
-
-    add_to_path(&prefix, upkg_dir, upkg_bin, &root, false).unwrap();
-
-    let content = fs::read_to_string(&shell_config).unwrap();
     assert!(content.contains("_upkg_path_append \"$UPKG_BIN\""));
     assert!(content.contains("_upkg_path_append \"$UPKG_PREFIX/bin\""));
 }
 
 #[test]
 fn add_to_path_no_modify_shell_skips_write() {
-    let _env_lock = env_lock();
-    let tmp = TempDir::new().unwrap();
-    let home = tmp.path();
-    let prefix = tmp.path().join("prefix");
-    let root = tmp.path().join("root");
-    let shell_config = home.join(".bashrc");
-    let upkg_dir = "/home/user/.upkg";
-    let upkg_bin = "/home/user/.upkg/bin";
+    let home = ShellHome::new("/bin/bash");
 
-    fs::create_dir(&prefix).unwrap();
-    fs::create_dir(&root).unwrap();
+    home.add_to_path(true);
 
-    unsafe {
-        std::env::set_var("HOME", home.to_str().unwrap());
-    }
-    unsafe {
-        std::env::set_var("SHELL", "/bin/bash");
-    }
-
-    add_to_path(&prefix, upkg_dir, upkg_bin, &root, true).unwrap();
-
-    assert!(!shell_config.exists());
+    assert!(!home.home().join(".bashrc").exists());
 }
 
 #[test]
 fn add_to_path_no_duplicate_config() {
-    let _env_lock = env_lock();
-    let tmp = TempDir::new().unwrap();
-    let home = tmp.path();
-    let prefix = tmp.path().join("prefix");
-    let root = tmp.path().join("root");
-    let shell_config = home.join(".bashrc");
-    let upkg_dir = "/home/user/.upkg";
-    let upkg_bin = "/home/user/.upkg/bin";
-
-    fs::create_dir(&prefix).unwrap();
-    fs::create_dir(&root).unwrap();
-
-    unsafe {
-        std::env::set_var("HOME", home.to_str().unwrap());
-    }
-    unsafe {
-        std::env::set_var("SHELL", "/bin/bash");
-    }
+    let home = ShellHome::new("/bin/bash");
+    let shell_config = home.home().join(".bashrc");
 
     fs::write(
         &shell_config,
@@ -264,11 +218,11 @@ fn add_to_path_no_duplicate_config() {
     )
     .unwrap();
 
-    add_to_path(&prefix, upkg_dir, upkg_bin, &root, false).unwrap();
+    home.add_to_path(false);
 
     let content = fs::read_to_string(&shell_config).unwrap();
     assert!(content.contains("export KEEP_ME=true"));
-    assert!(content.contains(&format!("export UPKG_DIR={upkg_dir}")));
+    assert!(content.contains(&format!("export UPKG_DIR={UPKG_DIR}")));
     assert!(!content.contains("export UPKG_DIR=/old"));
     assert_eq!(content.matches(UPKG_BLOCK_START).count(), 1);
     assert_eq!(content.matches(UPKG_BLOCK_END).count(), 1);
@@ -313,16 +267,8 @@ fn shell_config_file_selection(
     #[case] expected_file: &str,
     #[case] _description: &str,
 ) {
-    let _env_lock = env_lock();
-    let tmp = TempDir::new().unwrap();
-    let home = tmp.path();
-    let prefix = tmp.path().join("prefix");
-    let root = tmp.path().join("root");
-    let upkg_dir = "/home/user/.upkg";
-    let upkg_bin = "/home/user/.upkg/bin";
-
-    fs::create_dir(&prefix).unwrap();
-    fs::create_dir(&root).unwrap();
+    let fixture = ShellHome::new(shell);
+    let home = fixture.home();
 
     // Create existing file if specified
     if let Some(file) = existing_file {
@@ -337,21 +283,18 @@ fn shell_config_file_selection(
     if let Some(zdir) = zdotdir {
         let zdotdir_path = home.join(zdir);
         fs::create_dir_all(&zdotdir_path).unwrap();
+        // SAFETY: serialized by the env lock `ShellHome` holds.
         unsafe {
             std::env::set_var("ZDOTDIR", zdotdir_path.to_str().unwrap());
         }
     } else {
+        // SAFETY: serialized by the env lock `ShellHome` holds.
         unsafe {
             std::env::remove_var("ZDOTDIR");
         }
     }
 
-    unsafe {
-        std::env::set_var("HOME", home.to_str().unwrap());
-        std::env::set_var("SHELL", shell);
-    }
-
-    add_to_path(&prefix, upkg_dir, upkg_bin, &root, false).unwrap();
+    fixture.add_to_path(false);
 
     let config_file = home.join(expected_file);
     assert!(

@@ -1,6 +1,25 @@
 use super::*;
 use std::assert_matches;
 
+fn parse(owner: &str, repo: &str, formula: &str, source: &str) -> Result<Formula, Error> {
+    let spec = TapFormulaRef {
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+        formula: formula.to_string(),
+    };
+    parse_tap_formula_ruby(&spec, source)
+}
+
+fn assert_stable_source(formula: &Formula, url: &str, checksum: &str) {
+    let stable = formula
+        .urls
+        .as_ref()
+        .and_then(|u| u.stable.as_ref())
+        .expect("stable source url should be parsed");
+    assert_eq!(stable.url, url);
+    assert_eq!(stable.checksum.as_deref(), Some(checksum));
+}
+
 #[test]
 fn parses_tap_formula_reference() {
     let parsed = parse_tap_formula_ref("hashicorp/tap/terraform").unwrap();
@@ -11,9 +30,9 @@ fn parses_tap_formula_reference() {
 
 #[test]
 fn rejects_non_tap_reference() {
-    assert!(parse_tap_formula_ref("jq").is_none());
-    assert!(parse_tap_formula_ref("a/b").is_none());
-    assert!(parse_tap_formula_ref("a/b/c/d").is_none());
+    for input in ["jq", "a/b", "a/b/c/d"] {
+        assert!(parse_tap_formula_ref(input).is_none(), "input: {input:?}");
+    }
 }
 
 #[test]
@@ -34,13 +53,7 @@ class Terraform < Formula
 end
 "#;
 
-    let spec = TapFormulaRef {
-        owner: "hashicorp".to_string(),
-        repo: "tap".to_string(),
-        formula: "terraform".to_string(),
-    };
-
-    let formula = parse_tap_formula_ruby(&spec, source).unwrap();
+    let formula = parse("hashicorp", "tap", "terraform", source).unwrap();
     assert_eq!(formula.name, "terraform");
     assert_eq!(formula.versions.stable, "1.10.0");
     assert_eq!(formula.revision, 1);
@@ -61,16 +74,9 @@ class Terraform < Formula
 end
 "#;
 
-    let spec = TapFormulaRef {
-        owner: "hashicorp".to_string(),
-        repo: "tap".to_string(),
-        formula: "terraform".to_string(),
-    };
-
-    let formula = parse_tap_formula_ruby(&spec, source).unwrap();
-    let url = &formula.bottle.stable.files["arm64_sonoma"].url;
+    let formula = parse("hashicorp", "tap", "terraform", source).unwrap();
     assert_eq!(
-        url,
+        formula.bottle.stable.files["arm64_sonoma"].url,
         "https://ghcr.io/v2/hashicorp/tap/terraform/blobs/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     );
 }
@@ -86,15 +92,9 @@ class Ttfb < Formula
   end
 end
 "#;
-    let spec = TapFormulaRef {
-        owner: "messense".to_string(),
-        repo: "tap".to_string(),
-        formula: "ttfb".to_string(),
-    };
-    let formula = parse_tap_formula_ruby(&spec, source).unwrap();
-    let url = &formula.bottle.stable.files["x86_64_linux"].url;
+    let formula = parse("messense", "tap", "ttfb", source).unwrap();
     assert_eq!(
-        url,
+        formula.bottle.stable.files["x86_64_linux"].url,
         "https://github.com/messense/homebrew-tap/releases/download/ttfb-1.3.0/ttfb-1.3.0.x86_64_linux.bottle.tar.gz"
     );
 }
@@ -110,12 +110,7 @@ class Jaso < Formula
   end
 end
 "#;
-    let spec = TapFormulaRef {
-        owner: "simnalamburt".to_string(),
-        repo: "x".to_string(),
-        formula: "jaso".to_string(),
-    };
-    let formula = parse_tap_formula_ruby(&spec, source).unwrap();
+    let formula = parse("simnalamburt", "x", "jaso", source).unwrap();
     assert_eq!(formula.versions.stable, "1.0.1");
     assert_eq!(
         formula.bottle.stable.files["x86_64_linux"].url,
@@ -140,12 +135,7 @@ class Terraform < Formula
 end
 "#;
 
-    let spec = TapFormulaRef {
-        owner: "hashicorp".to_string(),
-        repo: "tap".to_string(),
-        formula: "terraform".to_string(),
-    };
-    let formula = parse_tap_formula_ruby(&spec, source).unwrap();
+    let formula = parse("hashicorp", "tap", "terraform", source).unwrap();
 
     assert!(formula.bottle.stable.files.contains_key("x86_64_linux"));
     assert!(formula.bottle.stable.files.contains_key("arm64_sonoma"));
@@ -162,28 +152,13 @@ class OhMyPosh < Formula
 end
 "#;
 
-    let spec = TapFormulaRef {
-        owner: "jandedobbeleer".to_string(),
-        repo: "oh-my-posh".to_string(),
-        formula: "oh-my-posh".to_string(),
-    };
-
-    let formula = parse_tap_formula_ruby(&spec, source).unwrap();
+    let formula = parse("jandedobbeleer", "oh-my-posh", "oh-my-posh", source).unwrap();
     assert!(formula.bottle.stable.files.is_empty());
     assert_eq!(formula.build_dependencies, vec!["go@1.26".to_string()]);
-
-    let stable = formula
-        .urls
-        .as_ref()
-        .and_then(|u| u.stable.as_ref())
-        .expect("stable source url should be parsed");
-    assert_eq!(
-        stable.url,
-        "https://github.com/JanDeDobbeleer/oh-my-posh/archive/v29.3.0.tar.gz"
-    );
-    assert_eq!(
-        stable.checksum.as_deref(),
-        Some("ff39f6ef2b4ca2d7d766f2802520b023986a5d6dbcd59fba685a9e5bacf41993")
+    assert_stable_source(
+        &formula,
+        "https://github.com/JanDeDobbeleer/oh-my-posh/archive/v29.3.0.tar.gz",
+        "ff39f6ef2b4ca2d7d766f2802520b023986a5d6dbcd59fba685a9e5bacf41993",
     );
 }
 
@@ -201,51 +176,28 @@ class Example < Formula
 end
 "#;
 
-    let spec = TapFormulaRef {
-        owner: "someone".to_string(),
-        repo: "tap".to_string(),
-        formula: "example".to_string(),
-    };
-
-    let formula = parse_tap_formula_ruby(&spec, source).unwrap();
-    let stable = formula
-        .urls
-        .as_ref()
-        .and_then(|u| u.stable.as_ref())
-        .expect("stable source url should be parsed");
-
-    assert_eq!(stable.url, "https://example.com/example-1.0.0.tar.gz");
-    assert_eq!(
-        stable.checksum.as_deref(),
-        Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    let formula = parse("someone", "tap", "example", source).unwrap();
+    assert_stable_source(
+        &formula,
+        "https://example.com/example-1.0.0.tar.gz",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     );
 }
 
 #[test]
-fn source_url_without_sha256_is_unsupported() {
-    let source = r#"
+fn source_url_without_top_level_sha256_is_unsupported() {
+    const CASES: &[(&str, &str)] = &[
+        (
+            "no sha256 at all",
+            r#"
 class Example < Formula
   url "https://example.com/example-1.0.0.tar.gz"
 end
-"#;
-
-    let spec = TapFormulaRef {
-        owner: "someone".to_string(),
-        repo: "tap".to_string(),
-        formula: "example".to_string(),
-    };
-
-    let err = parse_tap_formula_ruby(&spec, source).unwrap_err();
-    assert_matches!(
-        err,
-        Error::UnsupportedFormula { reason, .. }
-        if reason.contains("missing sha256")
-    );
-}
-
-#[test]
-fn source_url_without_top_level_sha256_is_unsupported_even_if_nested_has_sha256() {
-    let source = r#"
+"#,
+        ),
+        (
+            "sha256 only inside a nested resource",
+            r#"
 class Example < Formula
   url "https://example.com/example-1.0.0.tar.gz"
 
@@ -254,20 +206,18 @@ class Example < Formula
     sha256 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   end
 end
-"#;
+"#,
+        ),
+    ];
 
-    let spec = TapFormulaRef {
-        owner: "someone".to_string(),
-        repo: "tap".to_string(),
-        formula: "example".to_string(),
-    };
-
-    let err = parse_tap_formula_ruby(&spec, source).unwrap_err();
-    assert_matches!(
-        err,
-        Error::UnsupportedFormula { reason, .. }
-        if reason.contains("missing sha256")
-    );
+    for (case, source) in CASES {
+        let err = parse("someone", "tap", "example", source).unwrap_err();
+        assert_matches!(
+            err,
+            Error::UnsupportedFormula { ref reason, .. } if reason.contains("missing sha256"),
+            "case: {case}"
+        );
+    }
 }
 
 #[test]
@@ -285,13 +235,7 @@ class Example < Formula
 end
 "#;
 
-    let spec = TapFormulaRef {
-        owner: "someone".to_string(),
-        repo: "tap".to_string(),
-        formula: "example".to_string(),
-    };
-
-    let formula = parse_tap_formula_ruby(&spec, source).unwrap();
+    let formula = parse("someone", "tap", "example", source).unwrap();
     assert_eq!(formula.dependencies, vec!["openssl@3".to_string()]);
     assert_eq!(formula.build_dependencies, vec!["go".to_string()]);
 }
@@ -313,25 +257,13 @@ class Example < Formula
 end
 "#;
 
-    let spec = TapFormulaRef {
-        owner: "someone".to_string(),
-        repo: "tap".to_string(),
-        formula: "example".to_string(),
-    };
-
-    let formula = parse_tap_formula_ruby(&spec, source).unwrap();
+    let formula = parse("someone", "tap", "example", source).unwrap();
     assert_eq!(formula.dependencies, vec!["openssl@3".to_string()]);
     assert_eq!(formula.build_dependencies, vec!["go".to_string()]);
-
-    let stable = formula
-        .urls
-        .as_ref()
-        .and_then(|u| u.stable.as_ref())
-        .expect("stable source url should be parsed");
-    assert_eq!(stable.url, "https://example.com/example-1.0.0.tar.gz");
-    assert_eq!(
-        stable.checksum.as_deref(),
-        Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    assert_stable_source(
+        &formula,
+        "https://example.com/example-1.0.0.tar.gz",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     );
 }
 
@@ -343,12 +275,6 @@ class Terraform < Formula
 end
 "#;
 
-    let spec = TapFormulaRef {
-        owner: "hashicorp".to_string(),
-        repo: "tap".to_string(),
-        formula: "terraform".to_string(),
-    };
-
-    let err = parse_tap_formula_ruby(&spec, source).unwrap_err();
+    let err = parse("hashicorp", "tap", "terraform", source).unwrap_err();
     assert_matches!(err, Error::UnsupportedFormula { .. });
 }

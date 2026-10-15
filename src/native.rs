@@ -30,12 +30,7 @@ pub fn print_dry_run(
     packages: &[String],
     kind: PackageKind,
 ) -> Result<(), UpkgError> {
-    let command = match action {
-        PackageAction::Install => "install",
-        PackageAction::Uninstall => "uninstall",
-        PackageAction::Upgrade => "upgrade",
-        PackageAction::Reinstall => "reinstall",
-    };
+    let command = action.as_str();
     let package_args = match kind {
         PackageKind::Auto => packages.to_vec(),
         PackageKind::App => packages

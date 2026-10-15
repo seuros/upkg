@@ -1,36 +1,12 @@
 use super::*;
-use crate::formula::types::{Bottle, BottleFile, BottleStable, KegOnly, Versions};
+use crate::formula::test_support::{names, test_formula};
 use std::assert_matches;
 use std::collections::BTreeMap;
 
 fn formula(name: &str, deps: &[&str]) -> Formula {
-    let mut files = BTreeMap::new();
-    files.insert(
-        "arm64_sonoma".to_string(),
-        BottleFile {
-            url: format!("https://example.com/{name}.tar.gz"),
-            sha256: "deadbeef".repeat(8),
-        },
-    );
-
     Formula {
-        name: name.to_string(),
-        versions: Versions {
-            stable: "1.0.0".to_string(),
-        },
-        dependencies: deps.iter().map(|dep| dep.to_string()).collect(),
-        bottle: Bottle {
-            stable: BottleStable { files, rebuild: 0 },
-        },
-        revision: 0,
-        keg_only: KegOnly::default(),
-        build_dependencies: Vec::new(),
-        urls: None,
-        ruby_source_path: None,
-        ruby_source_checksum: None,
-        uses_from_macos: Vec::new(),
-        requirements: Vec::new(),
-        variations: None,
+        dependencies: names(deps),
+        ..test_formula(name)
     }
 }
 

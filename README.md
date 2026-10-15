@@ -76,6 +76,14 @@ No runtime switch, no shelling out to `brew`. The engine is built in and keeps t
 
 Same formula and cask names. Different engine.
 
+Formula installs apply Homebrew's declarative `mkdir_p`, `link_dir`, and
+`link_children` post-install metadata, including versioned runtime paths for
+keg-only packages such as PostgreSQL. These links are retained across reinstalls
+and removed on uninstall without deleting user data or third-party extensions.
+Disabling ordinary global linking does not suppress these required runtime paths.
+Ruby post-install scripts, database initialization, and service startup are not
+executed; initialize PostgreSQL explicitly with `initdb` when needed.
+
 Apps are detected automatically when a name exists as a cask but not as a
 formula. Use `--app` when you want to force cask resolution:
 

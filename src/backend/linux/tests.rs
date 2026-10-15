@@ -1,4 +1,5 @@
 use super::*;
+use crate::backend::test_support::assert_spec;
 use rstest::rstest;
 use std::assert_matches;
 
@@ -76,11 +77,11 @@ fn install_spec_generates_correct_commands(
     #[case] expected_command: &str,
     #[case] expected_args: Vec<&str>,
 ) {
-    let spec = manager.install_spec(&packages);
-    assert_eq!(spec.command(), expected_command);
-
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, expected_args);
+    assert_spec(
+        &manager.install_spec(&packages),
+        expected_command,
+        &expected_args,
+    );
 }
 
 #[test]
@@ -89,8 +90,7 @@ fn install_spec_handles_multiple_packages() {
     let packages = vec!["git".into(), "curl".into(), "wget".into()];
     let spec = manager.install_spec(&packages);
 
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, vec!["apt", "install", "-y", "git", "curl", "wget"]);
+    assert_eq!(spec.args(), ["apt", "install", "-y", "git", "curl", "wget"]);
 }
 
 #[rstest]
@@ -103,11 +103,11 @@ fn uninstall_spec_generates_correct_commands(
     #[case] expected_command: &str,
     #[case] expected_args: Vec<&str>,
 ) {
-    let spec = manager.uninstall_spec(&packages);
-    assert_eq!(spec.command(), expected_command);
-
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, expected_args);
+    assert_spec(
+        &manager.uninstall_spec(&packages),
+        expected_command,
+        &expected_args,
+    );
 }
 
 #[rstest]
@@ -124,10 +124,7 @@ fn reinstall_spec_generates_correct_commands(
     #[case] expected_args: Vec<&str>,
 ) {
     let spec = manager.reinstall_spec(&["git".to_string()]);
-    assert_eq!(spec.command(), expected_command);
-
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, expected_args);
+    assert_spec(&spec, expected_command, &expected_args);
 }
 
 #[rstest]
@@ -145,9 +142,7 @@ fn search_spec_non_exact(
     #[case] expected_args: Vec<&str>,
 ) {
     let spec = manager.search_spec(query, false).expect("search ok");
-    assert_eq!(spec.command(), expected_command);
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, expected_args);
+    assert_spec(&spec, expected_command, &expected_args);
 }
 
 #[test]
@@ -169,29 +164,25 @@ fn search_spec_rejects_exact_on_unsupported_managers(#[case] manager: LinuxManag
 #[test]
 fn search_spec_pacman_anchors_exact_query() {
     let spec = LinuxManager::Pacman.search_spec("git", true).unwrap();
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, vec!["-Ss", "^git$"]);
+    assert_eq!(spec.args(), ["-Ss", "^git$"]);
 }
 
 #[test]
 fn search_spec_opkg_anchors_exact_query() {
     let spec = LinuxManager::Opkg.search_spec("git", true).unwrap();
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, vec!["find", "^git$"]);
+    assert_eq!(spec.args(), ["find", "^git$"]);
 }
 
 #[test]
 fn search_spec_apk_passes_exact_flag() {
     let spec = LinuxManager::Apk.search_spec("c++.tools", true).unwrap();
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, vec!["search", "--exact", "c++.tools"]);
+    assert_eq!(spec.args(), ["search", "--exact", "c++.tools"]);
 }
 
 #[test]
 fn search_spec_pacman_escapes_regex_metacharacters_in_exact() {
     let spec = LinuxManager::Pacman.search_spec("c++.tools", true).unwrap();
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, vec!["-Ss", r"^c\+\+\.tools$"]);
+    assert_eq!(spec.args(), ["-Ss", r"^c\+\+\.tools$"]);
 }
 
 #[test]
@@ -200,8 +191,7 @@ fn upgrade_spec_handles_empty_packages_for_apt() {
     let packages: Vec<String> = vec![];
     let spec = manager.upgrade_spec(&packages);
 
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, vec!["apt", "upgrade", "-y"]);
+    assert_eq!(spec.args(), ["apt", "upgrade", "-y"]);
 }
 
 #[rstest]
@@ -209,6 +199,5 @@ fn upgrade_spec_handles_empty_packages_for_apt() {
 #[case(vec!["git".into()], vec!["apk", "add", "--update-cache", "--upgrade", "git"])]
 fn upgrade_spec_apk(#[case] packages: Vec<String>, #[case] expected_args: Vec<&str>) {
     let spec = LinuxManager::Apk.upgrade_spec(&packages);
-    let args: Vec<&str> = spec.args().iter().map(|s| s.as_str()).collect();
-    assert_eq!(args, expected_args);
+    assert_eq!(spec.args(), expected_args);
 }

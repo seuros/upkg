@@ -2,6 +2,15 @@ use super::*;
 use tempfile::TempDir;
 
 #[test]
+fn receipts_without_post_install_metadata_remain_readable() {
+    let receipt: InstallReceipt = serde_json::from_str(
+        r#"{"install_name":"testpkg","formula_name":"testpkg","version":"1.0",
+            "store_key":"abc","installed_at":0}"#,
+    )
+    .unwrap();
+    assert!(receipt.post_install_steps.is_empty());
+}
+#[test]
 fn empty_version_dir_is_not_installed() {
     let tmp = TempDir::new().unwrap();
     fs::create_dir_all(tmp.path().join("gmp/6.3.0")).unwrap();
@@ -45,6 +54,7 @@ fn receipt_wins_over_directory_name() {
             version: "3.6.2".into(),
             store_key: "abc".into(),
             installed_at: 0,
+            post_install_steps: Vec::new(),
         },
     )
     .unwrap();

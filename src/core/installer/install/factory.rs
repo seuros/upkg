@@ -7,6 +7,7 @@ use crate::core::cellar::materialize::Cellar;
 use crate::core::network::api::ApiClient;
 use crate::core::network::download::ParallelDownloader;
 use crate::core::storage::blob::BlobCache;
+use crate::core::storage::fs_util::{StoreContext, dir_paths, file_name_str};
 use crate::core::storage::receipt::scan_installed;
 use crate::core::storage::state_db::{InstalledPackage, InstalledPackageKind, StateDb};
 use crate::core::storage::store::Store;
@@ -45,20 +46,14 @@ pub fn create_installer(
     let lock_file = acquire_global_lock(root)?;
 
     let api_client = ApiClient::new();
-    let blob_cache = BlobCache::new(&root.join("cache")).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create blob cache: {e}"),
-    })?;
-    let store = Store::new(root).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create store: {e}"),
-    })?;
+    let blob_cache =
+        BlobCache::new(&root.join("cache")).store_context(|| "failed to create blob cache")?;
+    let store = Store::new(root).store_context(|| "failed to create store")?;
     let state_db = StateDb::open(&root.join("db").join("upkg.sqlite3"))?;
     backfill_state_db_if_empty(&state_db, prefix)?;
-    let cellar = Cellar::new_at(prefix.join("Cellar")).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create cellar: {e}"),
-    })?;
-    let linker = Linker::new(prefix).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create linker: {e}"),
-    })?;
+    let cellar =
+        Cellar::new_at(prefix.join("Cellar")).store_context(|| "failed to create cellar")?;
+    let linker = Linker::new(prefix).store_context(|| "failed to create linker")?;
     let parallel_downloader = ParallelDownloader::with_concurrency(blob_cache, concurrency);
 
     Ok(Installer {
@@ -75,14 +70,11 @@ pub fn create_installer(
 
 fn acquire_global_lock(root: &Path) -> Result<File, Error> {
     let locks_dir = root.join("locks");
-    std::fs::create_dir_all(&locks_dir).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create lock directory: {e}"),
-    })?;
+    std::fs::create_dir_all(&locks_dir).store_context(|| "failed to create lock directory")?;
 
     let lock_path = locks_dir.join("upkg.lock");
-    let lock_file = File::create(&lock_path).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create global lock file: {e}"),
-    })?;
+    let lock_file =
+        File::create(&lock_path).store_context(|| "failed to create global lock file")?;
 
     if let Err(err) = lock_file.try_lock() {
         let std::fs::TryLockError::WouldBlock = err else {
@@ -92,9 +84,9 @@ fn acquire_global_lock(root: &Path) -> Result<File, Error> {
         };
 
         eprintln!("    Waiting for another upkg process to finish...");
-        lock_file.lock().map_err(|e| Error::StoreCorruption {
-            message: format!("failed to acquire global lock: {e}"),
-        })?;
+        lock_file
+            .lock()
+            .store_context(|| "failed to acquire global lock")?;
     }
 
     Ok(lock_file)
@@ -143,17 +135,8 @@ fn scan_caskroom(prefix: &Path) -> Result<Vec<(String, String)>, Error> {
     }
 
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(&caskroom).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to read Caskroom '{}': {e}", caskroom.display()),
-    })? {
-        let path = match entry {
-            Ok(entry) => entry.path(),
-            Err(_) => continue,
-        };
-        if !path.is_dir() {
-            continue;
-        }
-        let Some(token) = path.file_name().and_then(|name| name.to_str()) else {
+    for path in dir_paths(&caskroom, "Caskroom")?.filter(|path| path.is_dir()) {
+        let Some(token) = file_name_str(&path) else {
             continue;
         };
         let Some(version) = latest_cask_version(&path)? else {
@@ -167,14 +150,8 @@ fn scan_caskroom(prefix: &Path) -> Result<Vec<(String, String)>, Error> {
 
 fn latest_cask_version(cask_path: &Path) -> Result<Option<String>, Error> {
     let mut versions = Vec::new();
-    for entry in std::fs::read_dir(cask_path).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to read cask path '{}': {e}", cask_path.display()),
-    })? {
-        let path = match entry {
-            Ok(entry) => entry.path(),
-            Err(_) => continue,
-        };
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+    for path in dir_paths(cask_path, "cask path")? {
+        let Some(name) = file_name_str(&path) else {
             continue;
         };
         if name == ".metadata" || !path.is_dir() {

@@ -1,7 +1,28 @@
 use super::*;
-use crate::formula::types::{Bottle, BottleFile, BottleStable, KegOnly, Versions};
+use crate::formula::test_support::bottled_formula;
 use std::assert_matches;
-use std::collections::BTreeMap;
+
+/// A formula offering only a `tag` bottle is unsupported on this platform.
+fn assert_unsupported_with_only(tag: &str) {
+    let formula = bottled_formula("legacy", &[(tag, "https://example.com/legacy.tar.gz")]);
+
+    let err = select_bottle(&formula).unwrap_err();
+    assert_matches!(
+        err,
+        Error::UnsupportedBottle { name } if name == "legacy"
+    );
+}
+
+/// On macOS `codename`, `files` resolve to the bottle tagged `expected`.
+fn assert_selects_for_codename(files: &[(&str, &str)], codename: &'static str, expected: &str) {
+    let formula = bottled_formula("current", files);
+
+    let selected = select_bottle_with_codename(&formula, Some(codename)).unwrap();
+    assert_eq!(
+        selected.tag, expected,
+        "codename: {codename}, files: {files:?}"
+    );
+}
 
 #[test]
 fn selects_platform_bottle() {
@@ -28,34 +49,13 @@ fn selects_platform_bottle() {
 
 #[test]
 fn selects_all_bottle_for_universal_packages() {
-    let mut files = BTreeMap::new();
-    files.insert(
-        "all".to_string(),
-        BottleFile {
-            url: "https://ghcr.io/v2/homebrew/core/ca-certificates/blobs/sha256:abc123".to_string(),
-            sha256: "abc123".to_string(),
-        },
+    let formula = bottled_formula(
+        "ca-certificates",
+        &[(
+            "all",
+            "https://ghcr.io/v2/homebrew/core/ca-certificates/blobs/sha256:abc123",
+        )],
     );
-
-    let formula = Formula {
-        name: "ca-certificates".to_string(),
-        versions: Versions {
-            stable: "2024-01-01".to_string(),
-        },
-        dependencies: Vec::new(),
-        bottle: Bottle {
-            stable: BottleStable { files, rebuild: 0 },
-        },
-        revision: 0,
-        keg_only: KegOnly::default(),
-        build_dependencies: Vec::new(),
-        urls: None,
-        ruby_source_path: None,
-        ruby_source_checksum: None,
-        uses_from_macos: Vec::new(),
-        requirements: Vec::new(),
-        variations: None,
-    };
 
     let selected = select_bottle(&formula).unwrap();
     assert_eq!(selected.tag, "all");
@@ -65,79 +65,13 @@ fn selects_all_bottle_for_universal_packages() {
 #[test]
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn errors_when_no_arm64_bottle() {
-    let mut files = BTreeMap::new();
-    files.insert(
-        "sonoma".to_string(),
-        BottleFile {
-            url: "https://example.com/legacy.tar.gz".to_string(),
-            sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string(),
-        },
-    );
-
-    let formula = Formula {
-        name: "legacy".to_string(),
-        versions: Versions {
-            stable: "0.1.0".to_string(),
-        },
-        dependencies: Vec::new(),
-        bottle: Bottle {
-            stable: BottleStable { files, rebuild: 0 },
-        },
-        revision: 0,
-        keg_only: KegOnly::default(),
-        build_dependencies: Vec::new(),
-        urls: None,
-        ruby_source_path: None,
-        ruby_source_checksum: None,
-        uses_from_macos: Vec::new(),
-        requirements: Vec::new(),
-        variations: None,
-    };
-
-    let err = select_bottle(&formula).unwrap_err();
-    assert_matches!(
-        err,
-        Error::UnsupportedBottle { name } if name == "legacy"
-    );
+    assert_unsupported_with_only("sonoma");
 }
 
 #[test]
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 fn errors_when_no_x86_64_bottle() {
-    let mut files = BTreeMap::new();
-    files.insert(
-        "arm64_sonoma".to_string(),
-        BottleFile {
-            url: "https://example.com/legacy.tar.gz".to_string(),
-            sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
-        },
-    );
-
-    let formula = Formula {
-        name: "legacy".to_string(),
-        versions: Versions {
-            stable: "0.1.0".to_string(),
-        },
-        dependencies: Vec::new(),
-        bottle: Bottle {
-            stable: BottleStable { files, rebuild: 0 },
-        },
-        revision: 0,
-        keg_only: KegOnly::default(),
-        build_dependencies: Vec::new(),
-        urls: None,
-        ruby_source_path: None,
-        ruby_source_checksum: None,
-        uses_from_macos: Vec::new(),
-        requirements: Vec::new(),
-        variations: None,
-    };
-
-    let err = select_bottle(&formula).unwrap_err();
-    assert_matches!(
-        err,
-        Error::UnsupportedBottle { name } if name == "legacy"
-    );
+    assert_unsupported_with_only("arm64_sonoma");
 }
 
 #[test]
@@ -186,80 +120,24 @@ fn compatible_codenames_on_mojave_do_not_include_newer_releases() {
 #[test]
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn sequoia_user_skips_tahoe_bottle() {
-    let mut files = BTreeMap::new();
-    files.insert(
-        "arm64_tahoe".to_string(),
-        BottleFile {
-            url: "https://example.com/tahoe.tar.gz".to_string(),
-            sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
-        },
+    assert_selects_for_codename(
+        &[
+            ("arm64_tahoe", "https://example.com/tahoe.tar.gz"),
+            ("arm64_sequoia", "https://example.com/sequoia.tar.gz"),
+        ],
+        "sequoia",
+        "arm64_sequoia",
     );
-    files.insert(
-        "arm64_sequoia".to_string(),
-        BottleFile {
-            url: "https://example.com/sequoia.tar.gz".to_string(),
-            sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
-        },
-    );
-
-    let formula = Formula {
-        name: "current".to_string(),
-        versions: Versions {
-            stable: "1.0.0".to_string(),
-        },
-        dependencies: Vec::new(),
-        bottle: Bottle {
-            stable: BottleStable { files, rebuild: 0 },
-        },
-        revision: 0,
-        keg_only: KegOnly::default(),
-        build_dependencies: Vec::new(),
-        urls: None,
-        ruby_source_path: None,
-        ruby_source_checksum: None,
-        uses_from_macos: Vec::new(),
-        requirements: Vec::new(),
-        variations: None,
-    };
-
-    let selected = select_bottle_with_codename(&formula, Some("sequoia")).unwrap();
-    assert_eq!(selected.tag, "arm64_sequoia");
 }
 
 #[test]
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 fn monterey_falls_back_to_sonoma_bottle() {
-    let mut files = BTreeMap::new();
-    files.insert(
-        "sonoma".to_string(),
-        BottleFile {
-            url: "https://example.com/sonoma.tar.gz".to_string(),
-            sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
-        },
+    assert_selects_for_codename(
+        &[("sonoma", "https://example.com/sonoma.tar.gz")],
+        "monterey",
+        "sonoma",
     );
-
-    let formula = Formula {
-        name: "protobuf".to_string(),
-        versions: Versions {
-            stable: "35.0".to_string(),
-        },
-        dependencies: Vec::new(),
-        bottle: Bottle {
-            stable: BottleStable { files, rebuild: 0 },
-        },
-        revision: 0,
-        keg_only: KegOnly::default(),
-        build_dependencies: Vec::new(),
-        urls: None,
-        ruby_source_path: None,
-        ruby_source_checksum: None,
-        uses_from_macos: Vec::new(),
-        requirements: Vec::new(),
-        variations: None,
-    };
-
-    let selected = select_bottle_with_codename(&formula, Some("monterey")).unwrap();
-    assert_eq!(selected.tag, "sonoma");
 }
 
 #[test]
@@ -277,36 +155,10 @@ fn newer_codenames_empty_for_newest() {
 #[test]
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 fn mojave_falls_back_to_closest_newer_bottle() {
-    let mut files = BTreeMap::new();
-    files.insert(
-        "big_sur".to_string(),
-        BottleFile {
-            url: "https://example.com/big-sur.tar.gz".to_string(),
-            sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string(),
-        },
-    );
-
-    let formula = Formula {
-        name: "modern-only".to_string(),
-        versions: Versions {
-            stable: "1.0.0".to_string(),
-        },
-        dependencies: Vec::new(),
-        bottle: Bottle {
-            stable: BottleStable { files, rebuild: 0 },
-        },
-        revision: 0,
-        keg_only: KegOnly::default(),
-        build_dependencies: Vec::new(),
-        urls: None,
-        ruby_source_path: None,
-        ruby_source_checksum: None,
-        uses_from_macos: Vec::new(),
-        requirements: Vec::new(),
-        variations: None,
-    };
-
     // With newer-bottle fallback, mojave user gets the closest newer bottle (big_sur)
-    let selected = select_bottle_with_codename(&formula, Some("mojave")).unwrap();
-    assert_eq!(selected.tag, "big_sur");
+    assert_selects_for_codename(
+        &[("big_sur", "https://example.com/big-sur.tar.gz")],
+        "mojave",
+        "big_sur",
+    );
 }

@@ -173,12 +173,13 @@ impl Installer {
                             name: materialized_name.clone(),
                         });
 
-                        if let Err(e) = self.record_install_receipt(
+                        if let Err(e) = self.finalize_keg(
                             &keg_path,
                             &processed_name,
                             &materialized_name,
                             &processed_version,
                             &processed_store_key,
+                            &item.formula.post_install_steps,
                         ) {
                             Self::cleanup_materialized(
                                 &self.cellar,
@@ -189,55 +190,10 @@ impl Installer {
                             continue;
                         }
 
-                        if let Err(e) = self.linker.link_opt(&keg_path) {
-                            eprintln!(
-                                "warning: failed to create opt link for {}: {}",
-                                processed_name, e
-                            );
+                        // A failed global link still leaves the keg installed.
+                        if let Err(e) = self.link_installed_keg(item, &keg_path, link, &report) {
+                            error = Some(e);
                         }
-
-                        let should_link = link && !item.formula.is_keg_only();
-
-                        if should_link {
-                            report(InstallProgress::LinkStarted {
-                                name: materialized_name.clone(),
-                            });
-                            match self.linker.link_keg(&keg_path) {
-                                Ok(()) => {
-                                    report(InstallProgress::LinkCompleted {
-                                        name: materialized_name.clone(),
-                                    });
-                                }
-                                Err(e) => {
-                                    let _ = self.linker.unlink_keg(&keg_path);
-                                    error = Some(e);
-                                    installed += 1;
-                                    report(InstallProgress::InstallCompleted {
-                                        name: materialized_name.clone(),
-                                    });
-                                    continue;
-                                }
-                            }
-                        } else {
-                            if link && item.formula.is_keg_only() {
-                                let reason = match &item.formula.keg_only {
-                                    crate::types::KegOnly::Reason(s) => s.clone(),
-                                    _ if item.formula.name.contains('@') => {
-                                        "versioned formula".to_string()
-                                    }
-                                    _ => "keg-only formula".to_string(),
-                                };
-                                report(InstallProgress::LinkSkipped {
-                                    name: materialized_name.clone(),
-                                    reason,
-                                });
-                            }
-                        }
-
-                        report(InstallProgress::InstallCompleted {
-                            name: materialized_name.clone(),
-                        });
-
                         installed += 1;
                     }
                     Err(e) => {

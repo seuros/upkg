@@ -1,93 +1,23 @@
 use super::*;
 
+/// deplib 1.1.0 published without any bottle, only a source tarball.
+const SOURCE_ONLY_DEPLIB: &str = r#"{
+        "name": "deplib",
+        "versions": { "stable": "1.1.0" },
+        "dependencies": [],
+        "urls": { "stable": { "url": "https://example.com/deplib-1.1.0.tar.gz", "checksum": "abc123" } },
+        "ruby_source_path": "Formula/d/deplib.rb",
+        "bottle": { "stable": { "files": {} } }
+    }"#;
+
 #[tokio::test]
 async fn install_with_dependencies() {
     let mock_server = MockServer::start().await;
     let tmp = TempDir::new().unwrap();
+    mount_bottled(&mock_server, "deplib", "1.0.0", &[]).await;
+    mount_bottled(&mock_server, "mainpkg", "2.0.0", &["deplib"]).await;
 
-    let dep_bottle = create_bottle_tarball("deplib");
-    let dep_sha = sha256_hex(&dep_bottle);
-
-    let main_bottle = create_bottle_tarball("mainpkg");
-    let main_sha = sha256_hex(&main_bottle);
-
-    let tag = get_test_bottle_tag();
-    let dep_json = format!(
-        r#"{{
-                "name": "deplib",
-                "versions": {{ "stable": "1.0.0" }},
-                "dependencies": [],
-                "bottle": {{
-                    "stable": {{
-                        "files": {{
-                            "{}": {{
-                                "url": "{}/bottles/deplib-1.0.0.{}.bottle.tar.gz",
-                                "sha256": "{}"
-                            }}
-                        }}
-                    }}
-                }}
-            }}"#,
-        tag,
-        mock_server.uri(),
-        tag,
-        dep_sha
-    );
-
-    let main_json = format!(
-        r#"{{
-                "name": "mainpkg",
-                "versions": {{ "stable": "2.0.0" }},
-                "dependencies": ["deplib"],
-                "bottle": {{
-                    "stable": {{
-                        "files": {{
-                            "{}": {{
-                                "url": "{}/bottles/mainpkg-2.0.0.{}.bottle.tar.gz",
-                                "sha256": "{}"
-                            }}
-                        }}
-                    }}
-                }}
-            }}"#,
-        tag,
-        mock_server.uri(),
-        tag,
-        main_sha
-    );
-
-    Mock::given(method("GET"))
-        .and(path("/deplib.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(&dep_json))
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/mainpkg.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(&main_json))
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path(format!("/bottles/deplib-1.0.0.{}.bottle.tar.gz", tag)))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(dep_bottle))
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path(format!(
-            "/bottles/mainpkg-2.0.0.{}.bottle.tar.gz",
-            tag
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(main_bottle))
-        .mount(&mock_server)
-        .await;
-
-    let api_client = ApiClient::with_base_url(mock_server.uri());
-    let ctx = new_test_context(api_client, &tmp);
-    let _root = ctx.root.clone();
-    let _prefix = ctx.prefix.clone();
-    let mut installer = ctx.installer;
+    let mut installer = server_installer(&mock_server, &tmp);
 
     installer
         .install(&["mainpkg".to_string()], true)
@@ -103,38 +33,9 @@ async fn install_with_dependencies() {
 async fn plans_tapped_formula_with_core_dependency() {
     let mock_server = MockServer::start().await;
     let tmp = TempDir::new().unwrap();
+    mount_bottled(&mock_server, "go", "1.24.0", &[]).await;
 
-    let dep_bottle = create_bottle_tarball("go");
-    let dep_sha = sha256_hex(&dep_bottle);
     let tag = get_test_bottle_tag();
-    let dep_json = format!(
-        r#"{{
-                "name": "go",
-                "versions": {{ "stable": "1.24.0" }},
-                "dependencies": [],
-                "bottle": {{
-                    "stable": {{
-                        "files": {{
-                            "{}": {{
-                                "url": "{}/bottles/go-1.24.0.{}.bottle.tar.gz",
-                                "sha256": "{}"
-                            }}
-                        }}
-                    }}
-                }}
-            }}"#,
-        tag,
-        mock_server.uri(),
-        tag,
-        dep_sha
-    );
-
-    Mock::given(method("GET"))
-        .and(path("/go.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(&dep_json))
-        .mount(&mock_server)
-        .await;
-
     let tap_formula_rb = format!(
         r#"
 class Terraform < Formula
@@ -149,19 +50,16 @@ end
         mock_server.uri(),
         tag
     );
-
-    Mock::given(method("GET"))
-        .and(path("/hashicorp/homebrew-tap/main/Formula/terraform.rb"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(tap_formula_rb))
-        .mount(&mock_server)
-        .await;
+    mount_text(
+        &mock_server,
+        "/hashicorp/homebrew-tap/main/Formula/terraform.rb",
+        tap_formula_rb,
+    )
+    .await;
 
     let api_client =
         ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
-    let ctx = new_test_context(api_client, &tmp);
-    let _root = ctx.root.clone();
-    let _prefix = ctx.prefix.clone();
-    let installer = ctx.installer;
+    let installer = new_test_installer(api_client, &tmp);
     let plan = installer
         .plan(&["hashicorp/tap/terraform".to_string()])
         .await
@@ -182,7 +80,7 @@ async fn uninstall_accepts_full_tap_reference_after_install() {
     let tmp = TempDir::new().unwrap();
 
     let bottle = create_bottle_tarball("terraform");
-    let sha = sha256_hex(&bottle);
+    let sha = sha256_hex_bytes(&bottle);
     let tag = get_test_bottle_tag();
 
     let tap_formula_rb = format!(
@@ -199,26 +97,23 @@ end
         tag,
         sha
     );
-
-    Mock::given(method("GET"))
-        .and(path("/hashicorp/homebrew-tap/main/Formula/terraform.rb"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(tap_formula_rb))
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path(format!(
-            "/v2/hashicorp/tap/terraform/blobs/sha256:{sha}"
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle))
-        .mount(&mock_server)
-        .await;
+    mount_text(
+        &mock_server,
+        "/hashicorp/homebrew-tap/main/Formula/terraform.rb",
+        tap_formula_rb,
+    )
+    .await;
+    mount_bytes(
+        &mock_server,
+        &format!("/v2/hashicorp/tap/terraform/blobs/sha256:{sha}"),
+        bottle,
+    )
+    .await;
 
     let api_client =
         ApiClient::with_base_url(mock_server.uri()).with_tap_raw_base_url(mock_server.uri());
     let ctx = new_test_context(api_client, &tmp);
-    let root = ctx.root.clone();
-    let _prefix = ctx.prefix.clone();
+    let root = ctx.root;
     let mut installer = ctx.installer;
 
     installer
@@ -238,52 +133,9 @@ end
 async fn uninstalling_non_installed_tap_ref_does_not_remove_core_formula() {
     let mock_server = MockServer::start().await;
     let tmp = TempDir::new().unwrap();
+    mount_bottled(&mock_server, "terraform", "1.10.0", &[]).await;
 
-    let bottle = create_bottle_tarball("terraform");
-    let sha = sha256_hex(&bottle);
-    let tag = get_test_bottle_tag();
-    let core_json = format!(
-        r#"{{
-                "name": "terraform",
-                "versions": {{ "stable": "1.10.0" }},
-                "dependencies": [],
-                "bottle": {{
-                    "stable": {{
-                        "files": {{
-                            "{}": {{
-                                "url": "{}/bottles/terraform-1.10.0.{}.bottle.tar.gz",
-                                "sha256": "{}"
-                            }}
-                        }}
-                    }}
-                }}
-            }}"#,
-        tag,
-        mock_server.uri(),
-        tag,
-        sha
-    );
-
-    Mock::given(method("GET"))
-        .and(path("/terraform.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(core_json))
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path(format!(
-            "/bottles/terraform-1.10.0.{}.bottle.tar.gz",
-            tag
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle))
-        .mount(&mock_server)
-        .await;
-
-    let api_client = ApiClient::with_base_url(mock_server.uri());
-    let ctx = new_test_context(api_client, &tmp);
-    let _root = ctx.root.clone();
-    let _prefix = ctx.prefix.clone();
-    let mut installer = ctx.installer;
+    let mut installer = server_installer(&mock_server, &tmp);
     installer
         .install(&["terraform".to_string()], true)
         .await
@@ -295,56 +147,10 @@ async fn uninstalling_non_installed_tap_ref_does_not_remove_core_formula() {
     assert!(installer.is_installed("terraform"));
 }
 
-fn bottled_formula_json(
-    server: &MockServer,
-    name: &str,
-    version: &str,
-    deps: &str,
-    sha: &str,
-) -> String {
-    let tag = get_test_bottle_tag();
-    format!(
-        r#"{{
-                "name": "{name}",
-                "versions": {{ "stable": "{version}" }},
-                "dependencies": [{deps}],
-                "bottle": {{
-                    "stable": {{
-                        "files": {{
-                            "{tag}": {{
-                                "url": "{uri}/bottles/{name}-{version}.{tag}.bottle.tar.gz",
-                                "sha256": "{sha}"
-                            }}
-                        }}
-                    }}
-                }}
-            }}"#,
-        uri = server.uri(),
-    )
-}
-
-async fn mount_bottled(server: &MockServer, name: &str, version: &str, deps: &str) {
-    let tag = get_test_bottle_tag();
-    let bottle = create_bottle_tarball(name);
-    let json = bottled_formula_json(server, name, version, deps, &sha256_hex(&bottle));
-    Mock::given(method("GET"))
-        .and(path(format!("/{name}.json")))
-        .respond_with(ResponseTemplate::new(200).set_body_string(json))
-        .mount(server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path(format!(
-            "/bottles/{name}-{version}.{tag}.bottle.tar.gz"
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle))
-        .mount(server)
-        .await;
-}
-
 async fn install_deplib_1_0_0(tmp: &TempDir) {
     let server = MockServer::start().await;
-    mount_bottled(&server, "deplib", "1.0.0", "").await;
-    let mut installer = new_test_context(ApiClient::with_base_url(server.uri()), tmp).installer;
+    mount_bottled(&server, "deplib", "1.0.0", &[]).await;
+    let mut installer = server_installer(&server, tmp);
     installer
         .install(&["deplib".to_string()], true)
         .await
@@ -357,22 +163,10 @@ async fn installed_dependency_without_a_bottle_upgrade_is_kept() {
     install_deplib_1_0_0(&tmp).await;
 
     let server = MockServer::start().await;
-    mount_bottled(&server, "mainpkg", "2.0.0", r#""deplib""#).await;
-    let source_only = r#"{
-            "name": "deplib",
-            "versions": { "stable": "1.1.0" },
-            "dependencies": [],
-            "urls": { "stable": { "url": "https://example.com/deplib-1.1.0.tar.gz", "checksum": "abc123" } },
-            "ruby_source_path": "Formula/d/deplib.rb",
-            "bottle": { "stable": { "files": {} } }
-        }"#;
-    Mock::given(method("GET"))
-        .and(path("/deplib.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(source_only))
-        .mount(&server)
-        .await;
+    mount_bottled(&server, "mainpkg", "2.0.0", &["deplib"]).await;
+    mount_text(&server, "/deplib.json", SOURCE_ONLY_DEPLIB).await;
 
-    let mut installer = new_test_context(ApiClient::with_base_url(server.uri()), &tmp).installer;
+    let mut installer = server_installer(&server, &tmp);
     let plan = installer.plan(&["mainpkg".to_string()]).await.unwrap();
     let planned: Vec<_> = plan.items.iter().map(|i| i.install_name.as_str()).collect();
     assert_eq!(planned, ["mainpkg"]);
@@ -391,21 +185,9 @@ async fn requested_formula_without_a_bottle_is_still_planned_from_source() {
     install_deplib_1_0_0(&tmp).await;
 
     let server = MockServer::start().await;
-    let source_only = r#"{
-            "name": "deplib",
-            "versions": { "stable": "1.1.0" },
-            "dependencies": [],
-            "urls": { "stable": { "url": "https://example.com/deplib-1.1.0.tar.gz", "checksum": "abc123" } },
-            "ruby_source_path": "Formula/d/deplib.rb",
-            "bottle": { "stable": { "files": {} } }
-        }"#;
-    Mock::given(method("GET"))
-        .and(path("/deplib.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(source_only))
-        .mount(&server)
-        .await;
+    mount_text(&server, "/deplib.json", SOURCE_ONLY_DEPLIB).await;
 
-    let installer = new_test_context(ApiClient::with_base_url(server.uri()), &tmp).installer;
+    let installer = server_installer(&server, &tmp);
     let plan = installer.plan(&["deplib".to_string()]).await.unwrap();
     assert_eq!(plan.items.len(), 1);
     assert_matches!(plan.items[0].method, crate::types::InstallMethod::Source(_));
@@ -417,14 +199,10 @@ async fn installed_dependency_with_an_unreadable_formula_is_kept() {
     install_deplib_1_0_0(&tmp).await;
 
     let server = MockServer::start().await;
-    mount_bottled(&server, "mainpkg", "2.0.0", r#""deplib""#).await;
-    Mock::given(method("GET"))
-        .and(path("/deplib.json"))
-        .respond_with(ResponseTemplate::new(404))
-        .mount(&server)
-        .await;
+    mount_bottled(&server, "mainpkg", "2.0.0", &["deplib"]).await;
+    mount_status(&server, "/deplib.json", 404).await;
 
-    let installer = new_test_context(ApiClient::with_base_url(server.uri()), &tmp).installer;
+    let installer = server_installer(&server, &tmp);
     let plan = installer.plan(&["mainpkg".to_string()]).await.unwrap();
     let planned: Vec<_> = plan.items.iter().map(|i| i.install_name.as_str()).collect();
     assert_eq!(planned, ["mainpkg"]);

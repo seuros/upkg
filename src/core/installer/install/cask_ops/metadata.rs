@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::core::storage::fs_util::{StoreContext, dir_paths, file_name_str};
 use crate::types::Error;
 
 pub(in crate::core::installer::install) fn write_brew_cask_metadata(
@@ -15,9 +16,8 @@ pub(in crate::core::installer::install) fn write_brew_cask_metadata(
         .join(&cask.version)
         .join(&timestamp)
         .join("Casks");
-    fs::create_dir_all(&caskfile_dir).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to create cask metadata directory: {e}"),
-    })?;
+    fs::create_dir_all(&caskfile_dir)
+        .store_context(|| "failed to create cask metadata directory")?;
 
     write_json_pretty(
         &caskfile_dir.join(format!("{}.json", cask.token)),
@@ -134,12 +134,9 @@ pub(in crate::core::installer::install) fn write_json_pretty(
     path: &Path,
     value: &serde_json::Value,
 ) -> Result<(), Error> {
-    let data = serde_json::to_vec_pretty(value).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to serialize JSON for '{}': {e}", path.display()),
-    })?;
-    fs::write(path, data).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to write '{}': {e}", path.display()),
-    })
+    let data = serde_json::to_vec_pretty(value)
+        .store_context(|| format!("failed to serialize JSON for '{}'", path.display()))?;
+    fs::write(path, data).store_context(|| format!("failed to write '{}'", path.display()))
 }
 
 pub(in crate::core::installer::install) fn load_latest_cask_metadata_json(
@@ -152,29 +149,10 @@ pub(in crate::core::installer::install) fn load_latest_cask_metadata_json(
     }
 
     let mut candidates = Vec::new();
-    for version_entry in fs::read_dir(&metadata_dir).map_err(|e| Error::StoreCorruption {
-        message: format!(
-            "failed to read cask metadata directory '{}': {e}",
-            metadata_dir.display()
-        ),
-    })? {
-        let version_path = match version_entry {
-            Ok(entry) => entry.path(),
-            Err(_) => continue,
-        };
-        if !version_path.is_dir() {
-            continue;
-        }
-        for timestamp_entry in fs::read_dir(&version_path).map_err(|e| Error::StoreCorruption {
-            message: format!(
-                "failed to read cask metadata version directory '{}': {e}",
-                version_path.display()
-            ),
-        })? {
-            let timestamp_path = match timestamp_entry {
-                Ok(entry) => entry.path(),
-                Err(_) => continue,
-            };
+    for version_path in
+        dir_paths(&metadata_dir, "cask metadata directory")?.filter(|path| path.is_dir())
+    {
+        for timestamp_path in dir_paths(&version_path, "cask metadata version directory")? {
             let cask_file = timestamp_path.join("Casks").join(format!("{token}.json"));
             if cask_file.exists() {
                 candidates.push(cask_file);
@@ -187,39 +165,19 @@ pub(in crate::core::installer::install) fn load_latest_cask_metadata_json(
         return Ok(None);
     };
 
-    let data = fs::read_to_string(&path).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to read cask metadata '{}': {e}", path.display()),
-    })?;
+    let data = fs::read_to_string(&path)
+        .store_context(|| format!("failed to read cask metadata '{}'", path.display()))?;
     serde_json::from_str(&data)
         .map(Some)
-        .map_err(|e| Error::StoreCorruption {
-            message: format!("failed to parse cask metadata '{}': {e}", path.display()),
-        })
+        .store_context(|| format!("failed to parse cask metadata '{}'", path.display()))
 }
 
 pub(in crate::core::installer::install) fn cask_versions(
     caskroom_path: &Path,
 ) -> Result<Vec<PathBuf>, Error> {
     let mut versions = Vec::new();
-    for entry in fs::read_dir(caskroom_path).map_err(|e| Error::StoreCorruption {
-        message: format!(
-            "failed to read caskroom path '{}': {e}",
-            caskroom_path.display()
-        ),
-    })? {
-        let path = match entry {
-            Ok(entry) => entry.path(),
-            Err(_) => continue,
-        };
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| name == ".metadata")
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        if path.is_dir() {
+    for path in dir_paths(caskroom_path, "caskroom path")? {
+        if file_name_str(&path) != Some(".metadata") && path.is_dir() {
             versions.push(path);
         }
     }

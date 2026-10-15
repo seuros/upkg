@@ -29,15 +29,18 @@ use crate::core::cellar::materialize::Cellar;
 use crate::core::installer::cask::resolve_cask;
 use crate::core::network::api::ApiClient;
 use crate::core::network::download::{DownloadRequest, ParallelDownloader};
+use crate::core::progress::InstallProgress;
 #[cfg(test)]
 use crate::core::storage::blob::BlobCache;
+use crate::core::storage::fs_util::{StoreContext, dir_paths, file_name_str};
 use crate::core::storage::receipt::{
-    InstallReceipt, InstalledKeg, find_installed, scan_installed, write_receipt,
+    InstallReceipt, InstalledKeg, find_installed, read_receipt, scan_installed, write_receipt,
 };
 use crate::core::storage::state_db::{InstalledPackage, InstalledPackageKind, StateDb};
 use crate::core::storage::store::Store;
 use crate::package_ref::{cask_name, cask_token, is_cask_name};
 
+use crate::types::formula::PostInstallStep;
 use crate::types::{Error, Formula, InstallMethod, formula_token};
 
 #[cfg(test)]
@@ -79,23 +82,108 @@ pub struct ExecuteResult {
 }
 
 impl Installer {
-    fn record_install_receipt(
+    /// Apply the keg's declarative runtime links, then record the receipt that
+    /// lets uninstall and reinstall find them. Links are rolled back on failure.
+    fn finalize_keg(
         &self,
         keg_path: &Path,
         install_name: &str,
         formula_name: &str,
         version: &str,
         store_key: &str,
+        post_install_steps: &[PostInstallStep],
     ) -> Result<(), Error> {
-        let receipt = InstallReceipt {
-            install_name: install_name.to_string(),
-            formula_name: formula_name.to_string(),
-            version: version.to_string(),
-            store_key: store_key.to_string(),
-            installed_at: unix_secs(),
-        };
-        write_receipt(keg_path, &receipt)?;
-        self.record_installed_package(&receipt)
+        self.linker
+            .apply_post_install(keg_path, post_install_steps)
+            .and_then(|()| {
+                let receipt = InstallReceipt {
+                    install_name: install_name.to_string(),
+                    formula_name: formula_name.to_string(),
+                    version: version.to_string(),
+                    store_key: store_key.to_string(),
+                    installed_at: unix_secs(),
+                    post_install_steps: post_install_steps.to_vec(),
+                };
+                write_receipt(keg_path, &receipt)?;
+                self.record_installed_package(&receipt)
+            })
+            .inspect_err(|_| {
+                if let Err(e) = self
+                    .linker
+                    .remove_post_install(keg_path, post_install_steps)
+                {
+                    eprintln!(
+                        "warning: failed to roll back post-install links for {install_name}: {e}"
+                    );
+                }
+            })
+    }
+
+    /// Opt and declarative runtime links are required whether or not the keg
+    /// is globally linked, so failures here only warn.
+    fn link_runtime(&self, name: &str, keg_path: &Path, post_install_steps: &[PostInstallStep]) {
+        if let Err(e) = self.linker.apply_post_install(keg_path, post_install_steps) {
+            eprintln!("warning: failed to restore post-install links for {name}: {e}");
+        }
+        if let Err(e) = self.linker.link_opt(keg_path) {
+            eprintln!("warning: failed to create opt link for {name}: {e}");
+        }
+    }
+
+    /// Opt-link a finalized keg, then link it into the prefix unless it is
+    /// keg-only, reporting progress. `InstallCompleted` is always reported:
+    /// the keg is installed even when the global link fails, in which case the
+    /// runtime links are restored and the link error is returned.
+    fn link_installed_keg(
+        &self,
+        item: &PlannedInstall,
+        keg_path: &Path,
+        link: bool,
+        report: &impl Fn(InstallProgress),
+    ) -> Result<(), Error> {
+        let install_name = &item.install_name;
+        let formula = &item.formula;
+
+        if let Err(e) = self.linker.link_opt(keg_path) {
+            eprintln!("warning: failed to create opt link for {install_name}: {e}");
+        }
+
+        let mut result = Ok(());
+        if link && !formula.is_keg_only() {
+            report(InstallProgress::LinkStarted {
+                name: formula.name.clone(),
+            });
+            match self.linker.link_keg(keg_path) {
+                Ok(()) => report(InstallProgress::LinkCompleted {
+                    name: formula.name.clone(),
+                }),
+                Err(e) => {
+                    // Best-effort cleanup of a partial link; the link error is
+                    // what gets reported.
+                    let _ = self.linker.unlink_keg(keg_path);
+                    // A global-link conflict must not disable the installed
+                    // package's required runtime paths.
+                    self.link_runtime(install_name, keg_path, &formula.post_install_steps);
+                    result = Err(e);
+                }
+            }
+        } else if link {
+            report(InstallProgress::LinkSkipped {
+                name: formula.name.clone(),
+                reason: formula.keg_only_reason(),
+            });
+        }
+
+        report(InstallProgress::InstallCompleted {
+            name: formula.name.clone(),
+        });
+        result
+    }
+
+    fn recorded_post_install_steps(keg_path: &Path) -> Vec<PostInstallStep> {
+        read_receipt(keg_path)
+            .map(|r| r.post_install_steps)
+            .unwrap_or_default()
     }
 
     fn record_installed_package(&self, receipt: &InstallReceipt) -> Result<(), Error> {
@@ -176,12 +264,18 @@ impl Installer {
         let keg_name = formula_token(&installed.name);
 
         let keg_path = self.cellar.keg_path(keg_name, &installed.version);
-        self.linker.unlink_keg(&keg_path)?;
+        self.unlink_for_removal(&keg_path)?;
 
         self.cellar.remove_keg(keg_name, &installed.version)?;
         self.state_db.remove_installed(&installed.name)?;
 
         Ok(())
+    }
+
+    fn unlink_for_removal(&self, keg: &Path) -> Result<Vec<std::path::PathBuf>, Error> {
+        self.linker
+            .remove_post_install(keg, &Self::recorded_post_install_steps(keg))?;
+        self.linker.unlink_keg(keg)
     }
 
     fn uninstall_cask(&mut self, token: &str) -> Result<(), Error> {
@@ -206,21 +300,12 @@ impl Installer {
         }
 
         for version_dir in cask_versions(&caskroom_path)? {
-            for entry in fs::read_dir(&version_dir).map_err(|e| Error::StoreCorruption {
-                message: format!(
-                    "failed to read cask version directory '{}': {e}",
-                    version_dir.display()
-                ),
-            })? {
-                let path = match entry {
-                    Ok(entry) => entry.path(),
-                    Err(_) => continue,
-                };
+            for path in dir_paths(&version_dir, "cask version directory")? {
                 if !path.is_symlink() {
                     continue;
                 }
-                let target = fs::read_link(&path).map_err(|e| Error::StoreCorruption {
-                    message: format!("failed to read cask symlink '{}': {e}", path.display()),
+                let target = fs::read_link(&path).store_context(|| {
+                    format!("failed to read cask symlink '{}'", path.display())
                 })?;
                 if target.extension().and_then(|ext| ext.to_str()) == Some("app")
                     && target.starts_with(cask_app_dir(&self.prefix))
@@ -231,11 +316,11 @@ impl Installer {
             }
         }
 
-        fs::remove_dir_all(&caskroom_path).map_err(|e| Error::StoreCorruption {
-            message: format!(
-                "failed to remove caskroom path '{}': {e}",
+        fs::remove_dir_all(&caskroom_path).store_context(|| {
+            format!(
+                "failed to remove caskroom path '{}'",
                 caskroom_path.display()
-            ),
+            )
         })?;
         self.state_db.remove_installed(&cask_name(&token))?;
 
@@ -251,17 +336,8 @@ impl Installer {
             return Ok(requested.to_string());
         }
 
-        for entry in fs::read_dir(&caskroom_root).map_err(|e| Error::StoreCorruption {
-            message: format!(
-                "failed to read caskroom root '{}': {e}",
-                caskroom_root.display()
-            ),
-        })? {
-            let path = match entry {
-                Ok(entry) if entry.path().is_dir() => entry.path(),
-                _ => continue,
-            };
-            let Some(token) = path.file_name().and_then(|name| name.to_str()) else {
+        for path in dir_paths(&caskroom_root, "caskroom root")?.filter(|path| path.is_dir()) {
+            let Some(token) = file_name_str(&path) else {
                 continue;
             };
             let Some(cask_json) = load_latest_cask_metadata_json(&path, token)? else {
@@ -293,24 +369,15 @@ impl Installer {
             return Ok(removed);
         }
 
-        for entry in fs::read_dir(&store_dir).map_err(|e| Error::StoreCorruption {
-            message: format!(
-                "failed to read store directory '{}': {e}",
-                store_dir.display()
-            ),
-        })? {
-            let entry = entry.map_err(|e| Error::StoreCorruption {
-                message: format!("failed to read store entry: {e}"),
-            })?;
-            let path = entry.path();
+        let entries = fs::read_dir(&store_dir).store_context(|| {
+            format!("failed to read store directory '{}'", store_dir.display())
+        })?;
+        for entry in entries {
+            let path = entry.store_context(|| "failed to read store entry")?.path();
             if !path.is_dir() {
                 continue;
             }
-            let Some(store_key) = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(str::to_string)
-            else {
+            let Some(store_key) = file_name_str(&path).map(str::to_string) else {
                 continue;
             };
             if !referenced.contains(&store_key) {
@@ -380,9 +447,8 @@ impl Installer {
         let caskroom_path = self.prefix.join("Caskroom").join(&cask.token);
         let staged_path = caskroom_path.join(&cask.version);
 
-        fs::create_dir_all(&staged_path).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to create cask staging directory: {e}"),
-        })?;
+        fs::create_dir_all(&staged_path)
+            .store_context(|| "failed to create cask staging directory")?;
 
         if !cask.pkgs.is_empty()
             && cask.apps.is_empty()
@@ -422,6 +488,7 @@ impl Installer {
             version: cask.version.clone(),
             store_key: cask.sha256.clone(),
             installed_at: unix_secs(),
+            post_install_steps: Vec::new(),
         };
         if !cask.binaries.is_empty() {
             let keg_path = self.cellar.keg_path(&cask.install_name, &cask.version);
