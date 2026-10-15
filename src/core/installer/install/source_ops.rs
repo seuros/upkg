@@ -112,43 +112,7 @@ impl Installer {
             Self::remove_source_keg_backup(backup_path, formula_name, &version)?;
         }
 
-        if let Err(e) = self.linker.link_opt(&keg_path) {
-            eprintln!("warning: failed to create opt link for {install_name}: {e}");
-        }
-
-        let should_link = link && !item.formula.is_keg_only();
-
-        if should_link {
-            report(InstallProgress::LinkStarted {
-                name: formula_name.clone(),
-            });
-            match self.linker.link_keg(&keg_path) {
-                Ok(()) => {
-                    report(InstallProgress::LinkCompleted {
-                        name: formula_name.clone(),
-                    });
-                }
-                Err(e) => {
-                    let _ = self.linker.unlink_keg(&keg_path);
-                    // A global-link conflict must not disable required runtime paths.
-                    self.link_runtime(install_name, &keg_path, &item.formula.post_install_steps);
-                    report(InstallProgress::InstallCompleted {
-                        name: formula_name.clone(),
-                    });
-                    return Err(e);
-                }
-            }
-        } else if link && item.formula.is_keg_only() {
-            report(InstallProgress::LinkSkipped {
-                name: formula_name.clone(),
-                reason: item.formula.keg_only_reason(),
-            });
-        }
-
-        report(InstallProgress::InstallCompleted {
-            name: formula_name.clone(),
-        });
-        Ok(())
+        self.link_installed_keg(item, &keg_path, link, report)
     }
 
     pub(super) fn backup_existing_source_keg(

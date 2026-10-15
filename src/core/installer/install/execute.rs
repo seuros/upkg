@@ -190,55 +190,10 @@ impl Installer {
                             continue;
                         }
 
-                        if let Err(e) = self.linker.link_opt(&keg_path) {
-                            eprintln!(
-                                "warning: failed to create opt link for {}: {}",
-                                processed_name, e
-                            );
+                        // A failed global link still leaves the keg installed.
+                        if let Err(e) = self.link_installed_keg(item, &keg_path, link, &report) {
+                            error = Some(e);
                         }
-
-                        let should_link = link && !item.formula.is_keg_only();
-
-                        if should_link {
-                            report(InstallProgress::LinkStarted {
-                                name: materialized_name.clone(),
-                            });
-                            match self.linker.link_keg(&keg_path) {
-                                Ok(()) => {
-                                    report(InstallProgress::LinkCompleted {
-                                        name: materialized_name.clone(),
-                                    });
-                                }
-                                Err(e) => {
-                                    let _ = self.linker.unlink_keg(&keg_path);
-                                    // A global-link conflict must not disable the
-                                    // installed package's required runtime paths.
-                                    self.link_runtime(
-                                        &processed_name,
-                                        &keg_path,
-                                        &item.formula.post_install_steps,
-                                    );
-                                    error = Some(e);
-                                    installed += 1;
-                                    report(InstallProgress::InstallCompleted {
-                                        name: materialized_name.clone(),
-                                    });
-                                    continue;
-                                }
-                            }
-                        } else {
-                            if link && item.formula.is_keg_only() {
-                                report(InstallProgress::LinkSkipped {
-                                    name: materialized_name.clone(),
-                                    reason: item.formula.keg_only_reason(),
-                                });
-                            }
-                        }
-
-                        report(InstallProgress::InstallCompleted {
-                            name: materialized_name.clone(),
-                        });
-
                         installed += 1;
                     }
                     Err(e) => {

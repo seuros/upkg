@@ -29,6 +29,7 @@ use crate::core::cellar::materialize::Cellar;
 use crate::core::installer::cask::resolve_cask;
 use crate::core::network::api::ApiClient;
 use crate::core::network::download::{DownloadRequest, ParallelDownloader};
+use crate::core::progress::InstallProgress;
 #[cfg(test)]
 use crate::core::storage::blob::BlobCache;
 use crate::core::storage::fs_util::{StoreContext, dir_paths, file_name_str};
@@ -127,6 +128,56 @@ impl Installer {
         if let Err(e) = self.linker.link_opt(keg_path) {
             eprintln!("warning: failed to create opt link for {name}: {e}");
         }
+    }
+
+    /// Opt-link a finalized keg, then link it into the prefix unless it is
+    /// keg-only, reporting progress. `InstallCompleted` is always reported:
+    /// the keg is installed even when the global link fails, in which case the
+    /// runtime links are restored and the link error is returned.
+    fn link_installed_keg(
+        &self,
+        item: &PlannedInstall,
+        keg_path: &Path,
+        link: bool,
+        report: &impl Fn(InstallProgress),
+    ) -> Result<(), Error> {
+        let install_name = &item.install_name;
+        let formula = &item.formula;
+
+        if let Err(e) = self.linker.link_opt(keg_path) {
+            eprintln!("warning: failed to create opt link for {install_name}: {e}");
+        }
+
+        let mut result = Ok(());
+        if link && !formula.is_keg_only() {
+            report(InstallProgress::LinkStarted {
+                name: formula.name.clone(),
+            });
+            match self.linker.link_keg(keg_path) {
+                Ok(()) => report(InstallProgress::LinkCompleted {
+                    name: formula.name.clone(),
+                }),
+                Err(e) => {
+                    // Best-effort cleanup of a partial link; the link error is
+                    // what gets reported.
+                    let _ = self.linker.unlink_keg(keg_path);
+                    // A global-link conflict must not disable the installed
+                    // package's required runtime paths.
+                    self.link_runtime(install_name, keg_path, &formula.post_install_steps);
+                    result = Err(e);
+                }
+            }
+        } else if link {
+            report(InstallProgress::LinkSkipped {
+                name: formula.name.clone(),
+                reason: formula.keg_only_reason(),
+            });
+        }
+
+        report(InstallProgress::InstallCompleted {
+            name: formula.name.clone(),
+        });
+        result
     }
 
     fn recorded_post_install_steps(keg_path: &Path) -> Vec<PostInstallStep> {
