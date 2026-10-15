@@ -224,13 +224,12 @@ impl ApiClient {
         let response = match request.send().await {
             Ok(response) => response,
             Err(e) => {
-                if let Some(formula) = self.get_local_tap_formula(name)? {
-                    return Ok(formula);
-                }
-
-                return Err(Error::NetworkFailure {
-                    message: e.to_string(),
-                });
+                return self.local_tap_formula_or(
+                    name,
+                    Error::NetworkFailure {
+                        message: e.to_string(),
+                    },
+                );
             }
         };
 
@@ -245,13 +244,12 @@ impl ApiClient {
         }
 
         if response.status() == StatusCode::NOT_FOUND {
-            if let Some(formula) = self.get_local_tap_formula(name)? {
-                return Ok(formula);
-            }
-
-            return Err(Error::MissingFormula {
-                name: name.to_string(),
-            });
+            return self.local_tap_formula_or(
+                name,
+                Error::MissingFormula {
+                    name: name.to_string(),
+                },
+            );
         }
 
         let response = super::ensure_success(response)?;
@@ -578,6 +576,11 @@ impl ApiClient {
                     .unwrap_or_else(|| "unknown".to_string())
             ),
         })
+    }
+
+    /// The formula from a local tap, or `err` when no local tap has it.
+    fn local_tap_formula_or(&self, name: &str, err: Error) -> Result<Formula, Error> {
+        self.get_local_tap_formula(name)?.ok_or(err)
     }
 
     fn get_local_tap_formula(&self, name: &str) -> Result<Option<Formula>, Error> {

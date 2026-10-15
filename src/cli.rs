@@ -23,6 +23,18 @@ pub enum PackageAction {
     Reinstall,
 }
 
+impl PackageAction {
+    /// The subcommand name for this action.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Install => "install",
+            Self::Uninstall => "uninstall",
+            Self::Upgrade => "upgrade",
+            Self::Reinstall => "reinstall",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum CommandKind {
     Package {

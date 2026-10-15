@@ -19,7 +19,8 @@ use tokio::sync::{Mutex, Notify, RwLock, Semaphore, mpsc};
 use chrono_machines::{AsyncRetryable, DelayHint, ExponentialBackoff};
 
 use crate::checksum::finalize_sha256_hex;
-use crate::core::{progress::InstallProgress, storage::blob::BlobCache};
+use crate::core::progress::InstallProgress;
+use crate::core::storage::blob::{BlobCache, BlobWriter};
 use crate::http_client::{self, RamaClient, RedirectHeaders};
 use crate::types::Error;
 
@@ -901,22 +902,14 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext) -> Result<PathBuf, E
         });
     }
 
-    let actual_hash = finalize_sha256_hex(hasher);
-
-    if actual_hash != ctx.expected_sha256 {
-        return Err(Error::ChecksumMismatch {
-            expected: ctx.expected_sha256.to_string(),
-            actual: actual_hash,
-        });
-    }
-
-    writer.flush().map_err(|e| Error::NetworkFailure {
-        message: format!("failed to flush download: {e}"),
-    })?;
-
-    report_download_completed(&ctx.progress, &ctx.name, ctx.file_size);
-
-    writer.commit()
+    finish_download(
+        writer,
+        hasher,
+        &ctx.expected_sha256,
+        &ctx.progress,
+        &ctx.name,
+        ctx.file_size,
+    )
 }
 
 async fn validate_range_support(ctx: &ChunkedDownloadContext) -> Result<bool, Error> {
@@ -990,6 +983,26 @@ async fn download_response_internal(
         }
     }
 
+    finish_download(
+        writer,
+        hasher,
+        expected_sha256,
+        &progress,
+        &name,
+        downloaded,
+    )
+}
+
+/// Verify the streamed checksum, then flush, report completion and commit
+/// the blob. An unverified blob is dropped, which discards its temp file.
+fn finish_download(
+    mut writer: BlobWriter,
+    hasher: Sha256,
+    expected_sha256: &str,
+    progress: &Option<DownloadProgressCallback>,
+    name: &Option<String>,
+    total_bytes: u64,
+) -> Result<PathBuf, Error> {
     let actual_hash = finalize_sha256_hex(hasher);
 
     if actual_hash != expected_sha256 {
@@ -1003,7 +1016,7 @@ async fn download_response_internal(
         message: format!("failed to flush download: {e}"),
     })?;
 
-    report_download_completed(&progress, &name, downloaded);
+    report_download_completed(progress, name, total_bytes);
 
     writer.commit()
 }
@@ -1081,15 +1094,7 @@ pub struct ParallelDownloader {
 impl ParallelDownloader {
     #[cfg(test)]
     pub fn new(blob_cache: BlobCache) -> Self {
-        let semaphore = Arc::new(Semaphore::new(GLOBAL_DOWNLOAD_CONCURRENCY));
-        Self {
-            downloader: Arc::new(Downloader::with_semaphore(
-                blob_cache,
-                Some(semaphore.clone()),
-            )),
-            semaphore,
-            inflight: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self::with_concurrency(blob_cache, GLOBAL_DOWNLOAD_CONCURRENCY)
     }
 
     pub fn with_concurrency(blob_cache: BlobCache, concurrency: usize) -> Self {

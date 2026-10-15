@@ -229,6 +229,19 @@ fn is_macho(data: &[u8]) -> bool {
         )
 }
 
+fn is_macho_file(path: &Path) -> bool {
+    fs::read(path).is_ok_and(|data| is_macho(&data))
+}
+
+/// Entries under `keg_path`, without following symlinks. Unreadable entries
+/// are skipped on purpose: patching and signing are best-effort per file.
+fn keg_entries(keg_path: &Path) -> impl Iterator<Item = walkdir::DirEntry> {
+    walkdir::WalkDir::new(keg_path)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+}
+
 fn adhoc_sign(path: &Path) -> std::io::Result<std::process::Output> {
     std::process::Command::new("codesign")
         .args(["--force", "--sign", "-", &path.to_string_lossy()])
@@ -282,16 +295,13 @@ pub fn patch_homebrew_placeholders(
     let cellar_str = cellar_dir.to_string_lossy().to_string();
     let prefix_str = prefix.to_string_lossy().to_string();
 
-    let text_files: Vec<PathBuf> = walkdir::WalkDir::new(keg_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
+    let text_files: Vec<PathBuf> = keg_entries(keg_path)
         .filter(|e| e.file_type().is_file())
         .map(|e| e.path().to_path_buf())
         .collect();
     let macho_files: Vec<PathBuf> = text_files
         .iter()
-        .filter(|path| fs::read(path).is_ok_and(|data| is_macho(&data)))
+        .filter(|path| is_macho_file(path))
         .cloned()
         .collect();
 
@@ -428,10 +438,7 @@ pub fn codesign_and_strip_xattrs(keg_path: &Path) -> Result<(), Error> {
         .stderr(std::process::Stdio::null())
         .output();
 
-    let bin_files: Vec<PathBuf> = walkdir::WalkDir::new(keg_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
+    let bin_files: Vec<PathBuf> = keg_entries(keg_path)
         .filter(|e| {
             let path = e.path();
             path.is_file() && path.to_string_lossy().contains("/bin/")
@@ -440,7 +447,7 @@ pub fn codesign_and_strip_xattrs(keg_path: &Path) -> Result<(), Error> {
         .collect();
 
     bin_files.par_iter().for_each(|path| {
-        if !fs::read(path).is_ok_and(|data| is_macho(&data)) {
+        if !is_macho_file(path) {
             return;
         }
 
