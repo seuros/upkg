@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.16.0](https://github.com/seuros/upkg/compare/upkg-v0.15.0...upkg-v0.16.0) (2026-10-15)
+
+
+### Features
+
+* **install:** apply Homebrew declarative post-install links ([#31](https://github.com/seuros/upkg/issues/31)) ([afa6ca4](https://github.com/seuros/upkg/commit/afa6ca4257da3e37a137810654ba4f992f108918))
+
+
+### Bug Fixes
+
+* **install:** read tag_name from single-line release JSON ([4cd3dee](https://github.com/seuros/upkg/commit/4cd3dee01ad55c77388063db6ca08e6986de5ef7))
+
 ## [0.15.0](https://github.com/seuros/upkg/compare/upkg-v0.14.0...upkg-v0.15.0) (2026-10-06)
 
 
