@@ -1,52 +1,12 @@
 use super::*;
 use crate::core::storage::receipt::read_receipt;
 
-fn tar_gz<P: AsRef<std::path::Path>>(
-    files: impl IntoIterator<Item = (P, &'static str)>,
-) -> Vec<u8> {
-    use flate2::{Compression, write::GzEncoder};
-    use std::io::Write;
-
-    let mut archive = tar::Builder::new(Vec::new());
-    for (file, content) in files {
-        let mut header = tar::Header::new_gnu();
-        header.set_size(content.len() as u64);
-        header.set_mode(0o755);
-        header.set_cksum();
-        archive
-            .append_data(&mut header, file, content.as_bytes())
-            .unwrap();
-    }
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&archive.into_inner().unwrap()).unwrap();
-    encoder.finish().unwrap()
-}
-
-async fn mount(
-    server: &MockServer,
-    name: &str,
-    formula: serde_json::Value,
-    archive: &str,
-    body: Vec<u8>,
-) {
-    Mock::given(method("GET"))
-        .and(path(format!("/{name}.json")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(formula))
-        .mount(server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path(format!("/{archive}")))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
-        .mount(server)
-        .await;
-}
-
 /// Serves a PostgreSQL-shaped bottle named `name` and returns a fresh context.
 async fn postgres_context(name: &str) -> (MockServer, TempDir, TestInstallContext) {
     let server = MockServer::start().await;
     let tmp = TempDir::new().unwrap();
     mount_postgres(&server, name).await;
-    let ctx = new_test_context(ApiClient::with_base_url(server.uri()), &tmp);
+    let ctx = server_context(&server, &tmp);
     (server, tmp, ctx)
 }
 
@@ -80,7 +40,8 @@ async fn mount_postgres(server: &MockServer, name: &str) {
              "target":{"base":"homebrew_prefix","path":"bin"}, "suffix":"-{{version.major}}"}
         ]
     });
-    mount(server, name, formula, "postgres.tar.gz", bottle).await;
+    mount_json(server, &format!("/{name}.json"), formula).await;
+    mount_bytes(server, "/postgres.tar.gz", bottle).await;
 }
 
 #[tokio::test]
@@ -180,8 +141,9 @@ async fn source_install_also_applies_and_records_declarative_runtime_links() {
              "target":{"base":"homebrew_prefix","path":"share/{{formula_name}}"}}
         ]
     });
-    mount(&server, "sourcepkg", formula, "source.tar.gz", source).await;
-    let mut ctx = new_test_context(ApiClient::with_base_url(server.uri()), &tmp);
+    mount_json(&server, "/sourcepkg.json", formula).await;
+    mount_bytes(&server, "/source.tar.gz", source).await;
+    let mut ctx = server_context(&server, &tmp);
     // Source BuildPlans use the prefix's real Cellar layout.
     ctx.installer.cellar = Cellar::new_at(ctx.prefix.join("Cellar")).unwrap();
     ctx.installer

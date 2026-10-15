@@ -3,37 +3,16 @@ use crate::core::storage::receipt::read_receipt;
 use std::path::Path;
 
 async fn mount_testpkg(server: &MockServer, bottle: &[u8], bottle_status: u16) {
-    let tag = get_test_bottle_tag();
-    let formula_json = format!(
-        r#"{{
-                "name": "testpkg",
-                "versions": {{ "stable": "1.0.0" }},
-                "dependencies": [],
-                "bottle": {{
-                    "stable": {{
-                        "files": {{
-                            "{tag}": {{
-                                "url": "{uri}/bottles/testpkg-1.0.0.{tag}.bottle.tar.gz",
-                                "sha256": "{sha}"
-                            }}
-                        }}
-                    }}
-                }}
-            }}"#,
-        uri = server.uri(),
-        sha = sha256_hex(bottle),
-    );
-
-    Mock::given(method("GET"))
-        .and(path("/testpkg.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(&formula_json))
-        .mount(server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path(format!("/bottles/testpkg-1.0.0.{tag}.bottle.tar.gz")))
-        .respond_with(ResponseTemplate::new(bottle_status).set_body_bytes(bottle.to_vec()))
-        .mount(server)
-        .await;
+    let response = ResponseTemplate::new(bottle_status).set_body_bytes(bottle.to_vec());
+    mount_bottle_response(
+        server,
+        "testpkg",
+        "1.0.0",
+        &[],
+        &sha256_hex(bottle),
+        response,
+    )
+    .await;
 }
 
 fn keg_entries(root: &Path) -> Vec<String> {
@@ -49,7 +28,7 @@ fn keg_entries(root: &Path) -> Vec<String> {
 async fn install_and_break(tmp: &TempDir) -> (PathBuf, PathBuf, String) {
     let server = MockServer::start().await;
     mount_testpkg(&server, &create_bottle_tarball("testpkg"), 200).await;
-    let ctx = new_test_context(ApiClient::with_base_url(server.uri()), tmp);
+    let ctx = server_context(&server, tmp);
     let mut installer = ctx.installer;
     installer
         .install(&["testpkg".to_string()], true)
@@ -75,7 +54,7 @@ async fn reinstall_rebuilds_the_keg_from_the_store_without_network() {
 
     // Nothing mounted: any request would fail the reinstall.
     let server = MockServer::start().await;
-    let mut installer = new_test_installer(ApiClient::with_base_url(server.uri()), &tmp);
+    let mut installer = server_installer(&server, &tmp);
 
     let plan = installer
         .plan_reinstall(&["testpkg".to_string()], false)
@@ -108,7 +87,7 @@ async fn failed_store_reinstall_restores_the_previous_keg() {
     fs::create_dir_all(&entry).unwrap();
 
     let server = MockServer::start().await;
-    let mut installer = new_test_installer(ApiClient::with_base_url(server.uri()), &tmp);
+    let mut installer = server_installer(&server, &tmp);
     let plan = installer
         .plan_reinstall(&["testpkg".to_string()], false)
         .await
@@ -137,7 +116,7 @@ async fn reinstall_fetches_when_the_store_entry_is_gone() {
 
     let server = MockServer::start().await;
     mount_testpkg(&server, &create_bottle_tarball("testpkg"), 200).await;
-    let mut installer = new_test_installer(ApiClient::with_base_url(server.uri()), &tmp);
+    let mut installer = server_installer(&server, &tmp);
 
     let plan = installer
         .plan_reinstall(&["testpkg".to_string()], false)
@@ -166,7 +145,7 @@ async fn failed_fetch_reinstall_restores_the_previous_keg() {
     // A different bottle that cannot be downloaded.
     let server = MockServer::start().await;
     mount_testpkg(&server, b"not the same bottle", 500).await;
-    let mut installer = new_test_installer(ApiClient::with_base_url(server.uri()), &tmp);
+    let mut installer = server_installer(&server, &tmp);
 
     let plan = installer
         .plan_reinstall(&["testpkg".to_string()], false)
@@ -194,7 +173,7 @@ async fn reinstall_requires_an_installed_package() {
     let tmp = TempDir::new().unwrap();
     let server = MockServer::start().await;
     mount_testpkg(&server, &create_bottle_tarball("testpkg"), 200).await;
-    let installer = new_test_installer(ApiClient::with_base_url(server.uri()), &tmp);
+    let installer = server_installer(&server, &tmp);
 
     let err = installer
         .plan_reinstall(&["testpkg".to_string()], false)

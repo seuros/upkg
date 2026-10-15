@@ -1,55 +1,18 @@
 use super::*;
 
+/// Serves bottled formula `name` 1.0.0 and returns a fresh context plus the
+/// bottle checksum. The server must outlive the install.
+async fn bottled_context(name: &str) -> (MockServer, TempDir, TestInstallContext, String) {
+    let server = MockServer::start().await;
+    let tmp = TempDir::new().unwrap();
+    let sha = mount_bottled(&server, name, "1.0.0", &[]).await;
+    let ctx = server_context(&server, &tmp);
+    (server, tmp, ctx, sha)
+}
+
 #[tokio::test]
 async fn install_completes_successfully() {
-    let mock_server = MockServer::start().await;
-    let tmp = TempDir::new().unwrap();
-
-    let bottle = create_bottle_tarball("testpkg");
-    let bottle_sha = sha256_hex(&bottle);
-
-    let tag = get_test_bottle_tag();
-    let formula_json = format!(
-        r#"{{
-                "name": "testpkg",
-                "versions": {{ "stable": "1.0.0" }},
-                "dependencies": [],
-                "bottle": {{
-                    "stable": {{
-                        "files": {{
-                            "{}": {{
-                                "url": "{}/bottles/testpkg-1.0.0.{}.bottle.tar.gz",
-                                "sha256": "{}"
-                            }}
-                        }}
-                    }}
-                }}
-            }}"#,
-        tag,
-        mock_server.uri(),
-        tag,
-        bottle_sha
-    );
-
-    Mock::given(method("GET"))
-        .and(path("/testpkg.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(&formula_json))
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path(format!(
-            "/bottles/testpkg-1.0.0.{}.bottle.tar.gz",
-            tag
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
-        .mount(&mock_server)
-        .await;
-
-    let api_client = ApiClient::with_base_url(mock_server.uri());
-    let ctx = new_test_context(api_client, &tmp);
-    let root = ctx.root.clone();
-    let prefix = ctx.prefix.clone();
+    let (_server, _tmp, ctx, _) = bottled_context("testpkg").await;
     let mut installer = ctx.installer;
 
     installer
@@ -57,9 +20,9 @@ async fn install_completes_successfully() {
         .await
         .unwrap();
 
-    assert!(root.join("Cellar/testpkg/1.0.0").exists());
+    assert!(ctx.root.join("Cellar/testpkg/1.0.0").exists());
 
-    assert!(prefix.join("bin/testpkg").exists());
+    assert!(ctx.prefix.join("bin/testpkg").exists());
 
     let installed = installer.get_installed("testpkg");
     assert!(installed.is_some());
@@ -68,54 +31,8 @@ async fn install_completes_successfully() {
 
 #[tokio::test]
 async fn uninstall_cleans_everything() {
-    let mock_server = MockServer::start().await;
-    let tmp = TempDir::new().unwrap();
-
-    let bottle = create_bottle_tarball("uninstallme");
-    let bottle_sha = sha256_hex(&bottle);
-
-    let tag = get_test_bottle_tag();
-    let formula_json = format!(
-        r#"{{
-                "name": "uninstallme",
-                "versions": {{ "stable": "1.0.0" }},
-                "dependencies": [],
-                "bottle": {{
-                    "stable": {{
-                        "files": {{
-                            "{}": {{
-                                "url": "{}/bottles/uninstallme-1.0.0.{}.bottle.tar.gz",
-                                "sha256": "{}"
-                            }}
-                        }}
-                    }}
-                }}
-            }}"#,
-        tag,
-        mock_server.uri(),
-        tag,
-        bottle_sha
-    );
-
-    Mock::given(method("GET"))
-        .and(path("/uninstallme.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(&formula_json))
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path(format!(
-            "/bottles/uninstallme-1.0.0.{}.bottle.tar.gz",
-            tag
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
-        .mount(&mock_server)
-        .await;
-
-    let api_client = ApiClient::with_base_url(mock_server.uri());
-    let ctx = new_test_context(api_client, &tmp);
-    let root = ctx.root.clone();
-    let prefix = ctx.prefix.clone();
+    let (_server, _tmp, ctx, _) = bottled_context("uninstallme").await;
+    let (root, prefix) = (ctx.root, ctx.prefix);
     let mut installer = ctx.installer;
 
     installer
@@ -136,51 +53,8 @@ async fn uninstall_cleans_everything() {
 
 #[tokio::test]
 async fn gc_removes_unreferenced_store_entries() {
-    let mock_server = MockServer::start().await;
-    let tmp = TempDir::new().unwrap();
-
-    let bottle = create_bottle_tarball("gctest");
-    let bottle_sha = sha256_hex(&bottle);
-
-    let tag = get_test_bottle_tag();
-    let formula_json = format!(
-        r#"{{
-                "name": "gctest",
-                "versions": {{ "stable": "1.0.0" }},
-                "dependencies": [],
-                "bottle": {{
-                    "stable": {{
-                        "files": {{
-                            "{}": {{
-                                "url": "{}/bottles/gctest-1.0.0.{}.bottle.tar.gz",
-                                "sha256": "{}"
-                            }}
-                        }}
-                    }}
-                }}
-            }}"#,
-        tag,
-        mock_server.uri(),
-        tag,
-        bottle_sha
-    );
-
-    Mock::given(method("GET"))
-        .and(path("/gctest.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(&formula_json))
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path(format!("/bottles/gctest-1.0.0.{}.bottle.tar.gz", tag)))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
-        .mount(&mock_server)
-        .await;
-
-    let api_client = ApiClient::with_base_url(mock_server.uri());
-    let ctx = new_test_context(api_client, &tmp);
-    let root = ctx.root.clone();
-    let _prefix = ctx.prefix.clone();
+    let (_server, _tmp, ctx, bottle_sha) = bottled_context("gctest").await;
+    let store_entry = ctx.root.join("store").join(&bottle_sha);
     let mut installer = ctx.installer;
 
     installer
@@ -188,67 +62,24 @@ async fn gc_removes_unreferenced_store_entries() {
         .await
         .unwrap();
 
-    assert!(root.join("store").join(&bottle_sha).exists());
+    assert!(store_entry.exists());
 
     installer.uninstall("gctest").unwrap();
 
-    assert!(root.join("store").join(&bottle_sha).exists());
+    assert!(store_entry.exists());
 
     let removed = installer.gc().unwrap();
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0], bottle_sha);
 
-    assert!(!root.join("store").join(&bottle_sha).exists());
+    assert!(!store_entry.exists());
     assert!(installer.gc().unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn gc_does_not_remove_referenced_store_entries() {
-    let mock_server = MockServer::start().await;
-    let tmp = TempDir::new().unwrap();
-
-    let bottle = create_bottle_tarball("keepme");
-    let bottle_sha = sha256_hex(&bottle);
-
-    let tag = get_test_bottle_tag();
-    let formula_json = format!(
-        r#"{{
-                "name": "keepme",
-                "versions": {{ "stable": "1.0.0" }},
-                "dependencies": [],
-                "bottle": {{
-                    "stable": {{
-                        "files": {{
-                            "{}": {{
-                                "url": "{}/bottles/keepme-1.0.0.{}.bottle.tar.gz",
-                                "sha256": "{}"
-                            }}
-                        }}
-                    }}
-                }}
-            }}"#,
-        tag,
-        mock_server.uri(),
-        tag,
-        bottle_sha
-    );
-
-    Mock::given(method("GET"))
-        .and(path("/keepme.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(&formula_json))
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path(format!("/bottles/keepme-1.0.0.{}.bottle.tar.gz", tag)))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle.clone()))
-        .mount(&mock_server)
-        .await;
-
-    let api_client = ApiClient::with_base_url(mock_server.uri());
-    let ctx = new_test_context(api_client, &tmp);
-    let root = ctx.root.clone();
-    let _prefix = ctx.prefix.clone();
+    let (_server, _tmp, ctx, bottle_sha) = bottled_context("keepme").await;
+    let store_entry = ctx.root.join("store").join(&bottle_sha);
     let mut installer = ctx.installer;
 
     installer
@@ -256,10 +87,10 @@ async fn gc_does_not_remove_referenced_store_entries() {
         .await
         .unwrap();
 
-    assert!(root.join("store").join(&bottle_sha).exists());
+    assert!(store_entry.exists());
 
     let removed = installer.gc().unwrap();
     assert!(removed.is_empty());
 
-    assert!(root.join("store").join(&bottle_sha).exists());
+    assert!(store_entry.exists());
 }

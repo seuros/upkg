@@ -20,17 +20,9 @@ async fn plan_falls_back_to_source_when_no_bottle() {
             "bottle": { "stable": { "files": {} } }
         }"#;
 
-    Mock::given(method("GET"))
-        .and(path("/nobottle.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(formula_json))
-        .mount(&mock_server)
-        .await;
+    mount_text(&mock_server, "/nobottle.json", formula_json).await;
 
-    let api_client = ApiClient::with_base_url(mock_server.uri());
-    let ctx = new_test_context(api_client, &tmp);
-    let _root = ctx.root.clone();
-    let _prefix = ctx.prefix.clone();
-    let installer = ctx.installer;
+    let installer = server_installer(&mock_server, &tmp);
 
     let plan = installer.plan(&["nobottle".to_string()]).await.unwrap();
 
@@ -77,17 +69,9 @@ async fn plan_prefers_bottle_over_source() {
         tag
     );
 
-    Mock::given(method("GET"))
-        .and(path("/hasboth.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(&formula_json))
-        .mount(&mock_server)
-        .await;
+    mount_text(&mock_server, "/hasboth.json", formula_json).await;
 
-    let api_client = ApiClient::with_base_url(mock_server.uri());
-    let ctx = new_test_context(api_client, &tmp);
-    let _root = ctx.root.clone();
-    let _prefix = ctx.prefix.clone();
-    let installer = ctx.installer;
+    let installer = server_installer(&mock_server, &tmp);
 
     let plan = installer.plan(&["hasboth".to_string()]).await.unwrap();
 
@@ -99,48 +83,9 @@ async fn plan_prefers_bottle_over_source() {
 async fn plan_skips_already_installed_same_version() {
     let mock_server = MockServer::start().await;
     let tmp = TempDir::new().unwrap();
-    let tag = get_test_bottle_tag();
-    let bottle = create_bottle_tarball("alreadythere");
-    let bottle_sha = crate::checksum::sha256_hex_bytes(&bottle);
+    mount_bottled(&mock_server, "alreadythere", "1.0.0", &[]).await;
 
-    let formula_json = format!(
-        r#"{{
-                "name": "alreadythere",
-                "versions": {{ "stable": "1.0.0" }},
-                "dependencies": [],
-                "bottle": {{
-                    "stable": {{
-                        "files": {{
-                            "{}": {{
-                                "url": "{}/bottles/alreadythere.tar.gz",
-                                "sha256": "{}"
-                            }}
-                        }}
-                    }}
-                }}
-            }}"#,
-        tag,
-        mock_server.uri(),
-        bottle_sha
-    );
-
-    Mock::given(method("GET"))
-        .and(path("/alreadythere.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(&formula_json))
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/bottles/alreadythere.tar.gz"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(bottle))
-        .mount(&mock_server)
-        .await;
-
-    let api_client = ApiClient::with_base_url(mock_server.uri());
-    let ctx = new_test_context(api_client, &tmp);
-    let _root = ctx.root.clone();
-    let _prefix = ctx.prefix.clone();
-    let mut installer = ctx.installer;
+    let mut installer = server_installer(&mock_server, &tmp);
 
     installer
         .install(&["alreadythere".to_string()], true)
@@ -163,17 +108,9 @@ async fn plan_errors_when_no_bottle_and_no_source() {
             "bottle": { "stable": { "files": {} } }
         }"#;
 
-    Mock::given(method("GET"))
-        .and(path("/nothing.json"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(formula_json))
-        .mount(&mock_server)
-        .await;
+    mount_text(&mock_server, "/nothing.json", formula_json).await;
 
-    let api_client = ApiClient::with_base_url(mock_server.uri());
-    let ctx = new_test_context(api_client, &tmp);
-    let _root = ctx.root.clone();
-    let _prefix = ctx.prefix.clone();
-    let installer = ctx.installer;
+    let installer = server_installer(&mock_server, &tmp);
 
     let result = installer.plan(&["nothing".to_string()]).await;
     assert!(result.is_err());
