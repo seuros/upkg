@@ -133,19 +133,26 @@ impl Installer {
                 &self.store.entry_path(&receipt.store_key),
             )
             .and_then(|keg_path| {
-                self.record_install_receipt(
+                self.finalize_keg(
                     &keg_path,
                     &receipt.install_name,
                     &receipt.formula_name,
                     &receipt.version,
                     &receipt.store_key,
+                    &receipt.post_install_steps,
                 )
                 .map(|()| keg_path)
             });
 
         match materialized {
             Ok(keg_path) => {
-                self.relink(&receipt.install_name, &keg_path, link && stashed.was_linked);
+                // finalize_keg already applied the post-install links.
+                self.relink(
+                    &receipt.install_name,
+                    &keg_path,
+                    &[],
+                    link && stashed.was_linked,
+                );
                 self.discard_backup(stashed);
                 Ok(())
             }
@@ -232,7 +239,7 @@ impl Installer {
         let keg_name = formula_token(&installed.name).to_string();
         let keg_path = self.cellar.keg_path(&keg_name, &installed.version);
 
-        let was_linked = !self.linker.unlink_keg(&keg_path)?.is_empty();
+        let was_linked = !self.unlink_for_removal(&keg_path)?.is_empty();
         let backup_path =
             Self::backup_existing_source_keg(&keg_path, &keg_name, &installed.version)?;
 
@@ -273,13 +280,23 @@ impl Installer {
             return;
         }
 
-        self.relink(&keg.install_name, &keg.keg_path, link && keg.was_linked);
+        let steps = Self::recorded_post_install_steps(&keg.keg_path);
+        self.relink(
+            &keg.install_name,
+            &keg.keg_path,
+            &steps,
+            link && keg.was_linked,
+        );
     }
 
-    fn relink(&self, name: &str, keg_path: &std::path::Path, link: bool) {
-        if let Err(e) = self.linker.link_opt(keg_path) {
-            eprintln!("warning: failed to create opt link for {name}: {e}");
-        }
+    fn relink(
+        &self,
+        name: &str,
+        keg_path: &std::path::Path,
+        post_install_steps: &[crate::types::formula::PostInstallStep],
+        link: bool,
+    ) {
+        self.link_runtime(name, keg_path, post_install_steps);
         if link && let Err(e) = self.linker.link_keg(keg_path) {
             eprintln!("warning: failed to link {name}: {e}");
         }

@@ -31,6 +31,7 @@ fn formula(name: &str, deps: &[&str]) -> Formula {
         uses_from_macos: Vec::new(),
         requirements: Vec::new(),
         variations: None,
+        post_install_steps: Vec::new(),
     }
 }
 

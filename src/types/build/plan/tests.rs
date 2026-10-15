@@ -38,6 +38,7 @@ fn test_formula(name: &str, source_url: &str, build_deps: &[&str]) -> Formula {
         uses_from_macos: Vec::new(),
         requirements: Vec::new(),
         variations: None,
+        post_install_steps: Vec::new(),
     }
 }
 

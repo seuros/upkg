@@ -55,6 +55,7 @@ fn selects_all_bottle_for_universal_packages() {
         uses_from_macos: Vec::new(),
         requirements: Vec::new(),
         variations: None,
+        post_install_steps: Vec::new(),
     };
 
     let selected = select_bottle(&formula).unwrap();
@@ -92,6 +93,7 @@ fn errors_when_no_arm64_bottle() {
         uses_from_macos: Vec::new(),
         requirements: Vec::new(),
         variations: None,
+        post_install_steps: Vec::new(),
     };
 
     let err = select_bottle(&formula).unwrap_err();
@@ -131,6 +133,7 @@ fn errors_when_no_x86_64_bottle() {
         uses_from_macos: Vec::new(),
         requirements: Vec::new(),
         variations: None,
+        post_install_steps: Vec::new(),
     };
 
     let err = select_bottle(&formula).unwrap_err();
@@ -220,6 +223,7 @@ fn sequoia_user_skips_tahoe_bottle() {
         uses_from_macos: Vec::new(),
         requirements: Vec::new(),
         variations: None,
+        post_install_steps: Vec::new(),
     };
 
     let selected = select_bottle_with_codename(&formula, Some("sequoia")).unwrap();
@@ -256,6 +260,7 @@ fn monterey_falls_back_to_sonoma_bottle() {
         uses_from_macos: Vec::new(),
         requirements: Vec::new(),
         variations: None,
+        post_install_steps: Vec::new(),
     };
 
     let selected = select_bottle_with_codename(&formula, Some("monterey")).unwrap();
@@ -304,6 +309,7 @@ fn mojave_falls_back_to_closest_newer_bottle() {
         uses_from_macos: Vec::new(),
         requirements: Vec::new(),
         variations: None,
+        post_install_steps: Vec::new(),
     };
 
     // With newer-bottle fallback, mojave user gets the closest newer bottle (big_sur)

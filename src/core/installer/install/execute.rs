@@ -173,12 +173,13 @@ impl Installer {
                             name: materialized_name.clone(),
                         });
 
-                        if let Err(e) = self.record_install_receipt(
+                        if let Err(e) = self.finalize_keg(
                             &keg_path,
                             &processed_name,
                             &materialized_name,
                             &processed_version,
                             &processed_store_key,
+                            &item.formula.post_install_steps,
                         ) {
                             Self::cleanup_materialized(
                                 &self.cellar,
@@ -210,6 +211,13 @@ impl Installer {
                                 }
                                 Err(e) => {
                                     let _ = self.linker.unlink_keg(&keg_path);
+                                    // A global-link conflict must not disable the
+                                    // installed package's required runtime paths.
+                                    self.link_runtime(
+                                        &processed_name,
+                                        &keg_path,
+                                        &item.formula.post_install_steps,
+                                    );
                                     error = Some(e);
                                     installed += 1;
                                     report(InstallProgress::InstallCompleted {
@@ -220,16 +228,9 @@ impl Installer {
                             }
                         } else {
                             if link && item.formula.is_keg_only() {
-                                let reason = match &item.formula.keg_only {
-                                    crate::types::KegOnly::Reason(s) => s.clone(),
-                                    _ if item.formula.name.contains('@') => {
-                                        "versioned formula".to_string()
-                                    }
-                                    _ => "keg-only formula".to_string(),
-                                };
                                 report(InstallProgress::LinkSkipped {
                                     name: materialized_name.clone(),
-                                    reason,
+                                    reason: item.formula.keg_only_reason(),
                                 });
                             }
                         }

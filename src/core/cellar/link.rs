@@ -4,6 +4,9 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::types::{ConflictedLink, Error};
 
+#[path = "link/post_install.rs"]
+mod post_install;
+
 const LINK_DIRS: &[&str] = &[
     "bin",
     "sbin",
@@ -43,7 +46,9 @@ fn read_link_resolved(link: &Path) -> io::Result<PathBuf> {
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {
-    fs::canonicalize(left).ok() == fs::canonicalize(right).ok()
+    left == right
+        || matches!((fs::canonicalize(left), fs::canonicalize(right)),
+            (Ok(left), Ok(right)) if left == right)
 }
 
 fn keg_formula_name(keg_path: &Path) -> Option<&str> {

@@ -74,22 +74,14 @@ impl Installer {
             .execute(build_plan, &formula_rb, &installed_deps)
             .await
         {
-            if let Some(backup_path) = previous_keg_backup.as_ref() {
-                Self::restore_source_keg_from_backup(
-                    &keg_path,
-                    backup_path,
-                    formula_name,
-                    &version,
-                )?;
-            } else {
-                // A half-built keg would otherwise be taken as installed next run.
-                Self::cleanup_materialized(&self.cellar, formula_name, &version);
-            }
+            self.rollback_source_keg(
+                &keg_path,
+                previous_keg_backup.as_deref(),
+                install_name,
+                formula_name,
+                &version,
+            )?;
             return Err(build_err);
-        }
-
-        if let Some(backup_path) = previous_keg_backup.as_ref() {
-            Self::remove_source_keg_backup(backup_path, formula_name, &version)?;
         }
 
         report(InstallProgress::UnpackCompleted {
@@ -97,12 +89,26 @@ impl Installer {
         });
 
         let store_key = format!("source:{formula_name}:{version}");
-
-        if let Err(e) =
-            self.record_install_receipt(&keg_path, install_name, formula_name, &version, &store_key)
-        {
-            Self::cleanup_materialized(&self.cellar, formula_name, &version);
+        if let Err(e) = self.finalize_keg(
+            &keg_path,
+            install_name,
+            formula_name,
+            &version,
+            &store_key,
+            &item.formula.post_install_steps,
+        ) {
+            self.rollback_source_keg(
+                &keg_path,
+                previous_keg_backup.as_deref(),
+                install_name,
+                formula_name,
+                &version,
+            )?;
             return Err(e);
+        }
+
+        if let Some(backup_path) = previous_keg_backup.as_ref() {
+            Self::remove_source_keg_backup(backup_path, formula_name, &version)?;
         }
 
         if let Err(e) = self.linker.link_opt(&keg_path) {
@@ -123,6 +129,8 @@ impl Installer {
                 }
                 Err(e) => {
                     let _ = self.linker.unlink_keg(&keg_path);
+                    // A global-link conflict must not disable required runtime paths.
+                    self.link_runtime(install_name, &keg_path, &item.formula.post_install_steps);
                     report(InstallProgress::InstallCompleted {
                         name: formula_name.clone(),
                     });
@@ -130,14 +138,9 @@ impl Installer {
                 }
             }
         } else if link && item.formula.is_keg_only() {
-            let reason = match &item.formula.keg_only {
-                crate::types::KegOnly::Reason(s) => s.clone(),
-                _ if item.formula.name.contains('@') => "versioned formula".to_string(),
-                _ => "keg-only formula".to_string(),
-            };
             report(InstallProgress::LinkSkipped {
                 name: formula_name.clone(),
-                reason,
+                reason: item.formula.keg_only_reason(),
             });
         }
 
@@ -235,6 +238,29 @@ impl Installer {
             .unwrap_or_else(|| "keg".to_string());
 
         keg_path.with_file_name(format!("{name}.upkg-backup-{backup_suffix}"))
+    }
+
+    /// Put back the previous keg with its runtime links, or drop the partial one.
+    fn rollback_source_keg(
+        &self,
+        keg_path: &Path,
+        backup_path: Option<&Path>,
+        install_name: &str,
+        formula_name: &str,
+        version: &str,
+    ) -> Result<(), Error> {
+        let Some(backup_path) = backup_path else {
+            // A half-built keg would otherwise be taken as installed next run.
+            Self::cleanup_materialized(&self.cellar, formula_name, version);
+            return Ok(());
+        };
+        Self::restore_source_keg_from_backup(keg_path, backup_path, formula_name, version)?;
+        self.link_runtime(
+            install_name,
+            keg_path,
+            &Self::recorded_post_install_steps(keg_path),
+        );
+        Ok(())
     }
 
     pub(super) fn cleanup_materialized(cellar: &Cellar, name: &str, version: &str) {

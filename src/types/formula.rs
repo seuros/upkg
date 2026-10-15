@@ -1,11 +1,14 @@
 #[path = "formula/bottle.rs"]
 pub mod bottle;
+#[path = "formula/post_install.rs"]
+pub mod post_install;
 #[path = "formula/resolve.rs"]
 pub mod resolve;
 #[path = "formula/types.rs"]
 pub mod types;
 
 pub use bottle::{SelectedBottle, select_bottle};
+pub use post_install::{PostInstallPath, PostInstallStep};
 pub use resolve::resolve_closure;
 pub use types::{
     Bottle, BottleFile, BottleStable, Formula, FormulaUrls, KegOnly, RubySourceChecksum, SourceUrl,

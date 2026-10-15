@@ -32,12 +32,13 @@ use crate::core::network::download::{DownloadRequest, ParallelDownloader};
 #[cfg(test)]
 use crate::core::storage::blob::BlobCache;
 use crate::core::storage::receipt::{
-    InstallReceipt, InstalledKeg, find_installed, scan_installed, write_receipt,
+    InstallReceipt, InstalledKeg, find_installed, read_receipt, scan_installed, write_receipt,
 };
 use crate::core::storage::state_db::{InstalledPackage, InstalledPackageKind, StateDb};
 use crate::core::storage::store::Store;
 use crate::package_ref::{cask_name, cask_token, is_cask_name};
 
+use crate::types::formula::PostInstallStep;
 use crate::types::{Error, Formula, InstallMethod, formula_token};
 
 #[cfg(test)]
@@ -79,23 +80,58 @@ pub struct ExecuteResult {
 }
 
 impl Installer {
-    fn record_install_receipt(
+    /// Apply the keg's declarative runtime links, then record the receipt that
+    /// lets uninstall and reinstall find them. Links are rolled back on failure.
+    fn finalize_keg(
         &self,
         keg_path: &Path,
         install_name: &str,
         formula_name: &str,
         version: &str,
         store_key: &str,
+        post_install_steps: &[PostInstallStep],
     ) -> Result<(), Error> {
-        let receipt = InstallReceipt {
-            install_name: install_name.to_string(),
-            formula_name: formula_name.to_string(),
-            version: version.to_string(),
-            store_key: store_key.to_string(),
-            installed_at: unix_secs(),
-        };
-        write_receipt(keg_path, &receipt)?;
-        self.record_installed_package(&receipt)
+        self.linker
+            .apply_post_install(keg_path, post_install_steps)
+            .and_then(|()| {
+                let receipt = InstallReceipt {
+                    install_name: install_name.to_string(),
+                    formula_name: formula_name.to_string(),
+                    version: version.to_string(),
+                    store_key: store_key.to_string(),
+                    installed_at: unix_secs(),
+                    post_install_steps: post_install_steps.to_vec(),
+                };
+                write_receipt(keg_path, &receipt)?;
+                self.record_installed_package(&receipt)
+            })
+            .inspect_err(|_| {
+                if let Err(e) = self
+                    .linker
+                    .remove_post_install(keg_path, post_install_steps)
+                {
+                    eprintln!(
+                        "warning: failed to roll back post-install links for {install_name}: {e}"
+                    );
+                }
+            })
+    }
+
+    /// Opt and declarative runtime links are required whether or not the keg
+    /// is globally linked, so failures here only warn.
+    fn link_runtime(&self, name: &str, keg_path: &Path, post_install_steps: &[PostInstallStep]) {
+        if let Err(e) = self.linker.apply_post_install(keg_path, post_install_steps) {
+            eprintln!("warning: failed to restore post-install links for {name}: {e}");
+        }
+        if let Err(e) = self.linker.link_opt(keg_path) {
+            eprintln!("warning: failed to create opt link for {name}: {e}");
+        }
+    }
+
+    fn recorded_post_install_steps(keg_path: &Path) -> Vec<PostInstallStep> {
+        read_receipt(keg_path)
+            .map(|r| r.post_install_steps)
+            .unwrap_or_default()
     }
 
     fn record_installed_package(&self, receipt: &InstallReceipt) -> Result<(), Error> {
@@ -176,12 +212,18 @@ impl Installer {
         let keg_name = formula_token(&installed.name);
 
         let keg_path = self.cellar.keg_path(keg_name, &installed.version);
-        self.linker.unlink_keg(&keg_path)?;
+        self.unlink_for_removal(&keg_path)?;
 
         self.cellar.remove_keg(keg_name, &installed.version)?;
         self.state_db.remove_installed(&installed.name)?;
 
         Ok(())
+    }
+
+    fn unlink_for_removal(&self, keg: &Path) -> Result<Vec<std::path::PathBuf>, Error> {
+        self.linker
+            .remove_post_install(keg, &Self::recorded_post_install_steps(keg))?;
+        self.linker.unlink_keg(keg)
     }
 
     fn uninstall_cask(&mut self, token: &str) -> Result<(), Error> {
@@ -422,6 +464,7 @@ impl Installer {
             version: cask.version.clone(),
             store_key: cask.sha256.clone(),
             installed_at: unix_secs(),
+            post_install_steps: Vec::new(),
         };
         if !cask.binaries.is_empty() {
             let keg_path = self.cellar.keg_path(&cask.install_name, &cask.version);

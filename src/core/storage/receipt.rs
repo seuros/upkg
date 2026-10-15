@@ -17,6 +17,8 @@ pub struct InstallReceipt {
     pub version: String,
     pub store_key: String,
     pub installed_at: i64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub post_install_steps: Vec<crate::types::formula::PostInstallStep>,
 }
 
 pub fn write_receipt(keg_path: &Path, receipt: &InstallReceipt) -> Result<(), Error> {
