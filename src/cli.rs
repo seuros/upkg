@@ -25,6 +25,7 @@ pub enum PackageAction {
 
 impl PackageAction {
     /// The subcommand name for this action.
+    #[cfg(any(target_os = "macos", test))]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Install => "install",
