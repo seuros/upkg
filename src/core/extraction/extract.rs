@@ -7,6 +7,7 @@ use tar::Archive;
 use xz2::read::XzDecoder;
 use zstd::stream::read::Decoder as ZstdDecoder;
 
+use crate::core::storage::fs_util::StoreContext;
 use crate::types::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,14 +20,12 @@ enum CompressionFormat {
 }
 
 fn detect_compression(path: &Path) -> Result<CompressionFormat, Error> {
-    let mut file = File::open(path).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to open tarball: {e}"),
-    })?;
+    let mut file = File::open(path).store_context(|| "failed to open tarball")?;
 
     let mut magic = [0u8; 6];
-    let bytes_read = file.read(&mut magic).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to read magic bytes: {e}"),
-    })?;
+    let bytes_read = file
+        .read(&mut magic)
+        .store_context(|| "failed to read magic bytes")?;
 
     if bytes_read < 2 {
         return Ok(CompressionFormat::Unknown);
@@ -58,9 +57,7 @@ pub fn extract_tarball(tarball_path: &Path, dest_dir: &Path) -> Result<(), Error
 pub fn extract_archive(archive_path: &Path, dest_dir: &Path) -> Result<(), Error> {
     let format = detect_compression(archive_path)?;
 
-    let file = File::open(archive_path).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to open archive: {e}"),
-    })?;
+    let file = File::open(archive_path).store_context(|| "failed to open archive")?;
     let reader = BufReader::new(file);
 
     match format {
@@ -73,9 +70,8 @@ pub fn extract_archive(archive_path: &Path, dest_dir: &Path) -> Result<(), Error
             extract_tar_archive(decoder, dest_dir)
         }
         CompressionFormat::Zstd => {
-            let decoder = ZstdDecoder::new(reader).map_err(|e| Error::StoreCorruption {
-                message: format!("failed to create zstd decoder: {e}"),
-            })?;
+            let decoder =
+                ZstdDecoder::new(reader).store_context(|| "failed to create zstd decoder")?;
             extract_tar_archive(decoder, dest_dir)
         }
         CompressionFormat::Zip => extract_zip_archive(archive_path, dest_dir),
@@ -92,16 +88,13 @@ fn extract_tar_archive<R: Read>(reader: R, dest_dir: &Path) -> Result<(), Error>
     archive.set_preserve_permissions(true);
     archive.set_unpack_xattrs(true);
 
-    for entry in archive.entries().map_err(|e| Error::StoreCorruption {
-        message: format!("failed to read archive entries: {e}"),
-    })? {
-        let mut entry = entry.map_err(|e| Error::StoreCorruption {
-            message: format!("failed to read archive entry: {e}"),
-        })?;
+    for entry in archive
+        .entries()
+        .store_context(|| "failed to read archive entries")?
+    {
+        let mut entry = entry.store_context(|| "failed to read archive entry")?;
 
-        let entry_path = entry.path().map_err(|e| Error::StoreCorruption {
-            message: format!("failed to read entry path: {e}"),
-        })?;
+        let entry_path = entry.path().store_context(|| "failed to read entry path")?;
 
         let path_display = entry_path.display().to_string();
 
@@ -109,26 +102,20 @@ fn extract_tar_archive<R: Read>(reader: R, dest_dir: &Path) -> Result<(), Error>
 
         entry
             .unpack_in(dest_dir)
-            .map_err(|e| Error::StoreCorruption {
-                message: format!("failed to unpack entry {path_display}: {e}"),
-            })?;
+            .store_context(|| format!("failed to unpack entry {path_display}"))?;
     }
 
     Ok(())
 }
 
 fn extract_zip_archive(path: &Path, dest_dir: &Path) -> Result<(), Error> {
-    let file = File::open(path).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to open zip archive: {e}"),
-    })?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| Error::StoreCorruption {
-        message: format!("failed to open zip archive: {e}"),
-    })?;
+    let file = File::open(path).store_context(|| "failed to open zip archive")?;
+    let mut zip = zip::ZipArchive::new(file).store_context(|| "failed to open zip archive")?;
 
     for i in 0..zip.len() {
-        let mut entry = zip.by_index(i).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to read zip entry: {e}"),
-        })?;
+        let mut entry = zip
+            .by_index(i)
+            .store_context(|| "failed to read zip entry")?;
         let Some(raw_path) = entry.enclosed_name().map(|p| p.to_path_buf()) else {
             return Err(Error::StoreCorruption {
                 message: "zip entry with invalid path".to_string(),
@@ -140,33 +127,27 @@ fn extract_zip_archive(path: &Path, dest_dir: &Path) -> Result<(), Error> {
         let out_path = dest_dir.join(&raw_path);
 
         if entry.is_dir() {
-            std::fs::create_dir_all(&out_path).map_err(|e| Error::StoreCorruption {
-                message: format!("failed to create output directory: {e}"),
-            })?;
+            std::fs::create_dir_all(&out_path)
+                .store_context(|| "failed to create output directory")?;
             continue;
         }
 
         if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| Error::StoreCorruption {
-                message: format!("failed to create output parent directory: {e}"),
-            })?;
+            std::fs::create_dir_all(parent)
+                .store_context(|| "failed to create output parent directory")?;
         }
 
-        let mut output = File::create(&out_path).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to create extracted file: {e}"),
-        })?;
-        std::io::copy(&mut entry, &mut output).map_err(|e| Error::StoreCorruption {
-            message: format!("failed to extract zip entry: {e}"),
-        })?;
+        let mut output =
+            File::create(&out_path).store_context(|| "failed to create extracted file")?;
+        std::io::copy(&mut entry, &mut output).store_context(|| "failed to extract zip entry")?;
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             if let Some(mode) = entry.unix_mode() {
                 let perms = std::fs::Permissions::from_mode(mode);
-                std::fs::set_permissions(&out_path, perms).map_err(|e| Error::StoreCorruption {
-                    message: format!("failed to set zip file permissions: {e}"),
-                })?;
+                std::fs::set_permissions(&out_path, perms)
+                    .store_context(|| "failed to set zip file permissions")?;
             }
         }
     }
