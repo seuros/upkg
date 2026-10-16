@@ -28,3 +28,25 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace
+
+  freebsd:
+    name: Test (freebsd-15.1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run tests
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "15.1"
+          usesh: true
+          copyback: false
+          envs: CARGO_TERM_COLOR RUSTFLAGS
+          prepare: |
+            fetch -qo /tmp/rustup-init https://static.rust-lang.org/rustup/dist/x86_64-unknown-freebsd/rustup-init
+            chmod +x /tmp/rustup-init
+            /tmp/rustup-init -y --profile minimal --default-toolchain 1.99
+          run: |
+            . "$HOME/.cargo/env"
+            cargo test --workspace
