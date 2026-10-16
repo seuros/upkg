@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.1](https://github.com/seuros/upkg/compare/upkg-v0.16.0...upkg-v0.16.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* **release:** build FreeBSD binary natively in a 15.1 VM ([3af3a79](https://github.com/seuros/upkg/commit/3af3a79b0ed6393120db9e8c647017bf0b1e8a68))
+
 ## [0.16.0](https://github.com/seuros/upkg/compare/upkg-v0.15.0...upkg-v0.16.0) (2026-10-15)
 
 
