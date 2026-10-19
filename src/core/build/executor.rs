@@ -64,6 +64,8 @@ impl BuildExecutor {
 
     async fn prepare_work_dir(&self, work_dir: &Path) -> Result<(), Error> {
         if work_dir.exists() {
+            // Best-effort: a leftover dir from a prior failed run; create_dir_all below
+            // will surface any real problem.
             let _ = fs::remove_dir_all(work_dir).await;
         }
         fs::create_dir_all(work_dir)
@@ -74,6 +76,8 @@ impl BuildExecutor {
     }
 
     async fn cleanup_work_dir(&self, work_dir: &Path) {
+        // Best-effort cleanup; a leftover scratch dir is harmless and the next
+        // run's prepare_work_dir will clear it.
         let _ = fs::remove_dir_all(work_dir).await;
     }
 }

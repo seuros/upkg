@@ -143,7 +143,10 @@ async fn find_source_root(src_dir: &Path) -> Result<PathBuf, Error> {
     }
 
     if subdirs.len() == 1 && !has_files {
-        return Ok(subdirs.into_iter().next().unwrap());
+        return Ok(subdirs
+            .into_iter()
+            .next()
+            .expect("subdirs.len() == 1 was just checked above"));
     }
 
     Ok(src_dir.to_path_buf())

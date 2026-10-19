@@ -41,6 +41,7 @@ struct ShellHome {
 }
 
 impl ShellHome {
+    #[allow(unsafe_code)]
     fn new(shell: &str) -> Self {
         let env_lock = env_lock();
         let tmp = TempDir::new().unwrap();
@@ -283,11 +284,13 @@ fn shell_config_file_selection(
     if let Some(zdir) = zdotdir {
         let zdotdir_path = home.join(zdir);
         fs::create_dir_all(&zdotdir_path).unwrap();
+        #[allow(unsafe_code)]
         // SAFETY: serialized by the env lock `ShellHome` holds.
         unsafe {
             std::env::set_var("ZDOTDIR", zdotdir_path.to_str().unwrap());
         }
     } else {
+        #[allow(unsafe_code)]
         // SAFETY: serialized by the env lock `ShellHome` holds.
         unsafe {
             std::env::remove_var("ZDOTDIR");

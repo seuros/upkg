@@ -220,6 +220,9 @@ impl Linker {
             if src_path.is_dir() {
                 if dst_path.symlink_metadata().is_ok() && dst_path.is_symlink() {
                     let resolved_target = read_link_resolved(&dst_path).map_err(store_err)?;
+                    // Best-effort: swapping a stale symlinked directory for a
+                    // real one. If removal fails, the create_dir_all a few
+                    // lines down will surface the real error.
                     let _ = fs::remove_file(&dst_path);
                     Self::link_recursive(&resolved_target, &dst_path)?;
                 }
@@ -233,9 +236,15 @@ impl Linker {
                         if resolved.exists() {
                             continue;
                         } else {
+                            // Best-effort: clearing a dangling symlink before
+                            // relinking. If this fails, the symlink creation
+                            // below will error out and surface the problem.
                             let _ = fs::remove_file(&dst_path);
                         }
                     } else if same_cellar_formula(&resolved, &src_path) {
+                        // Best-effort: dropping the previous version's link
+                        // (upgrade in place) before relinking. A failure here
+                        // surfaces when the symlink creation below fails.
                         let _ = fs::remove_file(&dst_path);
                     } else {
                         return Err(Error::LinkConflict {
@@ -296,6 +305,9 @@ impl Linker {
                 if let Ok(mut entries) = fs::read_dir(&dst_path)
                     && entries.next().is_none()
                 {
+                    // Best-effort cleanup: drop the now-empty directory left
+                    // behind after unlinking its contents. Leaving an empty
+                    // directory behind is harmless if this fails.
                     let _ = fs::remove_dir(&dst_path);
                 }
                 continue;
@@ -304,6 +316,9 @@ impl Linker {
             if let Ok(resolved) = read_link_resolved(&dst_path)
                 && same_path(&resolved, &src_path)
             {
+                // Non-fatal: report the link as unlinked even if removing it
+                // races with another process (e.g. already gone); the net
+                // effect for the caller is the same either way.
                 let _ = fs::remove_file(&dst_path);
                 unlinked.push(dst_path);
             }
@@ -317,6 +332,9 @@ impl Linker {
             if let Ok(resolved) = read_link_resolved(&opt_link)
                 && same_path(&resolved, keg_path)
             {
+                // Best-effort cleanup: the opt link for the keg being
+                // unlinked is stale either way; a leftover stale link is
+                // harmless if removal fails.
                 let _ = fs::remove_file(&opt_link);
             }
         }
@@ -334,6 +352,9 @@ impl Linker {
             {
                 return Ok(());
             }
+            // Best-effort: dropping the opt link to a previous keg version
+            // before pointing it at the new one. If this fails, the
+            // symlink creation below will error out and surface it.
             let _ = fs::remove_file(&opt_link);
         }
         #[cfg(unix)]

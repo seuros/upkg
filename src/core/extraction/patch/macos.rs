@@ -327,6 +327,10 @@ pub fn patch_homebrew_placeholders(
     }
 
     text_files.par_iter().for_each(|path| {
+        // Non-fatal: unlike the Mach-O patches above, failures to rewrite an
+        // individual text file (scripts, configs, docs) aren't tracked or
+        // counted toward `patch_failures` — a handful of unpatched text
+        // files isn't worth failing the whole keg install over.
         let _ = patch_text_file_strings(path, &prefix_str, &cellar_str);
     });
 
@@ -407,6 +411,10 @@ pub fn patch_homebrew_placeholders(
         }
 
         if patched_any {
+            // Best-effort: re-sign now that install_name_tool invalidated the
+            // existing signature. `codesign_and_strip_xattrs` runs over every
+            // binary again later and will retry signing, so a failure here
+            // isn't fatal to this pass.
             let _ = adhoc_sign(path);
         }
     });
@@ -429,10 +437,14 @@ pub fn codesign_and_strip_xattrs(keg_path: &Path) -> Result<(), Error> {
     use rayon::prelude::*;
     use std::process::Command;
 
+    // Best-effort: `xattr` exits non-zero when the attribute isn't present
+    // (the common case for a freshly extracted keg), which isn't a real
+    // failure — there's nothing to strip either way.
     let _ = Command::new("xattr")
         .args(["-rd", "com.apple.quarantine", &keg_path.to_string_lossy()])
         .stderr(std::process::Stdio::null())
         .output();
+    // Best-effort, same reasoning as above.
     let _ = Command::new("xattr")
         .args(["-rd", "com.apple.provenance", &keg_path.to_string_lossy()])
         .stderr(std::process::Stdio::null())
@@ -466,6 +478,9 @@ pub fn codesign_and_strip_xattrs(keg_path: &Path) -> Result<(), Error> {
         };
         let _writable = WritablePath::from_metadata(path, &metadata).ok();
 
+        // Best-effort: this is the final signing pass, so there's no later
+        // retry, but a binary left unsigned here is rare (e.g. codesign
+        // missing) and not worth hard-failing the whole keg install over.
         let _ = adhoc_sign(path);
     });
 

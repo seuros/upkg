@@ -126,6 +126,7 @@ fn copy_dir_with_fallback(src: &Path, dst: &Path) -> Result<(), Error> {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 fn try_clonefile_dir(src: &Path, dst: &Path) -> io::Result<()> {
     use std::ffi::{CString, c_char};
     use std::os::unix::ffi::OsStrExt;
@@ -139,6 +140,8 @@ fn try_clonefile_dir(src: &Path, dst: &Path) -> io::Result<()> {
         fn clonefile(src: *const c_char, dst: *const c_char, flags: u32) -> i32;
     }
 
+    // SAFETY: src_cstr and dst_cstr are valid, NUL-terminated C strings owned
+    // for the duration of this call, and clonefile only reads through them.
     let result = unsafe { clonefile(src_cstr.as_ptr(), dst_cstr.as_ptr(), CLONE_NOFOLLOW) };
 
     if result == 0 {

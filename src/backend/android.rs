@@ -1,4 +1,4 @@
-use crate::backend::{CommandSpec, command_exists};
+use crate::backend::{CommandSpec, PackageManager, command_exists};
 use crate::error::UpkgError;
 
 pub enum AndroidManager {
@@ -20,14 +20,16 @@ pub fn detect() -> Result<AndroidManager, UpkgError> {
     ))
 }
 
-impl AndroidManager {
-    pub fn name(&self) -> &'static str {
+impl PackageManager for AndroidManager {
+    fn name(&self) -> &'static str {
         match self {
             Self::Pkg => "pkg",
             Self::Apt => "apt",
         }
     }
+}
 
+impl AndroidManager {
     /// Alias-catalog key. Termux `pkg` ships Debian-style names, so it gets its
     /// own key rather than colliding with FreeBSD's `pkg`.
     pub fn catalog_key(&self) -> &'static str {
@@ -38,7 +40,7 @@ impl AndroidManager {
     }
 
     pub fn install_spec(&self, packages: &[String]) -> CommandSpec {
-        CommandSpec::with_packages(self.name(), &["install", "-y"], packages)
+        self.packages_spec(&["install", "-y"], packages)
     }
 
     pub fn uninstall_spec(&self, packages: &[String]) -> CommandSpec {
@@ -46,7 +48,7 @@ impl AndroidManager {
             Self::Pkg => &["uninstall", "-y"],
             Self::Apt => &["remove", "-y"],
         };
-        CommandSpec::with_packages(self.name(), args, packages)
+        self.packages_spec(args, packages)
     }
 
     pub fn reinstall_spec(&self, packages: &[String]) -> CommandSpec {
@@ -54,7 +56,7 @@ impl AndroidManager {
             Self::Pkg => &["reinstall"],
             Self::Apt => &["install", "--reinstall", "-y"],
         };
-        CommandSpec::with_packages(self.name(), args, packages)
+        self.packages_spec(args, packages)
     }
 
     pub fn search_spec(&self, query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
@@ -64,11 +66,7 @@ impl AndroidManager {
                 Self::Apt => "--exact is not supported by apt search",
             }));
         }
-        Ok(CommandSpec::with_packages(
-            self.name(),
-            &["search", query],
-            &[],
-        ))
+        Ok(self.packages_spec(&["search", query], &[]))
     }
 
     pub fn upgrade_spec(&self, packages: &[String]) -> CommandSpec {
@@ -76,7 +74,7 @@ impl AndroidManager {
             Self::Apt if !packages.is_empty() => &["install", "--only-upgrade", "-y"],
             _ => &["upgrade", "-y"],
         };
-        CommandSpec::with_packages(self.name(), args, packages)
+        self.packages_spec(args, packages)
     }
 
     pub fn list_spec(&self) -> CommandSpec {
@@ -84,7 +82,7 @@ impl AndroidManager {
             Self::Pkg => &["list-installed"],
             Self::Apt => &["list", "--installed"],
         };
-        CommandSpec::with_packages(self.name(), args, &[])
+        self.packages_spec(args, &[])
     }
 }
 

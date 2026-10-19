@@ -221,6 +221,8 @@ pub(in crate::core::installer::install) struct PreparedInstallerPkgPath {
 impl Drop for PreparedInstallerPkgPath {
     fn drop(&mut self) {
         if let Some(temp_dir) = &self.temp_dir {
+            // Best-effort cleanup: Drop can't propagate errors, and the OS
+            // temp directory gets reaped eventually even if this fails.
             let _ = fs::remove_dir_all(temp_dir);
         }
     }

@@ -55,17 +55,26 @@ impl Store {
             .join(format!(".{store_key}.tmp.{}", std::process::id()));
 
         if tmp_dir.exists() {
+            // Best-effort: clearing a leftover temp dir from a previous
+            // crashed/killed run. If this fails, the create_dir_all below
+            // will error out and surface the real problem.
             let _ = fs::remove_dir_all(&tmp_dir);
         }
 
         fs::create_dir_all(&tmp_dir).store_context(|| "failed to create temp directory")?;
 
         if let Err(e) = extract_archive(blob_path, &tmp_dir) {
+            // Best-effort cleanup: we're already returning the real
+            // extraction error below; a leftover partial temp dir is
+            // harmless and gets cleared on the next attempt.
             let _ = fs::remove_dir_all(&tmp_dir);
             return Err(e);
         }
 
         if let Err(e) = fs::rename(&tmp_dir, &entry_path) {
+            // Best-effort cleanup: we're already returning the real rename
+            // error below; a leftover temp dir is harmless and gets cleared
+            // on the next attempt.
             let _ = fs::remove_dir_all(&tmp_dir);
             return Err(Error::StoreCorruption {
                 message: format!("failed to rename store entry: {e}"),
@@ -103,6 +112,9 @@ impl Store {
             fs::remove_dir_all(&entry_path).store_context(|| "failed to remove store entry")?;
         }
 
+        // Best-effort cleanup: the entry itself is already removed above; a
+        // leftover lock file is harmless — `lock_entry` recreates it on the
+        // next call.
         let _ = fs::remove_file(self.lock_path(store_key));
 
         Ok(())

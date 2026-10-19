@@ -183,6 +183,10 @@ impl ApiClient {
                 last_modified: None,
                 body: body.clone(),
             };
+            // Non-fatal: the response was already fetched and verified
+            // above, so a failure to populate the on-disk cache (e.g. sqlite
+            // busy) shouldn't fail the request — it just means we fetch
+            // fresh again next time.
             let _ = cache.put(&cache_key, &entry);
         }
 
@@ -271,6 +275,10 @@ impl ApiClient {
                 last_modified,
                 body: body.clone(),
             };
+            // Non-fatal: the formula was already fetched and parsed
+            // successfully, so a failure to persist it to the on-disk cache
+            // shouldn't fail the request — it just means we fetch fresh
+            // again next time.
             let _ = cache.put(&url, &entry);
         }
 
@@ -392,6 +400,9 @@ impl ApiClient {
             message: format!("failed to write {slug} index part: {e}"),
         })?;
         if let Err(e) = std::fs::rename(&tmp_path, &body_path) {
+            // Best-effort cleanup: we're already returning the rename error
+            // below; a leftover `.part` file is harmless and will be
+            // overwritten (different pid/tid) or ignored on the next fetch.
             let _ = std::fs::remove_file(&tmp_path);
             return Err(Error::FileError {
                 message: format!("failed to commit {slug} index: {e}"),
@@ -677,6 +688,9 @@ fn load_index_meta(meta_path: &std::path::Path) -> Option<IndexMeta> {
 
 fn save_index_meta(meta_path: &std::path::Path, meta: &IndexMeta) {
     if let Ok(body) = serde_json::to_string(meta) {
+        // Non-fatal: the index body itself was already written/returned
+        // successfully; losing the etag/last-modified sidecar just means
+        // the next fetch re-downloads instead of conditionally revalidating.
         let _ = std::fs::write(meta_path, body);
     }
 }

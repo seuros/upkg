@@ -71,6 +71,8 @@ impl MountedDmg {
             })?;
 
         if !output.status.success() {
+            // Best-effort cleanup: we're already returning the real attach
+            // error below; a leftover empty mountpoint dir is harmless.
             let _ = fs::remove_dir_all(&mountpoint);
             return Err(Error::ExecutionError {
                 message: format!(
@@ -87,10 +89,14 @@ impl MountedDmg {
 
 impl Drop for MountedDmg {
     fn drop(&mut self) {
+        // Best-effort: Drop can't propagate errors. Detach first so the
+        // directory isn't busy, then remove it; either call failing just
+        // leaves a stale mount/dir for the OS to clean up later.
         let _ = Command::new("hdiutil")
             .args(["detach", "-quiet"])
             .arg(&self.mountpoint)
             .status();
+        // Best-effort, same reasoning as above.
         let _ = fs::remove_dir_all(&self.mountpoint);
     }
 }

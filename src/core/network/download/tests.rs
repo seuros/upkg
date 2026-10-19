@@ -386,7 +386,9 @@ async fn download_retries_on_transient_network_failure() {
 
     let tmp = TempDir::new().unwrap();
     let url = format!("{}/flaky.tar.gz", mock_server.uri());
-    let result = downloader(&tmp).download(&url, &sha256_hex_bytes(content)).await;
+    let result = downloader(&tmp)
+        .download(&url, &sha256_hex_bytes(content))
+        .await;
 
     assert!(result.is_ok(), "Download should succeed after retries");
     assert!(
@@ -420,7 +422,9 @@ async fn download_follows_redirects() {
 
     let tmp = TempDir::new().unwrap();
     let url = format!("{}/start.tar.gz", mock_server.uri());
-    let result = downloader(&tmp).download(&url, &sha256_hex_bytes(content)).await;
+    let result = downloader(&tmp)
+        .download(&url, &sha256_hex_bytes(content))
+        .await;
 
     assert!(result.is_ok(), "Should follow redirects");
     assert_eq!(std::fs::read(result.unwrap()).unwrap(), content);

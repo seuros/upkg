@@ -101,6 +101,9 @@ async fn run_unix_async(dry_run: bool, target: ReleaseTarget) -> Result<(), Upkg
     }
 
     replace_current_binary(&extracted_binary)?;
+    // Best-effort cleanup: the upgrade already succeeded above, so a
+    // leftover work dir under the system temp root is harmless and will
+    // be cleared by the OS or the next self-upgrade run.
     let _ = std::fs::remove_dir_all(&work_dir);
     println!("Updated upkg to v{latest_version}");
     Ok(())
@@ -205,6 +208,9 @@ async fn download_to_file(
 
     let actual = finalize_sha256_hex(hasher);
     if actual != expected_sha256 {
+        // Best-effort cleanup: we're already returning a checksum-mismatch
+        // error below; leaving the bad download behind is harmless since
+        // it will simply be overwritten on retry.
         let _ = std::fs::remove_file(path);
         return Err(UpkgError::SelfUpgrade(format!(
             "checksum mismatch for downloaded release asset: expected {expected_sha256}, got {actual}"
@@ -272,6 +278,9 @@ fn replace_current_binary(extracted_binary: &std::path::Path) -> Result<(), Upkg
     let metadata = std::fs::metadata(extracted_binary)?;
     std::fs::set_permissions(&replacement, metadata.permissions())?;
     std::fs::rename(&replacement, &current).map_err(|e| {
+        // Best-effort cleanup: we're already building the real rename
+        // error below; a leftover `.upkg-update-*` file next to the
+        // binary is harmless and gets overwritten on the next attempt.
         let _ = std::fs::remove_file(&replacement);
         UpkgError::SelfUpgrade(format!("failed to replace '{}': {e}", current.display()))
     })

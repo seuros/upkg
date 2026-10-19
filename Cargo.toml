@@ -36,6 +36,16 @@ tree-sitter-ruby = "0.23.1"
 chrono-machines = { version = "0.8.0", features = ["async"] }
 shlex = "2.0.1"
 
+[lints.rust]
+unsafe_code = "deny"
+unused_must_use = "warn"
+dead_code_pub_in_binary = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
 [profile.release]
 opt-level = 3
 lto = "fat"

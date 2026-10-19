@@ -72,6 +72,9 @@ impl BlobWriter {
         })?;
 
         if self.final_path.exists() {
+            // Best-effort: another writer already committed this blob (same
+            // sha256, raced with us), so our temp copy is redundant. Leaving
+            // it behind would only waste disk space, not correctness.
             let _ = fs::remove_file(&self.tmp_path);
             self.committed = true;
             return Ok(self.final_path.clone());
@@ -80,6 +83,9 @@ impl BlobWriter {
         match fs::rename(&self.tmp_path, &self.final_path) {
             Ok(()) => {}
             Err(_) if self.final_path.exists() => {
+                // Best-effort: the rename lost a race with another writer
+                // that just created final_path; our temp copy is now
+                // redundant and a leftover `.part` file is harmless.
                 let _ = fs::remove_file(&self.tmp_path);
             }
             Err(e) => {
@@ -107,6 +113,10 @@ impl Write for BlobWriter {
 impl Drop for BlobWriter {
     fn drop(&mut self) {
         if !self.committed && self.tmp_path.exists() {
+            // Best-effort cleanup: Drop can't propagate errors, and an
+            // uncommitted temp file left behind (e.g. the writer was
+            // dropped on an error path) is harmless — just wasted disk
+            // space until the next cache sweep or manual cleanup.
             let _ = fs::remove_file(&self.tmp_path);
         }
     }

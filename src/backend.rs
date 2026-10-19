@@ -66,6 +66,20 @@ fn is_root() -> bool {
         .is_ok_and(|output| output.stdout.trim_ascii() == b"0")
 }
 
+/// A manager whose program name is also the binary for every verb (install,
+/// uninstall, ...), with no `sudo` wrapper and no alternate binary per verb.
+/// Android's `pkg`/`apt` and Windows' `winget`/`choco` fit this shape; Linux
+/// backends that shell out through `sudo <name> ...` don't and keep their own
+/// `spec` helper instead of implementing this trait.
+pub(crate) trait PackageManager {
+    fn name(&self) -> &'static str;
+
+    /// `CommandSpec::with_packages` against this manager's own program name.
+    fn packages_spec(&self, args: &[&str], packages: &[String]) -> CommandSpec {
+        CommandSpec::with_packages(self.name(), args, packages)
+    }
+}
+
 #[derive(Debug)]
 pub struct CommandSpec {
     program: String,
@@ -217,8 +231,14 @@ impl Backend {
         }
     }
 
+    /// Resolves `packages` through the alias catalog, keyed by this backend's
+    /// manager. Shared by every `*_spec` method below.
+    fn resolved_packages(&self, packages: &[String]) -> Vec<String> {
+        catalog::resolve(self.catalog_key(), packages)
+    }
+
     pub fn install_spec(&self, packages: &[String]) -> CommandSpec {
-        let packages = catalog::resolve(self.catalog_key(), packages);
+        let packages = self.resolved_packages(packages);
         match self {
             #[cfg(target_os = "android")]
             Self::Android(manager) => manager.install_spec(&packages),
@@ -234,7 +254,7 @@ impl Backend {
     }
 
     pub fn uninstall_spec(&self, packages: &[String]) -> CommandSpec {
-        let packages = catalog::resolve(self.catalog_key(), packages);
+        let packages = self.resolved_packages(packages);
         match self {
             #[cfg(target_os = "android")]
             Self::Android(manager) => manager.uninstall_spec(&packages),
@@ -250,7 +270,7 @@ impl Backend {
     }
 
     pub fn reinstall_spec(&self, packages: &[String]) -> Result<CommandSpec, UpkgError> {
-        let packages = catalog::resolve(self.catalog_key(), packages);
+        let packages = self.resolved_packages(packages);
         match self {
             #[cfg(target_os = "android")]
             Self::Android(manager) => Ok(manager.reinstall_spec(&packages)),
@@ -266,7 +286,7 @@ impl Backend {
     }
 
     pub fn upgrade_spec(&self, packages: &[String]) -> CommandSpec {
-        let packages = catalog::resolve(self.catalog_key(), packages);
+        let packages = self.resolved_packages(packages);
         match self {
             #[cfg(target_os = "android")]
             Self::Android(manager) => manager.upgrade_spec(&packages),

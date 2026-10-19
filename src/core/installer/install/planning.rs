@@ -35,7 +35,13 @@ impl Installer {
 
         let mut items = Vec::with_capacity(ordered.len());
         for install_name in ordered {
-            let formula = formulas.get(&install_name).cloned().unwrap();
+            let formula =
+                formulas
+                    .get(&install_name)
+                    .cloned()
+                    .ok_or_else(|| Error::MissingFormula {
+                        name: install_name.clone(),
+                    })?;
             if !force.contains(&install_name)
                 && find_installed(self.cellar.root_dir(), &install_name)
                     .map(|installed| {

@@ -41,6 +41,9 @@ impl WritablePath {
 impl Drop for WritablePath {
     fn drop(&mut self) {
         if self.restore {
+            // Best-effort: Drop can't propagate errors, and leaving the file
+            // writable a little longer than intended is harmless compared to
+            // panicking here.
             let _ = fs::set_permissions(&self.path, self.original_permissions.clone());
         }
     }
@@ -62,6 +65,8 @@ where
     })();
 
     if result.is_err() {
+        // Best-effort cleanup: we're already returning the real error below;
+        // a leftover temp file is harmless and gets overwritten on retry.
         let _ = fs::remove_file(&temp_path);
     }
 

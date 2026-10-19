@@ -1,4 +1,4 @@
-use crate::backend::{CommandSpec, command_exists};
+use crate::backend::{CommandSpec, PackageManager, command_exists};
 use crate::error::UpkgError;
 
 pub enum WindowsManager {
@@ -19,14 +19,16 @@ pub fn detect() -> Result<WindowsManager, UpkgError> {
     ))
 }
 
-impl WindowsManager {
-    pub fn name(&self) -> &'static str {
+impl PackageManager for WindowsManager {
+    fn name(&self) -> &'static str {
         match self {
             Self::Winget => "winget",
             Self::Choco => "choco",
         }
     }
+}
 
+impl WindowsManager {
     pub fn install_spec(&self, packages: &[String]) -> CommandSpec {
         let args: &[&str] = match self {
             Self::Winget => &[
@@ -37,7 +39,7 @@ impl WindowsManager {
             ],
             Self::Choco => &["install", "-y"],
         };
-        CommandSpec::with_packages(self.name(), args, packages)
+        self.packages_spec(args, packages)
     }
 
     pub fn uninstall_spec(&self, packages: &[String]) -> CommandSpec {
@@ -45,7 +47,7 @@ impl WindowsManager {
             Self::Winget => &["uninstall", "--silent", "--accept-source-agreements"],
             Self::Choco => &["uninstall", "-y"],
         };
-        CommandSpec::with_packages(self.name(), args, packages)
+        self.packages_spec(args, packages)
     }
 
     pub fn reinstall_spec(&self, packages: &[String]) -> Result<CommandSpec, UpkgError> {
@@ -53,11 +55,7 @@ impl WindowsManager {
             Self::Winget => Err(UpkgError::Unsupported(
                 "reinstall is not supported by winget; uninstall and install instead",
             )),
-            Self::Choco => Ok(CommandSpec::with_packages(
-                self.name(),
-                &["install", "-y", "--force"],
-                packages,
-            )),
+            Self::Choco => Ok(self.packages_spec(&["install", "-y", "--force"], packages)),
         }
     }
 
@@ -71,7 +69,7 @@ impl WindowsManager {
             ],
             Self::Choco => &["upgrade", "-y"],
         };
-        CommandSpec::with_packages(self.name(), args, packages)
+        self.packages_spec(args, packages)
     }
 
     pub fn search_spec(&self, query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
@@ -80,7 +78,7 @@ impl WindowsManager {
             (Self::Choco, true) => &["search", query, "-e"],
             (_, false) => &["search", query],
         };
-        Ok(CommandSpec::with_packages(self.name(), args, &[]))
+        Ok(self.packages_spec(args, &[]))
     }
 
     pub fn list_spec(&self) -> CommandSpec {
@@ -88,7 +86,7 @@ impl WindowsManager {
             Self::Winget => &["list"],
             Self::Choco => &["list", "--local-only"],
         };
-        CommandSpec::with_packages(self.name(), args, &[])
+        self.packages_spec(args, &[])
     }
 }
 

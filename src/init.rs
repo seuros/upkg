@@ -49,6 +49,9 @@ pub fn is_writable(path: &Path) -> bool {
     let test_file = path.join(".upkg_write_test");
     match std::fs::write(&test_file, b"test") {
         Ok(_) => {
+            // Best-effort cleanup: the write already proved the directory is
+            // writable; failing to remove the probe file doesn't change
+            // that answer.
             let _ = std::fs::remove_file(&test_file);
             true
         }
@@ -395,10 +398,18 @@ pub fn ensure_init(root: &Path, prefix: &Path, auto_init: bool) -> Result<(), cr
         println!();
 
         print!("Initialize now? [Y/n] ");
-        std::io::stdout().flush().unwrap();
+        std::io::stdout()
+            .flush()
+            .map_err(|e| crate::types::Error::FileError {
+                message: format!("failed to flush stdout: {e}"),
+            })?;
 
         let mut input = String::new();
-        std::io::stdin().read_line(&mut input).unwrap();
+        std::io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| crate::types::Error::FileError {
+                message: format!("failed to read confirmation from stdin: {e}"),
+            })?;
         let input = input.trim();
 
         if !input.is_empty()

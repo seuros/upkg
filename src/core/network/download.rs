@@ -87,8 +87,10 @@ fn cancelled() -> Error {
     }
 }
 
-fn bearer(token: &str) -> HeaderValue {
-    HeaderValue::from_str(&format!("Bearer {token}")).unwrap()
+fn bearer(token: &str) -> Result<HeaderValue, Error> {
+    HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| Error::NetworkFailure {
+        message: format!("bearer token is not a valid header value: {e}"),
+    })
 }
 
 fn content_length(response: &Response) -> Option<u64> {
@@ -221,14 +223,9 @@ impl Downloader {
         let (use_chunked, file_size) = {
             let cached_token =
                 get_cached_token_for_url_internal(&self.token_cache, primary_url).await;
+            let auth = cached_token.as_deref().map(bearer).transpose()?;
 
-            match send_head_with_redirects(
-                &self.client,
-                primary_url,
-                cached_token.as_deref().map(bearer),
-            )
-            .await
-            {
+            match send_head_with_redirects(&self.client, primary_url, auth).await {
                 Ok(response) if response.status().is_success() => {
                     let content_length = content_length(&response);
 
@@ -431,14 +428,9 @@ async fn fetch_response_internal(
     range: Option<String>,
 ) -> Result<Response, Error> {
     let cached_token = get_cached_token_for_url_internal(&token_cache, &url).await;
+    let auth = cached_token.as_deref().map(bearer).transpose()?;
 
-    let response = send_get_with_redirects(
-        &client,
-        &url,
-        cached_token.as_deref().map(bearer),
-        range.clone(),
-    )
-    .await?;
+    let response = send_get_with_redirects(&client, &url, auth, range.clone()).await?;
 
     let response = if response.status() == StatusCode::UNAUTHORIZED {
         handle_auth_challenge_internal(&client, &token_cache, &url, response, range).await?
@@ -470,7 +462,7 @@ async fn handle_auth_challenge_internal(
     let www_auth = www_authenticate(&response)?;
     let token = fetch_bearer_token_internal(client, token_cache, www_auth).await?;
 
-    let response = send_get_with_redirects(client, url, Some(bearer(&token)), range).await?;
+    let response = send_get_with_redirects(client, url, Some(bearer(&token)?), range).await?;
 
     if response.status() == StatusCode::UNAUTHORIZED {
         return Err(Error::NetworkFailure {
@@ -652,19 +644,20 @@ async fn try_download_chunk(
     range_header: &str,
 ) -> Result<Vec<u8>, ChunkError> {
     let cached_token = get_cached_token_for_url_internal(&ctx.token_cache, &ctx.url).await;
+    let auth = cached_token
+        .as_deref()
+        .map(bearer)
+        .transpose()
+        .map_err(ChunkError::Fatal)?;
 
-    let response = send_get_with_redirects(
-        &ctx.client,
-        &ctx.url,
-        cached_token.as_deref().map(bearer),
-        Some(range_header.to_string()),
-    )
-    .await
-    .map_err(|e| {
-        ChunkError::Retry(Error::NetworkFailure {
-            message: format!("chunk download failed: {e}"),
-        })
-    })?;
+    let response =
+        send_get_with_redirects(&ctx.client, &ctx.url, auth, Some(range_header.to_string()))
+            .await
+            .map_err(|e| {
+                ChunkError::Retry(Error::NetworkFailure {
+                    message: format!("chunk download failed: {e}"),
+                })
+            })?;
 
     if response.status() == StatusCode::UNAUTHORIZED {
         let www_auth = www_authenticate(&response).map_err(ChunkError::Fatal)?;
@@ -863,7 +856,9 @@ async fn download_with_chunks(ctx: &ChunkedDownloadContext) -> Result<PathBuf, E
                 break;
             }
 
-            let (_, chunk_data) = received_chunks.pop_first().unwrap();
+            let (_, chunk_data) = received_chunks
+                .pop_first()
+                .expect("first_key_value just confirmed an entry exists at this offset");
             hasher.update(&chunk_data);
             writer
                 .write_all(&chunk_data)
@@ -1183,6 +1178,9 @@ impl ParallelDownloader {
             tokio::spawn(async move {
                 let result =
                     Self::download_with_dedup(downloader, semaphore, inflight, req, progress).await;
+                // Non-fatal: if the receiver side of this streaming download
+                // channel was dropped (caller stopped polling), there's no
+                // one left to report the result to and nothing else to do.
                 let _ = tx
                     .send(result.map(|blob_path| DownloadResult { blob_path, index }))
                     .await;
@@ -1237,6 +1235,9 @@ impl ParallelDownloader {
                     Ok(path) => Ok(path.clone()),
                     Err(e) => Err(e.to_string()),
                 };
+                // Non-fatal: `send` only fails when every subscriber (the
+                // other callers waiting for this same download) already
+                // dropped their receiver, meaning no one is left to notify.
                 let _ = sender.send(broadcast_result);
             }
         }

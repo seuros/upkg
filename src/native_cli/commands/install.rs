@@ -150,17 +150,17 @@ pub(crate) fn progress_bars() -> (ProgressBars, Arc<ProgressCallback>) {
 
     let download_style = ProgressStyle::default_bar()
         .template("    {prefix:<16} {bar:25.cyan/dim} {bytes:>10}/{total_bytes:<10} {eta:>6}")
-        .unwrap()
+        .expect("literal progress bar template is valid")
         .progress_chars("━━╸");
 
     let spinner_style = ProgressStyle::default_spinner()
         .template("    {prefix:<16} {spinner:.cyan} {msg}")
-        .unwrap()
+        .expect("literal progress bar template is valid")
         .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
 
     let done_style = ProgressStyle::default_spinner()
         .template("    {prefix:<16} {msg}")
-        .unwrap();
+        .expect("literal progress bar template is valid");
 
     let bars_clone = bars.clone();
     let multi_clone = multi.clone();
@@ -169,7 +169,13 @@ pub(crate) fn progress_bars() -> (ProgressBars, Arc<ProgressCallback>) {
     let done_style_clone = done_style.clone();
 
     let progress_callback: Arc<ProgressCallback> = Arc::new(Box::new(move |event| {
-        let mut bars = bars_clone.lock().unwrap();
+        // The mutex only guards progress-bar display state; if another
+        // callback invocation panicked while holding it, recovering the
+        // (still structurally valid) inner map is preferable to panicking
+        // the whole install over a display glitch.
+        let mut bars = bars_clone
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match event {
             InstallProgress::DownloadStarted { name, total_bytes } => {
                 let pb = if let Some(total) = total_bytes {
@@ -224,7 +230,13 @@ pub(crate) fn progress_bars() -> (ProgressBars, Arc<ProgressCallback>) {
 }
 
 pub(crate) fn finish_bars(bars: &ProgressBars) {
-    for pb in bars.lock().unwrap().values() {
+    // See the progress callback above: recover from poisoning rather than
+    // panicking, since this only touches display state.
+    for pb in bars
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .values()
+    {
         if !pb.is_finished() {
             pb.finish();
         }

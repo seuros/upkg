@@ -31,6 +31,7 @@ pub fn finalize_sha256_hex(hasher: Sha256) -> String {
     let mut rendered = String::with_capacity(digest.len() * 2);
     for byte in digest {
         use std::fmt::Write as _;
+        // Infallible: writing to a String never fails.
         let _ = write!(&mut rendered, "{byte:02x}");
     }
     rendered
