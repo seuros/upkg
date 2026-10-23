@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.17.0](https://github.com/seuros/upkg/compare/upkg-v0.16.1...upkg-v0.17.0) (2026-10-23)
+
+
+### Features
+
+* add upkg check command ([acc3afc](https://github.com/seuros/upkg/commit/acc3afcdb84ea1ab647faa34a22bacbec94d08c9))
+
+
+### Bug Fixes
+
+* **ci:** gate dead code that only one target ever reaches ([27f5a12](https://github.com/seuros/upkg/commit/27f5a1291d8eec016278e802944144a1c5277521))
+
 ## [0.16.1](https://github.com/seuros/upkg/compare/upkg-v0.16.0...upkg-v0.16.1) (2026-10-16)
 
 
