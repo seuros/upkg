@@ -182,3 +182,50 @@ fn env_path_value_accepts_non_empty_path() {
         Some(PathBuf::from("/tmp/upkg-test"))
     );
 }
+
+#[test]
+fn installed_names_reads_without_initializing() {
+    use crate::core::storage::state_db::{self, InstalledPackage, InstalledPackageKind, StateDb};
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let options = InstallOptions {
+        root: Some(dir.path().to_path_buf()),
+        prefix: Some(dir.path().to_path_buf()),
+        ..InstallOptions::default()
+    };
+    let entries = || {
+        let mut names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+
+    // A prefix upkg never set up: nothing installed, and nothing created.
+    assert_eq!(installed_names(&options).unwrap(), Vec::<String>::new());
+    assert_eq!(entries(), Vec::<String>::new());
+
+    std::fs::create_dir_all(dir.path().join("Cellar/git")).unwrap();
+    StateDb::open(&state_db::path(dir.path()))
+        .unwrap()
+        .record_installed(&InstalledPackage {
+            name: "cask:ghostty".to_string(),
+            formula_name: "cask:ghostty".to_string(),
+            version: "1.3.1".to_string(),
+            store_key: "abc".to_string(),
+            kind: InstalledPackageKind::App,
+            installed_at: 1,
+        })
+        .unwrap();
+    let before = entries();
+
+    let mut names = installed_names(&options).unwrap();
+    names.sort();
+    assert_eq!(names, ["cask:ghostty", "git"]);
+    assert_eq!(
+        entries(),
+        before,
+        "reading must not create store/locks/cache"
+    );
+}

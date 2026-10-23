@@ -1,5 +1,5 @@
 use super::*;
-use crate::backend::test_support::assert_spec;
+use crate::backend::test_support::{assert_answers, assert_spec};
 use rstest::rstest;
 use std::assert_matches;
 
@@ -200,4 +200,49 @@ fn upgrade_spec_handles_empty_packages_for_apt() {
 fn upgrade_spec_apk(#[case] packages: Vec<String>, #[case] expected_args: Vec<&str>) {
     let spec = LinuxManager::Apk.upgrade_spec(&packages);
     assert_eq!(spec.args(), expected_args);
+}
+
+#[rstest]
+#[case(LinuxManager::Apt, "dpkg-query", vec!["--show", "--showformat=${db:Status-Abbrev}\\n", "git"], Answer::DpkgStatus)]
+#[case(LinuxManager::Dnf, "rpm", vec!["-q", "git"], Answer::ExitStatus)]
+#[case(LinuxManager::Yum, "rpm", vec!["-q", "git"], Answer::ExitStatus)]
+#[case(LinuxManager::Zypper, "rpm", vec!["-q", "git"], Answer::ExitStatus)]
+#[case(LinuxManager::Pacman, "pacman", vec!["-Q", "git"], Answer::ExitStatus)]
+#[case(LinuxManager::Opkg, "opkg", vec!["status", "git"], Answer::OpkgStatus)]
+#[case(LinuxManager::Apk, "apk", vec!["info", "-e", "git"], Answer::ExitStatus)]
+fn installed_query_is_read_only(
+    #[case] manager: LinuxManager,
+    #[case] expected_command: &str,
+    #[case] expected_args: Vec<&str>,
+    #[case] expected_answer: Answer,
+) {
+    let query = manager.installed_query("git");
+    assert_spec(&query.spec, expected_command, &expected_args);
+    assert_eq!(query.answer, expected_answer, "{manager:?}");
+}
+
+#[test]
+fn dpkg_and_opkg_answers_read_stdout() {
+    assert_answers(&[
+        (Answer::DpkgStatus, true, "ii \n", true),
+        (Answer::DpkgStatus, true, "hi \n", true),
+        // Removed, config files left: dpkg-query still exits 0.
+        (Answer::DpkgStatus, true, "rc \n", false),
+        // One line per multiarch instance; any installed one counts.
+        (Answer::DpkgStatus, true, "un \nii \n", true),
+        (Answer::DpkgStatus, false, "", false),
+        (
+            Answer::OpkgStatus,
+            true,
+            "Package: curl\nStatus: install user installed\n",
+            true,
+        ),
+        (
+            Answer::OpkgStatus,
+            true,
+            "Package: curl\nStatus: install user not-installed\n",
+            false,
+        ),
+        (Answer::OpkgStatus, true, "", false),
+    ]);
 }

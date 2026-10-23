@@ -40,6 +40,9 @@ enum Commands {
     /// List installed packages
     #[usage(alias = "ls")]
     List,
+    /// Check whether packages are installed; exits 1 when any is missing
+    #[usage(example = "upkg check git libpq-dev")]
+    Check(CheckPackages),
     /// Search for packages
     #[usage(alias = "s")]
     Search(Search),
@@ -82,6 +85,14 @@ struct OptionalPackages {
     #[usage(flatten)]
     options: PackageOptions,
     /// Packages to upgrade (omit to upgrade all)
+    packages: Vec<String>,
+}
+
+#[derive(usage::Args)]
+#[usage(unknown_flags = "value")]
+struct CheckPackages {
+    /// Packages to look for
+    #[usage(required = true)]
     packages: Vec<String>,
 }
 
@@ -186,6 +197,9 @@ pub(super) fn parse(args: impl Iterator<Item = OsString>) -> Result<Cli, UpkgErr
         Commands::Upgrade(args) => package(PackageAction::Upgrade, args.options, args.packages),
         Commands::Reinstall(args) => package(PackageAction::Reinstall, args.options, args.packages),
         Commands::List => CommandKind::List,
+        Commands::Check(args) => CommandKind::Check {
+            packages: args.packages,
+        },
         Commands::Search(args) => CommandKind::Search {
             query: args.query.join(" "),
             exact: args.exact,

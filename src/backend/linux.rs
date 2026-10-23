@@ -2,7 +2,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 
-use crate::backend::{CommandSpec, command_exists};
+use crate::backend::{Answer, CommandSpec, InstalledQuery, command_exists, dpkg_query};
 use crate::error::UpkgError;
 
 /// Where apt keeps downloaded package lists; container images ship it empty.
@@ -222,6 +222,19 @@ impl LinuxManager {
             }
             Self::Opkg => CommandSpec::new("opkg", vec!["list-installed".into()]),
             Self::Apk => CommandSpec::new("apk", vec!["info".into()]),
+        }
+    }
+
+    pub fn installed_query(&self, package: &str) -> InstalledQuery {
+        match self {
+            Self::Apt => dpkg_query(package),
+            // dnf, yum and zypper all sit on the rpm database.
+            Self::Dnf | Self::Yum | Self::Zypper => {
+                InstalledQuery::new("rpm", &["-q"], package, Answer::ExitStatus)
+            }
+            Self::Pacman => InstalledQuery::new("pacman", &["-Q"], package, Answer::ExitStatus),
+            Self::Opkg => InstalledQuery::new("opkg", &["status"], package, Answer::OpkgStatus),
+            Self::Apk => InstalledQuery::new("apk", &["info", "-e"], package, Answer::ExitStatus),
         }
     }
 }

@@ -1,4 +1,4 @@
-use crate::backend::CommandSpec;
+use crate::backend::{Answer, CommandSpec, InstalledQuery};
 use crate::error::UpkgError;
 
 fn sudo_pkg(args: &[&str], packages: &[String]) -> CommandSpec {
@@ -19,6 +19,10 @@ pub fn reinstall_spec(packages: &[String]) -> CommandSpec {
 
 pub fn list_spec() -> CommandSpec {
     CommandSpec::with_packages("pkg", &["info"], &[])
+}
+
+pub fn installed_query(package: &str) -> InstalledQuery {
+    InstalledQuery::new("pkg", &["info", "-e"], package, Answer::ExitStatus)
 }
 
 pub fn upgrade_spec(packages: &[String]) -> CommandSpec {

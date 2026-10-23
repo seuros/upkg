@@ -45,6 +45,9 @@ pub enum CommandKind {
         kind: PackageKind,
     },
     List,
+    Check {
+        packages: Vec<String>,
+    },
     Search {
         query: String,
         exact: bool,

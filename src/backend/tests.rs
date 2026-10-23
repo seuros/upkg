@@ -1,5 +1,5 @@
 use super::*;
-use test_support::assert_spec;
+use test_support::{assert_answers, assert_spec};
 
 #[test]
 fn command_spec_new_creates_spec() {
@@ -64,4 +64,14 @@ fn command_exists_finds_common_command() {
 fn command_exists_rejects_nonexistent_command() {
     let result = command_exists("this_command_definitely_does_not_exist_12345");
     assert!(!result);
+}
+
+#[test]
+fn exit_status_answer_is_the_exit_status() {
+    assert_answers(&[
+        (Answer::ExitStatus, true, "", true),
+        (Answer::ExitStatus, false, "", false),
+        // pkg/apk echo the name when installed; only the status counts.
+        (Answer::ExitStatus, false, "git\n", false),
+    ]);
 }

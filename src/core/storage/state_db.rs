@@ -1,6 +1,6 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OpenFlags, params};
 
 use crate::types::Error;
 
@@ -40,7 +40,22 @@ impl InstalledPackageKind {
     }
 }
 
+/// Where the state db lives under an upkg root.
+pub fn path(root: &Path) -> PathBuf {
+    root.join("db").join("upkg.sqlite3")
+}
+
 impl StateDb {
+    /// Opens an existing db read-only; `None` when upkg never created one.
+    pub fn open_read_only(path: &Path) -> Result<Option<Self>, Error> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(Self::map_sql_error)?;
+        Ok(Some(Self { conn }))
+    }
+
     pub fn open(path: &Path) -> Result<Self, Error> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| Error::StoreCorruption {

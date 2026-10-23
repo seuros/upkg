@@ -2,6 +2,7 @@
 mod api;
 #[cfg(not(target_os = "macos"))]
 mod backend;
+mod check;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[path = "core/checksum.rs"]
 mod checksum;
@@ -64,6 +65,7 @@ fn run() -> Result<ExitCode, UpkgError> {
             kind,
         } => package(action, &packages, dry_run, kind),
         CommandKind::List => list(),
+        CommandKind::Check { packages } => check_packages(&packages),
         CommandKind::Search {
             query,
             exact,
@@ -135,6 +137,22 @@ fn list() -> Result<ExitCode, UpkgError> {
         let spec = backend.list_spec();
         execute_spec(&backend, spec)
     }
+}
+
+fn check_packages(packages: &[String]) -> Result<ExitCode, UpkgError> {
+    #[cfg(target_os = "macos")]
+    let results = native::check_native(packages)?;
+
+    #[cfg(not(target_os = "macos"))]
+    let results = {
+        let backend = Backend::detect()?;
+        packages
+            .iter()
+            .map(|package| check::on_backend(&backend, package))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    Ok(check::report(&results))
 }
 
 fn search(

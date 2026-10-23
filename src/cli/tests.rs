@@ -13,6 +13,7 @@ fn parse(args: &[&str]) -> Result<Cli, UpkgError> {
 #[case(&["reinstall", "git"], "reinstall")]
 #[case(&["list"], "list")]
 #[case(&["ls"], "list")]
+#[case(&["check", "git"], "check")]
 #[case(&["shaman"], "shaman")]
 #[case(&["doctor"], "shaman")]
 #[case(&["--self-upgrade", "--dry-run"], "self-upgrade")]
@@ -21,6 +22,7 @@ fn aliases(#[case] args: &[&str], #[case] expected: &str) {
     let name = match cli.command {
         CommandKind::Package { action, .. } => action.as_str(),
         CommandKind::List => "list",
+        CommandKind::Check { .. } => "check",
         CommandKind::Shaman => "shaman",
         CommandKind::SelfUpgrade { dry_run: true } => "self-upgrade",
         _ => panic!("unexpected command"),
@@ -37,6 +39,7 @@ fn aliases(#[case] args: &[&str], #[case] expected: &str) {
 #[case(&["uninstall"], "<PACKAGES>")]
 #[case(&["uninstall", "--dry-run"], "<PACKAGES>")]
 #[case(&["reinstall"], "<PACKAGES>")]
+#[case(&["check"], "<PACKAGES>")]
 #[case(&["search"], "<QUERY>")]
 #[case(&["search", "--exact"], "<QUERY>")]
 #[case(&["list", "extra"], "extra")]
@@ -57,6 +60,7 @@ fn invalid_arguments(#[case] args: &[&str], #[case] expected: &str) {
 #[case(&["help", "install"], "--dry-run")]
 #[case(&["i", "-h"], "--app")]
 #[case(&["search", "--help"], "--refresh")]
+#[case(&["check", "--help"], "missing")]
 #[case(&["--self-upgrade", "--help"], "--dry-run")]
 fn generated_help(#[case] args: &[&str], #[case] expected: &str) {
     let cli = parse(args).unwrap();
@@ -126,11 +130,13 @@ fn package_double_dash(#[case] command: &str) {
 #[case("uninstall")]
 #[case("upgrade")]
 #[case("reinstall")]
+#[case("check")]
 #[case("search")]
 fn unknown_flags_remain_positional_values(#[case] command: &str) {
     let cli = parse(&[command, "--unknown"]).unwrap();
     match cli.command {
         CommandKind::Package { packages, .. } => assert_eq!(packages, ["--unknown"]),
+        CommandKind::Check { packages } => assert_eq!(packages, ["--unknown"]),
         CommandKind::Search { query, .. } => assert_eq!(query, "--unknown"),
         _ => panic!("unexpected command"),
     }
@@ -182,4 +188,13 @@ fn self_upgrade_command(#[case] args: &[&str], #[case] expected_dry_run: bool) {
         panic!("expected self-upgrade command");
     };
     assert_eq!(dry_run, expected_dry_run);
+}
+
+#[test]
+fn check_keeps_package_order() {
+    let CommandKind::Check { packages } = parse(&["check", "git", "libpq-dev"]).unwrap().command
+    else {
+        panic!("expected check command");
+    };
+    assert_eq!(packages, ["git", "libpq-dev"]);
 }

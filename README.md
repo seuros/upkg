@@ -142,6 +142,7 @@ upkg uninstall htop
 upkg uninstall --app ghostty
 upkg upgrade
 upkg list
+upkg check git libpq-dev
 upkg search ripgrep
 upkg search --app ghostty
 upkg search --exact git
@@ -173,6 +174,38 @@ upkg completion zsh > "${fpath[1]}/_upkg"
 upkg completion fish > ~/.config/fish/completions/upkg.fish
 upkg completion bash > ~/.local/share/bash-completion/completions/upkg
 ```
+
+## Check
+
+`upkg check <package>...` answers whether packages are installed, for scripts
+and deploy tools that verify a host before touching it. Names go through the
+alias catalog first, so `upkg check libpq-dev` asks pacman about
+`postgresql-libs`. It never needs root and never changes anything.
+
+```console
+$ upkg check git llvm19
+installed	git	git
+missing	llvm19	llvm19
+$ echo $?
+1
+```
+
+Each line is tab-separated: `installed` or `missing`, the requested name, and
+the native name it resolved to. The exit status is 0 when everything is
+installed and 1 otherwise. The native tool's own explanation of a miss goes
+to stderr.
+
+| Platform | Asks |
+|---|---|
+| Debian/Ubuntu, Termux | `dpkg-query` (`ii`/`hi` count; `rc` leftovers do not) |
+| Fedora/RHEL, openSUSE | `rpm -q` |
+| Arch | `pacman -Q` |
+| Alpine | `apk info -e` |
+| OpenWrt | `opkg status` |
+| FreeBSD, DragonFly BSD | `pkg info -e` |
+| macOS | the built-in engine's installed kegs (formulae, or casks by token) |
+
+Ravenports and Windows report that `check` is unsupported.
 
 ## Search
 

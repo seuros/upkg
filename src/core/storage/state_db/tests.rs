@@ -21,3 +21,16 @@ fn records_lists_and_removes_installed_packages() {
     db.remove_installed("cask:ghostty").unwrap();
     assert!(db.list_installed().unwrap().is_empty());
 }
+
+#[test]
+fn open_read_only_never_creates_the_db() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db = path(dir.path());
+
+    assert!(StateDb::open_read_only(&db).unwrap().is_none());
+    assert!(!dir.path().join("db").exists());
+
+    StateDb::open(&db).unwrap();
+    let read_only = StateDb::open_read_only(&db).unwrap().unwrap();
+    assert_eq!(read_only.list_installed().unwrap(), Vec::new());
+}

@@ -379,6 +379,41 @@ pub fn list(
     installer.list_installed()
 }
 
+/// Installed formula and cask names, read-only: the state db plus the Cellar
+/// for kegs the db hasn't recorded yet.
+pub fn installed_names(options: &InstallOptions) -> Result<Vec<String>, Error> {
+    use crate::core::storage::state_db::{self, StateDb};
+
+    let (root, prefix) = resolve_root_and_prefix(options);
+    let mut names: Vec<String> = match StateDb::open_read_only(&state_db::path(&root))? {
+        Some(db) => db
+            .list_installed()?
+            .into_iter()
+            .map(|package| package.name)
+            .collect(),
+        None => Vec::new(),
+    };
+    let cellar = prefix.join("Cellar");
+    match std::fs::read_dir(&cellar) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry.map_err(|e| Error::FileError {
+                    message: format!("failed to read '{}': {e}", cellar.display()),
+                })?;
+                names.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        // A prefix nothing was ever installed into.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(Error::FileError {
+                message: format!("failed to read '{}': {e}", cellar.display()),
+            });
+        }
+    }
+    Ok(names)
+}
+
 fn installed_formula_targets(
     installed: Vec<crate::core::storage::receipt::InstalledKeg>,
 ) -> Vec<String> {

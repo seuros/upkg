@@ -39,3 +39,10 @@ fn search_spec_exact_uses_dash_e() {
 fn upgrade_spec_handles_empty_packages() {
     assert_spec(&upgrade_spec(&[]), "sudo", &["pkg", "upgrade", "-y"]);
 }
+
+#[test]
+fn installed_query_uses_pkg_info_e() {
+    let query = installed_query("git");
+    assert_spec(&query.spec, "pkg", &["info", "-e", "git"]);
+    assert_eq!(query.answer, Answer::ExitStatus);
+}

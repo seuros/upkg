@@ -1,4 +1,5 @@
 use crate::api::PackageKindHint;
+use crate::check::Checked;
 use crate::cli::{PackageAction, PackageKind};
 use crate::error::UpkgError;
 
@@ -76,6 +77,23 @@ pub fn search_native(
     }
 
     Ok(())
+}
+
+/// Matches installed formulae, or casks by their bare token; read-only.
+pub fn check_native(packages: &[String]) -> Result<Vec<Checked>, UpkgError> {
+    let options = crate::api::InstallOptions::default();
+    let installed = crate::api::installed_names(&options).map_err(UpkgError::Native)?;
+    Ok(packages
+        .iter()
+        .map(|requested| Checked {
+            requested: requested.clone(),
+            native: requested.clone(),
+            installed: installed.iter().any(|name| {
+                name == requested
+                    || crate::package_ref::cask_token(name) == Some(requested.as_str())
+            }),
+        })
+        .collect())
 }
 
 pub fn list_native() -> Result<(), UpkgError> {

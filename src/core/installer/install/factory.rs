@@ -49,7 +49,7 @@ pub fn create_installer(
     let blob_cache =
         BlobCache::new(&root.join("cache")).store_context(|| "failed to create blob cache")?;
     let store = Store::new(root).store_context(|| "failed to create store")?;
-    let state_db = StateDb::open(&root.join("db").join("upkg.sqlite3"))?;
+    let state_db = StateDb::open(&crate::core::storage::state_db::path(root))?;
     backfill_state_db_if_empty(&state_db, prefix)?;
     let cellar =
         Cellar::new_at(prefix.join("Cellar")).store_context(|| "failed to create cellar")?;
