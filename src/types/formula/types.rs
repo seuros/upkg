@@ -69,6 +69,7 @@ impl<'de> Deserialize<'de> for UsesFromMacos {
 }
 
 impl UsesFromMacos {
+    #[cfg(not(target_os = "macos"))]
     pub fn name(&self) -> &str {
         match self {
             UsesFromMacos::Plain(name) => name,

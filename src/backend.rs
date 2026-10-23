@@ -71,6 +71,7 @@ fn is_root() -> bool {
 /// Android's `pkg`/`apt` and Windows' `winget`/`choco` fit this shape; Linux
 /// backends that shell out through `sudo <name> ...` don't and keep their own
 /// `spec` helper instead of implementing this trait.
+#[cfg(any(target_os = "windows", target_os = "android"))]
 pub(crate) trait PackageManager {
     fn name(&self) -> &'static str;
 
@@ -159,6 +160,7 @@ impl CommandSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Answer {
     /// Exit status 0 means installed: `pkg info -e`, `rpm -q`, `pacman -Q`, `apk info -e`.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     ExitStatus,
     /// `dpkg-query`'s `${db:Status-Abbrev}`: second char `i` means installed.
     #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -202,6 +204,7 @@ pub struct InstalledQuery {
 }
 
 impl InstalledQuery {
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub fn new(program: &str, args: &[&str], package: &str, answer: Answer) -> Self {
         Self {
             spec: CommandSpec::with_packages(program, args, &[package.to_string()]),
@@ -309,6 +312,7 @@ impl Backend {
     }
 
     /// Asks whether `native` (already resolved) is installed; never sudo.
+    #[cfg_attr(target_os = "windows", allow(unused_variables))]
     pub fn installed_query(&self, native: &str) -> Result<InstalledQuery, UpkgError> {
         match self {
             #[cfg(target_os = "android")]
