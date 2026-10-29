@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/seuros/upkg/compare/upkg-v0.17.0...upkg-v0.17.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **brew:** reject bottles built for newer macOS releases ([6db8059](https://github.com/seuros/upkg/commit/6db80595f8305c8cd125b7a708e9b21ac1ce135c))
+
 ## [0.17.0](https://github.com/seuros/upkg/compare/upkg-v0.16.1...upkg-v0.17.0) (2026-10-23)
 
 
