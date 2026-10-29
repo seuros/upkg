@@ -117,7 +117,7 @@ fn conflicting_runtime_file_rejects_the_whole_plan_without_overwriting() {
 }
 
 #[test]
-fn rejects_path_traversal_unknown_templates_and_escaping_symlinks() {
+fn rejects_path_traversal_and_unknown_templates() {
     let tmp = TempDir::new().unwrap();
     let (linker, keg) = fixture(&tmp, "18.6");
     for path in [
@@ -135,10 +135,6 @@ fn rejects_path_traversal_unknown_templates_and_escaping_symlinks() {
         };
         assert!(linker.apply_post_install(&keg, &[step]).is_err(), "{path}");
     }
-    let external = TempDir::new().unwrap();
-    std::os::unix::fs::symlink(external.path(), tmp.path().join("share/postgresql@18")).unwrap();
-    assert!(linker.apply_post_install(&keg, &steps()).is_err());
-    assert!(fs::read_dir(external.path()).unwrap().next().is_none());
 }
 
 #[test]
@@ -150,6 +146,49 @@ fn unknown_declarative_hooks_remain_non_executable() {
             .unwrap();
     assert_eq!(steps, vec![PostInstallStep::Unsupported]);
     linker.apply_post_install(&keg, &steps).unwrap();
+}
+
+#[rstest::rstest]
+#[case("{{HOMEBREW_PREFIX}}/../escape")]
+#[case("{{HOMEBREW_PREFIX}}/lib/../../escape")]
+#[case("{{HOMEBREW_PREFIX}}//tmp/escape")]
+#[case("{{HOMEBREW_PREFIX}}/{{unknown}}")]
+#[case("{{HOMEBREW_PREFIX}}/")]
+#[case("{{HOMEBREW_PREFIX}}_other/lib")]
+#[case("/tmp/escape")]
+#[case("{{unknown}}/lib")]
+#[case("lib/gio/modules")]
+#[case("")]
+fn prefix_template_without_base_rejects_unsafe_paths(#[case] path: &str) {
+    let tmp = TempDir::new().unwrap();
+    let (linker, keg) = fixture(&tmp, "18.6");
+    let steps: Vec<PostInstallStep> = serde_json::from_value(serde_json::json!([{
+        "type": "mkdir_p",
+        "path": { "path": path }
+    }]))
+    .unwrap();
+    assert!(linker.apply_post_install(&keg, &steps).is_err());
+    assert!(!tmp.path().join("lib/gio").exists());
+    assert!(!tmp.path().join("escape").exists());
+}
+
+#[rstest::rstest]
+#[case(false)]
+#[case(true)]
+fn rejects_escaping_directory_symlinks(#[case] prefix_template: bool) {
+    let tmp = TempDir::new().unwrap();
+    let (linker, keg) = fixture(&tmp, "18.6");
+    let external = TempDir::new().unwrap();
+    let (directory, steps) = if prefix_template {
+        let formula: crate::Formula =
+            serde_json::from_str(include_str!("../../../../fixtures/formula_glib.json")).unwrap();
+        ("lib/gio", formula.post_install_steps)
+    } else {
+        ("share/postgresql@18", steps())
+    };
+    std::os::unix::fs::symlink(external.path(), tmp.path().join(directory)).unwrap();
+    assert!(linker.apply_post_install(&keg, &steps).is_err());
+    assert!(fs::read_dir(external.path()).unwrap().next().is_none());
 }
 
 #[test]

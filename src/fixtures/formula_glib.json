@@ -1,0 +1,12 @@
+{
+  "name": "glib",
+  "versions": { "stable": "2.90.1" },
+  "dependencies": [],
+  "bottle": { "stable": { "files": {} } },
+  "post_install_steps": [
+    {
+      "path": { "path": "{{HOMEBREW_PREFIX}}/lib/gio/modules" },
+      "type": "mkdir_p"
+    }
+  ]
+}

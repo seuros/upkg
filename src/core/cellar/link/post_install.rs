@@ -239,14 +239,26 @@ impl Linker {
         path: &PostInstallPath,
         source: bool,
     ) -> Result<PathBuf, Error> {
-        let (base, sub) = match (source, path.base.as_str()) {
+        // Homebrew also emits absolute prefix templates without a `base`.
+        // Strip the exact marker, then apply the same relative-path validation
+        // as explicit bases; never expand arbitrary absolute filesystem paths.
+        let (path_base, value) = if path.base.is_empty() {
+            let relative = path
+                .path
+                .strip_prefix("{{HOMEBREW_PREFIX}}/")
+                .ok_or_else(|| invalid_step("unsupported absolute path template"))?;
+            ("homebrew_prefix", relative)
+        } else {
+            (path.base.as_str(), path.path.as_str())
+        };
+        let (base, sub) = match (source, path_base) {
             (true, "prefix") => (vars.keg, None),
             (false, "homebrew_prefix") => (self.prefix.as_path(), None),
             (false, "var") => (self.prefix.as_path(), Some("var")),
             (false, "etc") => (self.prefix.as_path(), Some("etc")),
             _ => return Err(invalid_step("unsupported path base")),
         };
-        let expanded = vars.expand(&path.path)?;
+        let expanded = vars.expand(value)?;
         let relative = Path::new(&*expanded);
         if relative.as_os_str().is_empty()
             || relative

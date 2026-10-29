@@ -24,6 +24,8 @@ pub enum PostInstallStep {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PostInstallPath {
+    /// An omitted base is valid only with a recognized absolute prefix template.
+    #[serde(default)]
     pub base: String,
     pub path: String,
 }

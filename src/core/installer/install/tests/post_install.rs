@@ -1,6 +1,50 @@
 use super::*;
 use crate::core::storage::receipt::read_receipt;
 
+#[tokio::test]
+async fn glib_prefix_template_without_base_installs_and_reinstalls() {
+    let server = MockServer::start().await;
+    let tmp = TempDir::new().unwrap();
+    // Reduced live API metadata: glib's mkdir_p path has no `base`.
+    let mut formula: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../fixtures/formula_glib.json")).unwrap();
+    let bottle = create_bottle_tarball("glib");
+    formula["versions"]["stable"] = "1.0.0".into();
+    formula["bottle"]["stable"]["files"] = serde_json::json!({
+        get_test_bottle_tag(): {
+            "url": format!("{}/glib.tar.gz", server.uri()),
+            "sha256": sha256_hex_bytes(&bottle)
+        }
+    });
+    mount_json(&server, "/glib.json", formula).await;
+    mount_bytes(&server, "/glib.tar.gz", bottle).await;
+    let mut ctx = server_context(&server, &tmp);
+    ctx.installer
+        .install(&["glib".into()], false)
+        .await
+        .unwrap();
+    let modules = ctx.prefix.join("lib/gio/modules");
+    assert!(modules.is_dir());
+    let receipt = read_receipt(&ctx.root.join("Cellar/glib/1.0.0")).unwrap();
+    assert_eq!(receipt.post_install_steps.len(), 1);
+
+    fs::remove_dir(&modules).unwrap();
+    server.reset().await;
+    let plan = ctx
+        .installer
+        .plan_reinstall(&["glib".into()], false)
+        .await
+        .unwrap();
+    assert_eq!(plan.from_store.len(), 1);
+    ctx.installer
+        .reinstall_with_progress(plan, false, None)
+        .await
+        .unwrap();
+    assert!(modules.is_dir());
+    ctx.installer.uninstall("glib").unwrap();
+    assert!(modules.is_dir());
+}
+
 /// Serves a PostgreSQL-shaped bottle named `name` and returns a fresh context.
 async fn postgres_context(name: &str) -> (MockServer, TempDir, TestInstallContext) {
     let server = MockServer::start().await;
