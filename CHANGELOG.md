@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.2](https://github.com/seuros/upkg/compare/upkg-v0.17.1...upkg-v0.17.2) (2026-10-29)
+
+
+### Bug Fixes
+
+* **brew:** accept prefix-template post-install paths without a base ([e869725](https://github.com/seuros/upkg/commit/e86972541938e0a2ab2c17525b8e363838513454))
+
 ## [0.17.1](https://github.com/seuros/upkg/compare/upkg-v0.17.0...upkg-v0.17.1) (2026-10-29)
 
 
