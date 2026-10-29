@@ -220,11 +220,18 @@ impl Installer {
                 };
 
                 if select_bottle(&formula).is_err() && !formula.has_source_url() {
-                    eprintln!(
-                        "    Skipping {} (no bottle or source available for this platform)",
-                        formula.name
-                    );
-                    continue;
+                    if !names.contains(&batch[i])
+                        && find_installed(self.cellar.root_dir(), &batch[i]).is_some()
+                    {
+                        eprintln!(
+                            "    Keeping installed {} (no compatible bottle or source available)",
+                            batch[i]
+                        );
+                        continue;
+                    }
+                    return Err(Error::UnsupportedBottle {
+                        name: formula.name.clone(),
+                    });
                 }
 
                 for dep in &formula.dependencies {

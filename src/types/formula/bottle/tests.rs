@@ -132,33 +132,78 @@ fn sequoia_user_skips_tahoe_bottle() {
 
 #[test]
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-fn monterey_falls_back_to_sonoma_bottle() {
+fn monterey_rejects_sonoma_bottle() {
+    let formula = bottled_formula("legacy", &[("sonoma", "https://example.com/sonoma.tar.gz")]);
+    assert_matches!(
+        select_bottle_with_codename(&formula, Some("monterey")),
+        Err(Error::UnsupportedBottle { .. })
+    );
+}
+
+#[cfg(target_os = "macos")]
+fn macos_tag(codename: &str) -> String {
+    #[cfg(target_arch = "aarch64")]
+    return format!("arm64_{codename}");
+    #[cfg(target_arch = "x86_64")]
+    return codename.to_string();
+}
+
+#[rstest::rstest]
+#[case("sonoma", "sequoia")]
+#[case("sonoma", "tahoe")]
+#[case("sequoia", "tahoe")]
+#[case("monterey", "ventura")]
+#[case("mojave", "big_sur")]
+#[cfg(target_os = "macos")]
+fn rejects_newer_macos_bottles(#[case] host: &'static str, #[case] bottle: &str) {
+    let tag = macos_tag(bottle);
+    let formula = bottled_formula("freetype", &[(&tag, "https://example.com/freetype.tar.gz")]);
+    assert_matches!(
+        select_bottle_with_codename(&formula, Some(host)),
+        Err(Error::UnsupportedBottle { name }) if name == "freetype"
+    );
+}
+
+#[rstest::rstest]
+#[case("sonoma")]
+#[case("ventura")]
+#[cfg(target_os = "macos")]
+fn sonoma_selects_same_or_older_bottle(#[case] compatible: &str) {
+    let tag = macos_tag(compatible);
     assert_selects_for_codename(
-        &[("sonoma", "https://example.com/sonoma.tar.gz")],
-        "monterey",
+        &[
+            (&macos_tag("sequoia"), "https://example.com/newer.tar.gz"),
+            (&tag, "https://example.com/compatible.tar.gz"),
+        ],
         "sonoma",
+        &tag,
     );
 }
 
 #[test]
-fn newer_codenames_returns_closest_first() {
-    let newer = newer_codenames(Some("monterey"));
-    assert_eq!(newer, vec!["ventura", "sonoma", "sequoia", "tahoe"]);
-}
-
-#[test]
-fn newer_codenames_empty_for_newest() {
-    let newer = newer_codenames(Some("tahoe"));
-    assert!(newer.is_empty());
-}
-
-#[test]
-#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-fn mojave_falls_back_to_closest_newer_bottle() {
-    // With newer-bottle fallback, mojave user gets the closest newer bottle (big_sur)
+#[cfg(target_os = "macos")]
+fn sonoma_prefers_universal_bottle_over_newer_macos() {
     assert_selects_for_codename(
-        &[("big_sur", "https://example.com/big-sur.tar.gz")],
-        "mojave",
-        "big_sur",
+        &[
+            (&macos_tag("sequoia"), "https://example.com/newer.tar.gz"),
+            ("all", "https://example.com/universal.tar.gz"),
+        ],
+        "sonoma",
+        "all",
+    );
+}
+
+#[rstest::rstest]
+#[case(None)]
+#[case(Some("unknown"))]
+#[cfg(target_os = "macos")]
+fn unknown_macos_does_not_guess_a_bottle(#[case] host: Option<&'static str>) {
+    let formula = bottled_formula(
+        "freetype",
+        &[(&macos_tag("sequoia"), "https://example.com/freetype.tar.gz")],
+    );
+    assert_matches!(
+        select_bottle_with_codename(&formula, host),
+        Err(Error::UnsupportedBottle { .. })
     );
 }

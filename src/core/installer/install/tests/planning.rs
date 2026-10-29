@@ -116,6 +116,82 @@ async fn plan_errors_when_no_bottle_and_no_source() {
     assert!(result.is_err());
     assert_matches!(
         result.unwrap_err(),
-        crate::types::Error::MissingFormula { .. }
+        crate::types::Error::UnsupportedBottle { name } if name == "nothing"
+    );
+}
+
+#[rstest::rstest]
+#[case(true, false)]
+#[case(false, false)]
+#[case(false, true)]
+#[tokio::test]
+async fn dependency_with_only_newer_bottles_is_not_poured(
+    #[case] has_source: bool,
+    #[case] installed_dependency: bool,
+) {
+    let current = get_test_bottle_tag();
+    let newer_tag = if current.starts_with("arm64_") {
+        "arm64_tahoe"
+    } else {
+        "tahoe"
+    };
+    // There is no known newer bottle to test on the newest macOS.
+    if current == newer_tag {
+        return;
+    }
+
+    let server = MockServer::start().await;
+    let tmp = TempDir::new().unwrap();
+    if installed_dependency {
+        let previous_server = MockServer::start().await;
+        mount_bottled(&previous_server, "freetype", "1.0.0", &[]).await;
+        let mut installer = server_installer(&previous_server, &tmp);
+        installer
+            .install(&["freetype".to_string()], true)
+            .await
+            .unwrap();
+    }
+    mount_bottled(&server, "vips", "1.0.0", &["freetype"]).await;
+    let mut dependency = serde_json::json!({
+        "name": "freetype",
+        "versions": { "stable": "1.0.0" },
+        "dependencies": [],
+        "bottle": { "stable": { "files": {
+            newer_tag: {
+                "url": "https://example.com/freetype.bottle.tar.gz",
+                "sha256": "abc123"
+            }
+        } } }
+    });
+    if has_source {
+        dependency["urls"] = serde_json::json!({
+            "stable": { "url": "https://example.com/freetype-1.0.0.tar.gz" }
+        });
+    }
+    mount_json(&server, "/freetype.json", dependency).await;
+
+    let installer = server_installer(&server, &tmp);
+    let result = installer.plan(&["vips".to_string()]).await;
+    if installed_dependency {
+        let plan = result.unwrap();
+        assert_eq!(plan.items.len(), 1);
+        assert_eq!(plan.items[0].install_name, "vips");
+    } else if has_source {
+        let plan = result.unwrap();
+        assert_eq!(plan.items.len(), 2);
+        assert_eq!(plan.items[0].install_name, "freetype");
+        assert_matches!(plan.items[0].method, crate::types::InstallMethod::Source(_));
+        assert_eq!(plan.items[1].install_name, "vips");
+        assert_matches!(plan.items[1].method, crate::types::InstallMethod::Bottle(_));
+    } else {
+        assert_matches!(
+            result,
+            Err(Error::UnsupportedBottle { name }) if name == "freetype"
+        );
+    }
+    assert!(installer.get_installed("vips").is_none());
+    assert_eq!(
+        installer.get_installed("freetype").is_some(),
+        installed_dependency
     );
 }

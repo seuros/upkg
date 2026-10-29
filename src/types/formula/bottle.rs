@@ -71,29 +71,6 @@ pub fn compatible_codenames(current_codename: Option<&'static str>) -> Vec<&'sta
     MACOS_CODENAMES_NEWEST_FIRST[pos..].to_vec()
 }
 
-/// Returns newer codenames ordered from closest-newer to newest.
-/// Used as fallback when no same-or-older bottle exists.
-fn newer_codenames(current_codename: Option<&'static str>) -> Vec<&'static str> {
-    let Some(codename) = current_codename else {
-        return Vec::new();
-    };
-
-    let Some(pos) = MACOS_CODENAMES_NEWEST_FIRST
-        .iter()
-        .position(|&tag| tag == codename)
-    else {
-        return Vec::new();
-    };
-
-    if pos == 0 {
-        return Vec::new();
-    }
-
-    let mut newer: Vec<&str> = MACOS_CODENAMES_NEWEST_FIRST[..pos].to_vec();
-    newer.reverse(); // closest-newer first
-    newer
-}
-
 pub fn select_bottle(formula: &Formula) -> Result<SelectedBottle, Error> {
     #[cfg(target_os = "macos")]
     let macos_codename = current_macos_codename();
@@ -182,53 +159,8 @@ fn select_bottle_with_codename(
         return Ok(selected("all".to_string(), file));
     }
 
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        let compatible = compatible_codenames(macos_codename);
-        for (tag, file) in &formula.bottle.stable.files {
-            if let Some(codename) = tag.strip_prefix("arm64_")
-                && compatible.contains(&codename)
-            {
-                return Ok(selected(tag.clone(), file));
-            }
-        }
-    }
-
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    {
-        let compatible = compatible_codenames(macos_codename);
-        for (tag, file) in &formula.bottle.stable.files {
-            if !tag.starts_with("arm64_") && compatible.contains(&tag.as_str()) {
-                return Ok(selected(tag.clone(), file));
-            }
-        }
-    }
-
-    // Fallback: try closest newer bottle when no same-or-older bottle exists.
-    // Homebrew bottles built on newer macOS generally work on older versions.
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        for codename in newer_codenames(macos_codename) {
-            let tag = format!("arm64_{codename}");
-            if let Some(file) = formula.bottle.stable.files.get(tag.as_str()) {
-                return Ok(SelectedBottle {
-                    tag,
-                    url: file.url.clone(),
-                    sha256: file.sha256.clone(),
-                });
-            }
-        }
-    }
-
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    {
-        for codename in newer_codenames(macos_codename) {
-            if let Some(file) = formula.bottle.stable.files.get(codename) {
-                return Ok(selected(codename.to_string(), file));
-            }
-        }
-    }
-
+    // Newer macOS bottles can link to system libraries unavailable on this host.
+    // Let the installer build from source or fail instead of pouring one.
     Err(Error::UnsupportedBottle {
         name: formula.name.clone(),
     })
