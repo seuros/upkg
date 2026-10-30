@@ -84,6 +84,16 @@ Disabling ordinary global linking does not suppress these required runtime paths
 Ruby post-install scripts, database initialization, and service startup are not
 executed; initialize PostgreSQL explicitly with `initdb` when needed.
 
+When no compatible bottle exists, source installs support declarative file
+installs and a guarded native recipe for Homebrew `coreutils` 9.12_1. The latter
+requires Apple's Command Line Tools, installs build dependencies such as
+`texinfo`, verifies the source and upstream patch, and builds without Ruby or
+network access during compilation. GNU commands retain their `g` prefix;
+unprefixed commands and manpages are also available under
+`/opt/homebrew/opt/coreutils/libexec/gnubin` and `libexec/gnuman` (use
+`/usr/local` on Intel). Changed formula logic is rejected until its native
+recipe is reviewed; this is not a general Homebrew Ruby interpreter.
+
 Apps are detected automatically when a name exists as a cask but not as a
 formula. Use `--app` when you want to force cask resolution:
 

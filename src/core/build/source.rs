@@ -14,9 +14,7 @@ pub async fn download_and_extract_source(
     work_dir: &Path,
 ) -> Result<PathBuf, Error> {
     let tarball_path = work_dir.join("source.tar.gz");
-    download_source(url, &tarball_path).await?;
-
-    verify_checksum(&tarball_path, expected_checksum, url).await?;
+    download_verified_source(url, expected_checksum, &tarball_path).await?;
 
     let src_dir = work_dir.join("src");
     fs::create_dir_all(&src_dir)
@@ -65,6 +63,15 @@ fn source_filename(url: &str) -> Result<String, Error> {
         .ok_or_else(|| Error::NetworkFailure {
             message: format!("source URL '{url}' does not include a filename"),
         })
+}
+
+pub(super) async fn download_verified_source(
+    url: &str,
+    expected_checksum: Option<&str>,
+    dest: &Path,
+) -> Result<(), Error> {
+    download_source(url, dest).await?;
+    verify_checksum(dest, expected_checksum, url).await
 }
 
 async fn download_source(url: &str, dest: &Path) -> Result<(), Error> {

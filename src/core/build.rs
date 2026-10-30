@@ -1,3 +1,5 @@
+#[path = "build/coreutils.rs"]
+mod coreutils;
 #[path = "build/executor.rs"]
 pub mod executor;
 #[path = "build/formula_parser.rs"]

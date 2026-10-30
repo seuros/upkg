@@ -48,7 +48,11 @@ impl Installer {
             .await?;
 
         let mut installed_deps = std::collections::HashMap::new();
-        for dep_name in &build_plan.runtime_dependencies {
+        for dep_name in build_plan
+            .runtime_dependencies
+            .iter()
+            .chain(&build_plan.build_dependencies)
+        {
             if let Some(keg) = find_installed(self.cellar.root_dir(), dep_name) {
                 installed_deps.insert(
                     dep_name.clone(),
@@ -60,6 +64,9 @@ impl Installer {
         }
 
         let keg_path = self.cellar.keg_path(formula_name, &version);
+        // The cellar root may differ from the public Homebrew-compatible prefix.
+        let mut build_plan = build_plan.clone();
+        build_plan.cellar_path.clone_from(&keg_path);
         let previous_keg_backup =
             Self::backup_existing_source_keg(&keg_path, formula_name, &version)?;
 
@@ -72,7 +79,7 @@ impl Installer {
                 .to_path_buf(),
         );
         if let Err(build_err) = executor
-            .execute(build_plan, &formula_rb, &installed_deps)
+            .execute(&build_plan, &formula_rb, &installed_deps)
             .await
         {
             self.rollback_source_keg(

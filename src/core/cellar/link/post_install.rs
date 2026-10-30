@@ -91,7 +91,7 @@ impl Linker {
                 Operation::Directory(dst) => self.check_post_install_destination(dst)?,
                 Operation::Tree(src, dst) => {
                     self.check_post_install_destination(dst)?;
-                    Self::collect_conflicts(src, dst, &mut conflicts);
+                    Self::collect_conflicts(src, dst, &mut conflicts, false);
                 }
                 // The parent is the preceding `Directory` operation's path.
                 Operation::Link(src, dst) => {
@@ -113,7 +113,7 @@ impl Linker {
         for op in operations {
             match op {
                 Operation::Directory(dst) => fs::create_dir_all(dst).map_err(store_err)?,
-                Operation::Tree(src, dst) => Self::link_recursive(&src, &dst)?,
+                Operation::Tree(src, dst) => Self::link_recursive(&src, &dst, false)?,
                 Operation::Link(src, dst) => {
                     if dst.symlink_metadata().is_ok() {
                         fs::remove_file(&dst).map_err(store_err)?;

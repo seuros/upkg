@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::types::{BuildPlan, Error};
 use tokio::fs;
 
+use super::coreutils;
 use super::formula_parser::{
     InstallAction, InstallPlan, InstallSource, InstallTarget, parse_supported_install_plan,
 };
@@ -11,6 +12,11 @@ use super::source::download_and_extract_source;
 
 pub struct BuildExecutor {
     work_root: PathBuf,
+}
+
+enum NativeBuild {
+    FileInstall(InstallPlan),
+    Coreutils,
 }
 
 impl BuildExecutor {
@@ -23,7 +29,7 @@ impl BuildExecutor {
         &self,
         plan: &BuildPlan,
         formula_rb_path: &Path,
-        _installed_deps: &HashMap<String, DepInfo>,
+        installed_deps: &HashMap<String, DepInfo>,
     ) -> Result<(), Error> {
         // Reject unsupported formulas before downloading anything or creating
         // the keg, so a refusal leaves no trace in the cellar.
@@ -33,13 +39,19 @@ impl BuildExecutor {
                 .map_err(|e| Error::FileError {
                     message: format!("failed to read formula source: {e}"),
                 })?;
-        let native_plan =
-            parse_supported_install_plan(&formula_source)?.ok_or_else(|| {
+        let native_plan = if plan.formula_name == "coreutils" {
+            coreutils::validate(plan, &formula_source)?;
+            coreutils::check_dependencies(installed_deps)?;
+            coreutils::check_linkage(installed_deps).await?;
+            NativeBuild::Coreutils
+        } else {
+            NativeBuild::FileInstall(parse_supported_install_plan(&formula_source)?.ok_or_else(|| {
                 Error::UnsupportedFormula {
                     name: plan.formula_name.clone(),
                     reason: "formula install block uses unsupported Homebrew DSL; Ruby fallback has been removed".to_string(),
                 }
-            })?;
+            })?)
+        };
 
         let work_dir = self.work_root.join(&plan.formula_name);
         self.prepare_work_dir(&work_dir).await?;
@@ -57,7 +69,14 @@ impl BuildExecutor {
                 message: format!("failed to create cellar directory: {e}"),
             })?;
 
-        execute_native_install_plan(plan, &source_root, &native_plan).await?;
+        match native_plan {
+            NativeBuild::FileInstall(native_plan) => {
+                execute_native_install_plan(plan, &source_root, &native_plan).await?;
+            }
+            NativeBuild::Coreutils => {
+                coreutils::execute(plan, &source_root, &work_dir, installed_deps).await?;
+            }
+        }
         self.cleanup_work_dir(&work_dir).await;
         Ok(())
     }

@@ -91,6 +91,43 @@ fn links_libexec_directory() {
 }
 
 #[test]
+fn post_install_helpers_stay_private_and_do_not_conflict() {
+    let (tmp, linker) = linker();
+    let first = write_keg(
+        tmp.path(),
+        "ca-certificates/1.0.0",
+        &[("libexec/post-install", b"private")],
+    );
+    let second = write_keg(
+        tmp.path(),
+        "texinfo/1.0.0",
+        &[
+            ("libexec/post-install", b"different private script"),
+            ("libexec/texinfo/post-install", b"namespaced helper"),
+            ("bin/makeinfo", b"public"),
+        ],
+    );
+    linker.link_keg(&first).unwrap();
+    assert!(!tmp.path().join("libexec/post-install").exists());
+    // An old upkg installation may already have exported the first script.
+    let legacy_link = tmp.path().join("libexec/post-install");
+    symlink(first.join("libexec/post-install"), &legacy_link).unwrap();
+    linker.check_conflicts(&second).unwrap();
+    linker.link_keg(&second).unwrap();
+    assert!(tmp.path().join("bin/makeinfo").exists());
+    assert!(tmp.path().join("libexec/texinfo/post-install").exists());
+    assert_eq!(
+        fs::read_link(&legacy_link).unwrap(),
+        first.join("libexec/post-install")
+    );
+    assert!(tmp.path().join("opt/texinfo/libexec/post-install").exists());
+    linker.unlink_keg(&second).unwrap();
+    assert!(legacy_link.exists());
+    linker.unlink_keg(&first).unwrap();
+    assert!(!legacy_link.exists());
+}
+
+#[test]
 fn check_conflicts_passes_when_clean() {
     let (tmp, linker) = linker();
     let keg = setup_keg(tmp.path(), "foo");

@@ -42,6 +42,26 @@ async fn unsupported_formula_fails_before_touching_the_cellar() {
 }
 
 #[tokio::test]
+async fn coreutils_preflight_rejects_missing_dependencies_without_side_effects() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut plan = test_build_plan(&tmp.path().join("prefix"));
+    plan.formula_name = "coreutils".to_string();
+    plan.version = "9.12_1".to_string();
+    plan.source_checksum =
+        Some("a480198559733e9b3da999e90543ac6f888a2caa544d8d664c5a1f17e528e210".to_string());
+    let formula = tmp.path().join("coreutils.rb");
+    std::fs::write(&formula, include_str!("../coreutils/formula.rb")).unwrap();
+    let executor = BuildExecutor::new(plan.prefix.clone(), tmp.path().to_path_buf());
+    let error = executor
+        .execute(&plan, &formula, &HashMap::new())
+        .await
+        .unwrap_err();
+    assert_matches!(error, Error::ExecutionError { message } if message.contains("gmp"));
+    assert!(!plan.cellar_path.exists());
+    assert!(!tmp.path().join("cache").exists());
+}
+
+#[tokio::test]
 async fn native_install_plan_moves_supported_targets() {
     use std::os::unix::fs::PermissionsExt;
 

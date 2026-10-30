@@ -21,16 +21,18 @@ async fn plan_falls_back_to_source_when_no_bottle() {
         }"#;
 
     mount_text(&mock_server, "/nobottle.json", formula_json).await;
+    mount_bottled(&mock_server, "pkgconf", "1.0.0", &[]).await;
 
     let installer = server_installer(&mock_server, &tmp);
 
     let plan = installer.plan(&["nobottle".to_string()]).await.unwrap();
 
-    assert_eq!(plan.items.len(), 1);
-    assert_eq!(plan.items[0].formula.name, "nobottle");
-    assert_matches!(plan.items[0].method, crate::types::InstallMethod::Source(_));
+    assert_eq!(plan.items.len(), 2);
+    assert_eq!(plan.items[0].formula.name, "pkgconf");
+    assert_eq!(plan.items[1].formula.name, "nobottle");
+    assert_matches!(plan.items[1].method, crate::types::InstallMethod::Source(_));
 
-    if let crate::types::InstallMethod::Source(ref bp) = plan.items[0].method {
+    if let crate::types::InstallMethod::Source(ref bp) = plan.items[1].method {
         assert_eq!(bp.source_url, "https://example.com/nobottle-1.0.0.tar.gz");
         assert_eq!(bp.formula_name, "nobottle");
         assert_eq!(bp.build_dependencies, vec!["pkgconf"]);
@@ -77,6 +79,77 @@ async fn plan_prefers_bottle_over_source() {
 
     assert_eq!(plan.items.len(), 1);
     assert_matches!(plan.items[0].method, crate::types::InstallMethod::Bottle(_));
+}
+
+#[rstest::rstest]
+#[case(false)]
+#[case(true)]
+#[tokio::test]
+async fn build_dependencies_are_only_planned_for_source_installs(#[case] from_source: bool) {
+    let server = MockServer::start().await;
+    let tmp = TempDir::new().unwrap();
+    let mut formula: serde_json::Value = serde_json::from_str(&bottled_formula_json(
+        &server,
+        "root",
+        "1.0.0",
+        &["shared"],
+        "unused",
+    ))
+    .unwrap();
+    formula["build_dependencies"] = serde_json::json!(["tool", "shared"]);
+    formula["urls"] = serde_json::json!({
+        "stable": { "url": "https://example.com/root.tar.gz" }
+    });
+    mount_json(&server, "/root.json", formula).await;
+    mount_bottled(&server, "shared", "1.0.0", &[]).await;
+    if from_source {
+        mount_bottled(&server, "tool", "1.0.0", &["shared"]).await;
+    }
+    let installer = server_installer(&server, &tmp);
+    let plan = installer
+        .plan_with_options(&["root".to_string()], from_source)
+        .await
+        .unwrap();
+    let names: Vec<_> = plan
+        .items
+        .iter()
+        .map(|item| item.install_name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        if from_source {
+            vec!["shared", "tool", "root"]
+        } else {
+            vec!["shared", "root"]
+        }
+    );
+    // A shared runtime/build dependency is one graph edge, not a false cycle,
+    // and build-only dependencies do not leak into runtime formula metadata.
+    assert_eq!(plan.items.last().unwrap().formula.dependencies, ["shared"]);
+}
+
+#[tokio::test]
+async fn source_build_dependency_cycles_are_rejected() {
+    let server = MockServer::start().await;
+    let tmp = TempDir::new().unwrap();
+    for (name, dependency) in [("root", "tool"), ("tool", "root")] {
+        mount_json(
+            &server,
+            &format!("/{name}.json"),
+            serde_json::json!({
+                "name": name, "versions": { "stable": "1.0" },
+                "dependencies": [], "build_dependencies": [dependency],
+                "urls": { "stable": { "url": format!("https://example.com/{name}.tar.gz") } },
+                "bottle": { "stable": { "files": {} } }
+            }),
+        )
+        .await;
+    }
+    let installer = server_installer(&server, &tmp);
+    assert_matches!(
+        installer.plan(&["root".to_string()]).await,
+        Err(Error::DependencyCycle { .. })
+    );
 }
 
 #[tokio::test]

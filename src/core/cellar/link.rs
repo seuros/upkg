@@ -106,7 +106,7 @@ impl Linker {
             let src_dir = keg_path.join(dir_name);
             let dst_dir = self.prefix.join(dir_name);
             if src_dir.exists() {
-                Self::collect_conflicts(&src_dir, &dst_dir, &mut conflicts);
+                Self::collect_conflicts(&src_dir, &dst_dir, &mut conflicts, *dir_name == "libexec");
             }
         }
         if conflicts.is_empty() {
@@ -116,11 +116,19 @@ impl Linker {
         }
     }
 
-    fn collect_conflicts(src: &Path, dst: &Path, conflicts: &mut Vec<ConflictedLink>) {
+    fn collect_conflicts(
+        src: &Path,
+        dst: &Path,
+        conflicts: &mut Vec<ConflictedLink>,
+        skip_post_install: bool,
+    ) {
         let Ok(entries) = fs::read_dir(src) else {
             return;
         };
         for entry in entries.flatten() {
+            if skip_post_install && entry.file_name() == "post-install" {
+                continue;
+            }
             let src_path = entry.path();
             let dst_path = dst.join(entry.file_name());
 
@@ -132,7 +140,7 @@ impl Linker {
                     Self::collect_conflicts_merged(&src_path, &resolved, &dst_path, conflicts);
                     continue;
                 }
-                Self::collect_conflicts(&src_path, &dst_path, conflicts);
+                Self::collect_conflicts(&src_path, &dst_path, conflicts, false);
                 continue;
             }
 
@@ -177,7 +185,7 @@ impl Linker {
                 if matching_old.exists() {
                     Self::collect_conflicts_merged(&src_path, &matching_old, &dst_path, conflicts);
                 } else {
-                    Self::collect_conflicts(&src_path, &dst_path, conflicts);
+                    Self::collect_conflicts(&src_path, &dst_path, conflicts, false);
                 }
                 continue;
             }
@@ -201,19 +209,25 @@ impl Linker {
             let src_dir = keg_path.join(dir_name);
             let dst_dir = self.prefix.join(dir_name);
             if src_dir.exists() {
-                Self::link_recursive(&src_dir, &dst_dir)?;
+                Self::link_recursive(&src_dir, &dst_dir, *dir_name == "libexec")?;
             }
         }
         Ok(())
     }
 
-    fn link_recursive(src: &Path, dst: &Path) -> Result<(), Error> {
+    fn link_recursive(src: &Path, dst: &Path, skip_post_install: bool) -> Result<(), Error> {
         if !dst.exists() {
             fs::create_dir_all(dst).map_err(store_err)?;
         }
 
         for entry in fs::read_dir(src).map_err(store_err)? {
             let entry = entry.map_err(store_err)?;
+            // Homebrew's legacy post-install script is private keg metadata,
+            // not a shared helper. Linking it globally makes unrelated formulae
+            // (e.g. ca-certificates and texinfo) conflict with each other.
+            if skip_post_install && entry.file_name() == "post-install" {
+                continue;
+            }
             let src_path = entry.path();
             let dst_path = dst.join(entry.file_name());
 
@@ -224,9 +238,9 @@ impl Linker {
                     // real one. If removal fails, the create_dir_all a few
                     // lines down will surface the real error.
                     let _ = fs::remove_file(&dst_path);
-                    Self::link_recursive(&resolved_target, &dst_path)?;
+                    Self::link_recursive(&resolved_target, &dst_path, false)?;
                 }
-                Self::link_recursive(&src_path, &dst_path)?;
+                Self::link_recursive(&src_path, &dst_path, false)?;
                 continue;
             }
 

@@ -30,8 +30,29 @@ impl Installer {
         force: &[String],
         upgrade_installed: bool,
     ) -> Result<InstallPlan, Error> {
-        let formulas = self.fetch_all_formulas(names).await?;
-        let ordered = resolve_closure(names, &formulas)?;
+        let formulas = self
+            .fetch_all_formulas(names, build_from_source, force, upgrade_installed)
+            .await?;
+        // Build-only dependencies are graph edges only for formulas actually
+        // being built. Keep the original runtime metadata in receipts/plans.
+        let mut graph = formulas.clone();
+        for (name, formula) in &mut graph {
+            if self.needs_source_build(
+                formula,
+                name,
+                names,
+                build_from_source,
+                force,
+                upgrade_installed,
+            ) {
+                formula
+                    .dependencies
+                    .extend(formula.all_build_dependencies());
+                formula.dependencies.sort();
+                formula.dependencies.dedup();
+            }
+        }
+        let ordered = resolve_closure(names, &graph)?;
 
         let mut items = Vec::with_capacity(ordered.len());
         for install_name in ordered {
@@ -175,6 +196,9 @@ impl Installer {
     async fn fetch_all_formulas(
         &self,
         names: &[String],
+        build_from_source: bool,
+        force: &[String],
+        upgrade_installed: bool,
     ) -> Result<BTreeMap<String, Formula>, Error> {
         use crate::types::select_bottle;
         use std::collections::HashSet;
@@ -234,7 +258,18 @@ impl Installer {
                     });
                 }
 
-                for dep in &formula.dependencies {
+                let mut deps = formula.dependencies.clone();
+                if self.needs_source_build(
+                    &formula,
+                    &batch[i],
+                    names,
+                    build_from_source,
+                    force,
+                    upgrade_installed,
+                ) {
+                    deps.extend(formula.all_build_dependencies());
+                }
+                for dep in &deps {
                     if !fetched.contains(dep) && !to_fetch.contains(dep) {
                         to_fetch.push(dep.clone());
                     }
@@ -245,5 +280,38 @@ impl Installer {
         }
 
         Ok(formulas)
+    }
+
+    fn needs_source_build(
+        &self,
+        formula: &Formula,
+        install_name: &str,
+        names: &[String],
+        build_from_source: bool,
+        force: &[String],
+        upgrade_installed: bool,
+    ) -> bool {
+        if !formula.has_source_url() {
+            return false;
+        }
+        let forced = force.iter().any(|name| name == install_name);
+        let installed = find_installed(self.cellar.root_dir(), install_name);
+        if !forced
+            && installed
+                .as_ref()
+                .is_some_and(|keg| !upgrade_installed || keg.version == formula.effective_version())
+        {
+            return false;
+        }
+        let no_bottle = select_bottle(formula).is_err();
+        if !build_from_source
+            && !forced
+            && !names.iter().any(|name| name == install_name)
+            && no_bottle
+            && installed.is_some()
+        {
+            return false;
+        }
+        build_from_source || no_bottle
     }
 }
