@@ -165,3 +165,82 @@ async fn native_install_plan_renames_and_marks_bin_install_executable() {
     let mode = std::fs::metadata(installed).unwrap().permissions().mode();
     assert_eq!(mode & 0o111, 0o111);
 }
+
+#[tokio::test]
+async fn install_plan_rejects_parent_directory_sources() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source_root = tmp.path().join("source");
+    std::fs::create_dir_all(&source_root).unwrap();
+
+    let prefix = tmp.path().join("prefix");
+    let plan = test_build_plan(&prefix);
+    let native_plan = InstallPlan {
+        actions: vec![InstallAction::Install {
+            destination: InstallTarget::Bin,
+            sources: vec![InstallSource {
+                source: "../outside".to_string(),
+                target_name: None,
+            }],
+        }],
+    };
+
+    let err = execute_native_install_plan(&plan, &source_root, &native_plan)
+        .await
+        .unwrap_err();
+    assert_matches!(err, Error::UnsupportedFormula { .. }, "{err:?}");
+}
+
+#[tokio::test]
+async fn install_plan_rejects_absolute_or_escaping_rename_targets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source_root = tmp.path().join("source");
+    std::fs::create_dir_all(&source_root).unwrap();
+    std::fs::write(source_root.join("foo"), "binary").unwrap();
+
+    let prefix = tmp.path().join("prefix");
+    let plan = test_build_plan(&prefix);
+
+    for target in ["/tmp/escaped", "../../escaped"] {
+        let native_plan = InstallPlan {
+            actions: vec![InstallAction::Install {
+                destination: InstallTarget::Bin,
+                sources: vec![InstallSource {
+                    source: "foo".to_string(),
+                    target_name: Some(target.to_string()),
+                }],
+            }],
+        };
+        let err = execute_native_install_plan(&plan, &source_root, &native_plan)
+            .await
+            .unwrap_err();
+        assert_matches!(err, Error::UnsupportedFormula { .. }, "{target}: {err:?}");
+    }
+    assert!(!plan.cellar_path.join("bin/foo").exists());
+}
+
+#[tokio::test]
+async fn file_install_refuses_class_level_patches_and_resources() {
+    let tmp = tempfile::tempdir().unwrap();
+    let prefix = tmp.path().join("prefix");
+    let plan = test_build_plan(&prefix);
+
+    for source in [
+        "class Foo < Formula\n  patch do\n    url \"https://example.com/fix.patch\"\n  end\n  def install\n    bin.install \"foo\"\n  end\nend\n",
+        "class Foo < Formula\n  resource \"data\" do\n    url \"https://example.com/data.tar.gz\"\n  end\n  def install\n    bin.install \"foo\"\n  end\nend\n",
+    ] {
+        let err = reject_patched_or_resourced_formula(&plan, source).unwrap_err();
+        assert_matches!(err, Error::UnsupportedFormula { .. }, "{err:?}");
+    }
+
+    let plain = "class Foo < Formula\n  def install\n    bin.install \"foo\"\n  end\nend\n";
+    reject_patched_or_resourced_formula(&plan, plain).unwrap();
+}
+
+#[test]
+fn invalid_ruby_is_rejected_instead_of_scanned_around() {
+    let err = parse_supported_install_plan(
+        "class Foo < Formula\n  def install\n    bin.install \"foo\n  end\nend\n",
+    )
+    .unwrap_err();
+    assert_matches!(err, Error::UnsupportedFormula { .. }, "{err:?}");
+}

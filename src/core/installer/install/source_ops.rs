@@ -5,11 +5,61 @@ use crate::core::cellar::materialize::Cellar;
 use crate::core::progress::InstallProgress;
 use crate::core::storage::fs_util::StoreContext;
 use crate::core::storage::receipt::find_installed;
-use crate::types::{BuildPlan, Error};
+use crate::types::{BuildPlan, Error, InstallMethod};
 
 use super::{Installer, PlannedInstall, dependency_cellar_path};
 
+fn rb_cache_dir(installer: &Installer) -> PathBuf {
+    installer
+        .store
+        .root_dir()
+        .parent()
+        .expect("store dir always has a root parent")
+        .join("cache")
+        .join("rb_cache")
+}
+
 impl Installer {
+    /// Reject unsupported source formulas before any download, keg or
+    /// dependency side effect. This reuses the executor's decision function so
+    /// preflight and execution cannot disagree.
+    pub(super) async fn preflight_source_items(
+        &self,
+        items: &[PlannedInstall],
+    ) -> Result<(), Error> {
+        for item in items {
+            let InstallMethod::Source(ref build_plan) = item.method else {
+                continue;
+            };
+            let formula_rb = self.fetch_formula_source(item).await?;
+            let source = fs::read_to_string(&formula_rb).map_err(|e| Error::FileError {
+                message: format!("failed to read formula source: {e}"),
+            })?;
+            crate::core::build::executor::select_native_build(build_plan, &source)?;
+        }
+        Ok(())
+    }
+
+    /// Fetch the formula source with its pinned checksum, when there is one.
+    async fn fetch_formula_source(&self, item: &PlannedInstall) -> Result<PathBuf, Error> {
+        let formula_name = &item.formula.name;
+        let ruby_source_path =
+            item.formula
+                .ruby_source_path
+                .as_deref()
+                .ok_or_else(|| Error::ExecutionError {
+                    message: format!("no ruby_source_path for formula '{formula_name}'"),
+                })?;
+        let checksum = item
+            .formula
+            .ruby_source_checksum
+            .as_ref()
+            .map(|checksum| checksum.sha256.as_str());
+        self.api_client
+            .fetch_formula_rb(ruby_source_path, &rb_cache_dir(self), checksum)
+            .await
+    }
+
     pub(super) async fn install_from_source(
         &mut self,
         item: &PlannedInstall,
@@ -21,31 +71,7 @@ impl Installer {
         let formula_name = &item.formula.name;
         let version = item.formula.effective_version();
 
-        let ruby_source_path =
-            item.formula
-                .ruby_source_path
-                .as_deref()
-                .ok_or_else(|| Error::ExecutionError {
-                    message: format!("no ruby_source_path for formula '{formula_name}'"),
-                })?;
-
-        let cache_dir = self
-            .store
-            .root_dir()
-            .parent()
-            .expect("store dir always has a root parent")
-            .join("cache")
-            .join("rb_cache");
-        let formula_rb_checksum = item
-            .formula
-            .ruby_source_checksum
-            .as_ref()
-            .map(|checksum| checksum.sha256.as_str());
-
-        let formula_rb = self
-            .api_client
-            .fetch_formula_rb(ruby_source_path, &cache_dir, formula_rb_checksum)
-            .await?;
+        let formula_rb = self.fetch_formula_source(item).await?;
 
         let mut installed_deps = std::collections::HashMap::new();
         for dep_name in build_plan

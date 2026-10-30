@@ -7,6 +7,7 @@ use tokio::fs;
 use super::coreutils;
 use super::formula_parser::{
     InstallAction, InstallPlan, InstallSource, InstallTarget, parse_supported_install_plan,
+    unsupported_declarations,
 };
 use super::source::download_and_extract_source;
 
@@ -14,7 +15,7 @@ pub struct BuildExecutor {
     work_root: PathBuf,
 }
 
-enum NativeBuild {
+pub enum NativeBuildChoice {
     FileInstall(InstallPlan),
     Coreutils,
 }
@@ -39,19 +40,11 @@ impl BuildExecutor {
                 .map_err(|e| Error::FileError {
                     message: format!("failed to read formula source: {e}"),
                 })?;
-        let native_plan = if plan.formula_name == "coreutils" {
-            coreutils::validate(plan, &formula_source)?;
+        let native_plan = select_native_build(plan, &formula_source)?;
+        if matches!(native_plan, NativeBuildChoice::Coreutils) {
             coreutils::check_dependencies(installed_deps)?;
             coreutils::check_linkage(installed_deps).await?;
-            NativeBuild::Coreutils
-        } else {
-            NativeBuild::FileInstall(parse_supported_install_plan(&formula_source)?.ok_or_else(|| {
-                Error::UnsupportedFormula {
-                    name: plan.formula_name.clone(),
-                    reason: "formula install block uses unsupported Homebrew DSL; Ruby fallback has been removed".to_string(),
-                }
-            })?)
-        };
+        }
 
         let work_dir = self.work_root.join(&plan.formula_name);
         self.prepare_work_dir(&work_dir).await?;
@@ -70,10 +63,10 @@ impl BuildExecutor {
             })?;
 
         match native_plan {
-            NativeBuild::FileInstall(native_plan) => {
+            NativeBuildChoice::FileInstall(native_plan) => {
                 execute_native_install_plan(plan, &source_root, &native_plan).await?;
             }
-            NativeBuild::Coreutils => {
+            NativeBuildChoice::Coreutils => {
                 coreutils::execute(plan, &source_root, &work_dir, installed_deps).await?;
             }
         }
@@ -99,6 +92,46 @@ impl BuildExecutor {
         // run's prepare_work_dir will clear it.
         let _ = fs::remove_dir_all(work_dir).await;
     }
+}
+
+/// Decides how a formula may be built from source, without touching the
+/// filesystem or the network. Shared with plan-time preflight so an unsupported
+/// formula is reported before any dependency is installed.
+pub fn select_native_build(
+    plan: &BuildPlan,
+    formula_source: &str,
+) -> Result<NativeBuildChoice, Error> {
+    if plan.formula_name == "coreutils" {
+        coreutils::validate(plan, formula_source)?;
+        return Ok(NativeBuildChoice::Coreutils);
+    }
+
+    let file_plan =
+        parse_supported_install_plan(formula_source)?.ok_or_else(|| Error::UnsupportedFormula {
+            name: plan.formula_name.clone(),
+            reason: "formula install block uses unsupported Homebrew DSL; Ruby fallback has been \
+                     removed"
+                .to_string(),
+        })?;
+    reject_patched_or_resourced_formula(plan, formula_source)?;
+    Ok(NativeBuildChoice::FileInstall(file_plan))
+}
+
+/// The file-install dialect moves files that already exist in the source tree.
+/// Patches and resources would have to be fetched, checked and applied first;
+/// installing without them produces a keg that silently differs from Homebrew's.
+fn reject_patched_or_resourced_formula(plan: &BuildPlan, source: &str) -> Result<(), Error> {
+    let declarations = unsupported_declarations(source)?;
+    let Some((kind, line)) = declarations.first() else {
+        return Ok(());
+    };
+    Err(Error::UnsupportedFormula {
+        name: plan.formula_name.clone(),
+        reason: format!(
+            "class-level '{kind}' declared at line {line} cannot be applied by the native \
+             file-install path; refusing to install without it"
+        ),
+    })
 }
 
 async fn execute_native_install_plan(
@@ -165,7 +198,7 @@ async fn install_sources_into(
         })?;
 
     for source in sources {
-        let source_path = source_root.join(&source.source);
+        let source_path = confined_join(source_root, &source.source, "install source")?;
         let metadata = fs::symlink_metadata(&source_path)
             .await
             .map_err(|e| Error::FileError {
@@ -183,7 +216,7 @@ async fn install_sources_into(
         })?;
 
         let target_path = match &source.target_name {
-            Some(target_name) => destination.join(target_name),
+            Some(target_name) => confined_join(destination, target_name, "install target")?,
             None => destination.join(default_file_name),
         };
         move_path(&source_path, &target_path, metadata.is_dir())?;
@@ -193,6 +226,32 @@ async fn install_sources_into(
     }
 
     Ok(())
+}
+
+/// Join a formula-supplied relative path onto a root, refusing absolute paths
+/// and `..` escapes. Homebrew paths are keg-relative; anything else would let a
+/// formula read or move files outside the extracted source or the keg.
+fn confined_join(root: &Path, relative: &str, what: &str) -> Result<PathBuf, Error> {
+    let candidate = Path::new(relative);
+    let escapes = candidate.is_absolute()
+        || candidate.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        });
+    if escapes {
+        return Err(Error::UnsupportedFormula {
+            name: relative.to_string(),
+            reason: format!(
+                "{what} '{relative}' must stay inside '{}'; absolute paths and '..' are not supported",
+                root.display()
+            ),
+        });
+    }
+    Ok(root.join(candidate))
 }
 
 fn is_executable_target(target: InstallTarget) -> bool {

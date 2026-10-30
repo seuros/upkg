@@ -2,6 +2,47 @@ use super::*;
 use std::sync::Arc;
 
 #[tokio::test]
+async fn unsupported_source_formula_fails_before_dependencies_are_installed() {
+    let server = MockServer::start().await;
+    let tmp = TempDir::new().unwrap();
+
+    let formula_rb = tmp.path().join("sourcepkg.rb");
+    std::fs::write(
+        &formula_rb,
+        "class Sourcepkg < Formula\n  def install\n    system \"./configure\"\n  end\nend\n",
+    )
+    .unwrap();
+
+    mount_bottled(&server, "mainpkg", "2.0.0", &["sourcepkg"]).await;
+    mount_json(
+        &server,
+        "/sourcepkg.json",
+        serde_json::json!({
+            "name": "sourcepkg",
+            "versions": { "stable": "1.0.0" },
+            "dependencies": [],
+            "urls": { "stable": { "url": "https://example.com/sourcepkg-1.0.0.tar.gz" } },
+            "ruby_source_path": formula_rb.display().to_string(),
+            "bottle": { "stable": { "files": {} } }
+        }),
+    )
+    .await;
+
+    let mut installer = server_installer(&server, &tmp);
+    let err = match installer.install(&["mainpkg".to_string()], true).await {
+        Err(err) => err,
+        Ok(_) => panic!("unsupported source formula must be rejected"),
+    };
+
+    assert_matches!(err, Error::UnsupportedFormula { .. }, "{err:?}");
+    assert!(
+        installer.get_installed("mainpkg").is_none(),
+        "the bottled dependent must not be installed after preflight fails"
+    );
+    assert!(installer.get_installed("sourcepkg").is_none());
+}
+
+#[tokio::test]
 async fn preserves_successful_installs_when_one_package_fails() {
     use std::time::Duration;
 

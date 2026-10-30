@@ -99,6 +99,11 @@ impl Installer {
         let mut installed = 0usize;
         let mut error: Option<Error> = None;
 
+        // Refuse unsupported source formulas before any bottle (including
+        // build dependencies) is downloaded or linked, so a rejection leaves
+        // the system untouched instead of installing half a closure.
+        self.preflight_source_items(&source_items).await?;
+
         if !bottle_items.is_empty() {
             let requests: Vec<DownloadRequest> = bottle_items
                 .iter()

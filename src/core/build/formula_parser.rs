@@ -127,10 +127,71 @@ pub(crate) fn parse_ruby(source: &str) -> Result<Tree, Error> {
 }
 
 fn parse_formula(source: &str) -> Result<ParsedFormula<'_>, Error> {
-    Ok(ParsedFormula {
-        tree: parse_ruby(source)?,
-        source,
+    let tree = parse_ruby(source)?;
+    // An error node means the grammar could not represent the source. Scanning
+    // around it would silently accept a formula we do not actually understand.
+    if tree.root_node().has_error() {
+        let error = first_error_node(tree.root_node()).unwrap_or(tree.root_node());
+        let position = error.start_position();
+        return Err(Error::UnsupportedFormula {
+            name: formula_class_name(source).unwrap_or_else(|| "<unknown>".to_string()),
+            reason: format!(
+                "invalid Ruby syntax at line {}, column {}; the formula cannot be evaluated safely",
+                position.row + 1,
+                position.column + 1
+            ),
+        });
+    }
+    Ok(ParsedFormula { tree, source })
+}
+
+fn first_error_node(root: Node<'_>) -> Option<Node<'_>> {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if node.is_error() || node.is_missing() {
+            return Some(node);
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor));
+    }
+    None
+}
+
+/// Formula class name, for diagnostics. Not used for matching.
+fn formula_class_name(source: &str) -> Option<String> {
+    source.lines().find_map(|line| {
+        let line = line.trim();
+        let rest = line.strip_prefix("class ")?;
+        let name = rest.split_whitespace().next()?;
+        name.chars()
+            .all(|c| c.is_alphanumeric() || c == '_')
+            .then(|| name.to_string())
     })
+}
+
+/// Class-level declarations that change how a source install must be built.
+/// The native file-install dialect cannot apply patches or stage resources, so
+/// a formula carrying them must be refused rather than built without them.
+pub(crate) fn unsupported_declarations(source: &str) -> Result<Vec<(String, usize)>, Error> {
+    const GUARDED: &[&str] = &["patch", "resource"];
+
+    let parsed = parse_formula(source)?;
+    let mut found = Vec::new();
+    let mut stack = vec![parsed.tree.root_node()];
+    while let Some(node) = stack.pop() {
+        if node.kind() == "call"
+            && let Some(method) = node.child_by_field_name("method")
+            && let Ok(name) = method.utf8_text(parsed.source.as_bytes())
+            && GUARDED.contains(&name)
+            && node.child_by_field_name("receiver").is_none()
+        {
+            found.push((name.to_string(), node.start_position().row + 1));
+        }
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor));
+    }
+    found.sort_unstable();
+    Ok(found)
 }
 
 fn find_install_method<'a>(root: Node<'a>, source: &'a [u8]) -> Option<Node<'a>> {
