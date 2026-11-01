@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.18.0](https://github.com/seuros/upkg/compare/upkg-v0.17.2...upkg-v0.18.0) (2026-11-01)
+
+
+### Features
+
+* **build:** add native bash source build ([2b544d8](https://github.com/seuros/upkg/commit/2b544d876e41410eb66b2e013585271def1abba6))
+* **build:** add native coreutils source build ([89160ab](https://github.com/seuros/upkg/commit/89160abf6b7c07bd06386e4888cbd9763dfb848b))
+
+
+### Bug Fixes
+
+* **build:** fail closed on unsupported source formulas ([30b3ae7](https://github.com/seuros/upkg/commit/30b3ae771530201e7d3baa5336527a164e08ce0f))
+
 ## [0.17.2](https://github.com/seuros/upkg/compare/upkg-v0.17.1...upkg-v0.17.2) (2026-10-29)
 
 
