@@ -4,12 +4,12 @@ use std::path::{Path, PathBuf};
 use crate::types::{BuildPlan, Error};
 use tokio::fs;
 
-use super::coreutils;
 use super::formula_parser::{
     InstallAction, InstallPlan, InstallSource, InstallTarget, parse_supported_install_plan,
     unsupported_declarations,
 };
 use super::source::download_and_extract_source;
+use super::{bash, coreutils};
 
 pub struct BuildExecutor {
     work_root: PathBuf,
@@ -18,6 +18,7 @@ pub struct BuildExecutor {
 pub enum NativeBuildChoice {
     FileInstall(InstallPlan),
     Coreutils,
+    Bash,
 }
 
 impl BuildExecutor {
@@ -41,9 +42,16 @@ impl BuildExecutor {
                     message: format!("failed to read formula source: {e}"),
                 })?;
         let native_plan = select_native_build(plan, &formula_source)?;
-        if matches!(native_plan, NativeBuildChoice::Coreutils) {
-            coreutils::check_dependencies(installed_deps)?;
-            coreutils::check_linkage(installed_deps).await?;
+        match native_plan {
+            NativeBuildChoice::Coreutils => {
+                coreutils::check_dependencies(installed_deps)?;
+                coreutils::check_linkage(installed_deps).await?;
+            }
+            NativeBuildChoice::Bash => {
+                bash::check_dependencies(installed_deps)?;
+                bash::check_linkage(installed_deps).await?;
+            }
+            NativeBuildChoice::FileInstall(_) => {}
         }
 
         let work_dir = self.work_root.join(&plan.formula_name);
@@ -68,6 +76,9 @@ impl BuildExecutor {
             }
             NativeBuildChoice::Coreutils => {
                 coreutils::execute(plan, &source_root, &work_dir, installed_deps).await?;
+            }
+            NativeBuildChoice::Bash => {
+                bash::execute(plan, &source_root, &work_dir, installed_deps).await?;
             }
         }
         self.cleanup_work_dir(&work_dir).await;
@@ -104,6 +115,10 @@ pub fn select_native_build(
     if plan.formula_name == "coreutils" {
         coreutils::validate(plan, formula_source)?;
         return Ok(NativeBuildChoice::Coreutils);
+    }
+    if plan.formula_name == "bash" {
+        bash::validate(plan, formula_source)?;
+        return Ok(NativeBuildChoice::Bash);
     }
 
     let file_plan =

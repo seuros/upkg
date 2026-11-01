@@ -1,9 +1,13 @@
+#[path = "build/bash.rs"]
+mod bash;
 #[path = "build/coreutils.rs"]
 mod coreutils;
 #[path = "build/executor.rs"]
 pub mod executor;
 #[path = "build/formula_parser.rs"]
 pub mod formula_parser;
+#[path = "build/recipe.rs"]
+mod recipe;
 #[path = "build/source.rs"]
 pub mod source;
 

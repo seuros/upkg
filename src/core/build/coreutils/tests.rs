@@ -2,6 +2,7 @@ use super::*;
 use crate::types::BuildSystem;
 use std::assert_matches;
 use std::fs;
+use tokio::process::Command;
 
 fn plan(keg: &Path) -> BuildPlan {
     BuildPlan {
