@@ -15,6 +15,7 @@ That's it. Same command on Debian, Fedora, Arch, openSUSE, OpenWrt, Termux, Free
 ## What it actually does
 
 - One command surface: `upkg install`, `upkg uninstall`, `upkg upgrade`.
+- Keeps a whole host current: `upkg refresh`, `upkg upgrade --full`, `upkg cleanup`, `upkg reboot-required`.
 - Routes to the platform package manager where that is the right boundary, with a built-in Homebrew-compatible engine on macOS.
 - Keeps the names people already know: no new catalog, no parallel universe.
 - Stays out of your way for anything advanced. Use `apt`, `dnf`, `pacman`, `pkg` directly when you need to.
@@ -151,6 +152,10 @@ upkg install --dry-run ripgrep
 upkg uninstall htop
 upkg uninstall --app ghostty
 upkg upgrade
+upkg refresh
+upkg upgrade --full
+upkg cleanup
+upkg reboot-required --json
 upkg list
 upkg check git libpq-dev
 upkg search ripgrep
@@ -217,6 +222,116 @@ to stderr.
 
 Ravenports and Windows report that `check` is unsupported.
 
+## Host maintenance
+
+Four verbs keep a Linux or BSD machine current, for humans and for fleet
+tools that patch bare-metal hosts on a schedule. They drive the OS's own
+manager, even where Ravenports is installed (it manages `/raven`, not the
+host), never stop to ask a question, and take `--dry-run` to print the plan
+instead.
+
+```bash
+upkg refresh            # package metadata only
+upkg upgrade --full     # everything: packages, new kernels, the base system
+upkg cleanup            # orphaned packages and the package cache
+upkg reboot-required    # one line; --json for one object
+```
+
+Plain `upkg upgrade` is unchanged. `upkg update` is an alias of `upgrade`,
+not of `refresh`.
+
+| Platform | `refresh` | `upgrade --full` | `cleanup` |
+|---|---|---|---|
+| Debian/Ubuntu | `apt-get update` | `apt-get full-upgrade -y` ¹ | `apt-get autoremove --purge -y`, `apt-get clean` |
+| Fedora/RHEL | `dnf makecache` | `dnf upgrade -y` | `dnf autoremove -y`, `dnf clean all` |
+| RHEL 7 / yum | `yum makecache` | `yum upgrade -y` | `yum autoremove -y`, `yum clean all` |
+| Arch | nothing ² | `pacman -Syu --noconfirm` | `pacman -Rns --noconfirm` on `pacman -Qdtq`, then `pacman -Sc --noconfirm` |
+| openSUSE Tumbleweed | `zypper --non-interactive refresh` | `zypper --non-interactive dist-upgrade` | `zypper --non-interactive clean` ³ |
+| openSUSE Leap, SLES | `zypper --non-interactive refresh` | `zypper --non-interactive update` | `zypper --non-interactive clean` ³ |
+| Alpine | `apk update` | `apk upgrade --update-cache` | `apk cache clean` |
+| OpenWrt | `opkg update` | unsupported (that's `sysupgrade`) | nothing to clean |
+| FreeBSD | `pkg update` | `pkg upgrade -y`, `freebsd-update fetch --not-running-from-cron`, `freebsd-update install` ⁴ | `pkg autoremove -y`, `pkg clean -ay` |
+| DragonFly BSD | `pkg update` | `pkg upgrade -y` (base is `make world`) | `pkg autoremove -y`, `pkg clean -ay` |
+
+1. With `DEBIAN_FRONTEND=noninteractive` and
+   `-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold`:
+   debconf never asks, and edited config files keep the local copy.
+2. `pacman -Sy` without `-u` sets up a partial upgrade, which Arch does not
+   support. `refresh` says so and exits 0; `upgrade --full` syncs.
+3. zypper has no autoremove, so unneeded packages stay; `cleanup` says so.
+4. With `PAGER=cat`. "No updates needed" and "No updates are available to
+   install" (exit 2) count as success. On pkgbase systems, where
+   freebsd-update refuses to run, `pkg upgrade` already covered the base and
+   freebsd-update is skipped.
+
+`cleanup` never removes the running kernel: apt protects the running, newest
+and previous kernels from autoremove, dnf and yum protect the running one,
+pacman's kernels are explicitly installed so `-Qdt` never lists them, and
+FreeBSD's kernel lives in `/boot/kernel`, outside anything `pkg autoremove`
+considers.
+
+Commands that need root run as is for root, through `sudo` otherwise (or
+`doas` where there is no sudo). Environment such as `DEBIAN_FRONTEND` goes on
+sudo's command line (`sudo DEBIAN_FRONTEND=noninteractive apt-get ...`),
+which sudoers allows for `ALL` or a rule tagged `SETENV`. A daemon that is
+already root needs none of this.
+
+### Reboot required
+
+`upkg reboot-required` exits 0 whenever the check works, whatever the answer,
+and non-zero only when the check itself failed.
+
+```console
+$ upkg reboot-required
+reboot required: /var/run/reboot-required exists; packages: linux-image-6.1.0-26-amd64; since 2026-11-08T03:00:00Z
+$ upkg reboot-required --json
+{"required":true,"reason":"/var/run/reboot-required exists","packages":["linux-image-6.1.0-26-amd64"],"running_kernel":"6.1.0-25-amd64","installed_kernel":"6.1.0-26-amd64","since":"2026-11-08T03:00:00Z"}
+```
+
+`reason` explains a reboot, or why the check can't tell. `installed_kernel`
+and `since` (RFC 3339, UTC) are `null` where they can't be determined.
+
+| Platform | Asks |
+|---|---|
+| Debian/Ubuntu | `/var/run/reboot-required` and `.pkgs`; `since` is its mtime |
+| Fedora/RHEL | `needs-restarting -r` (or `dnf needs-restarting -r`); exit 1 counts only with "Reboot is required" in its output, else kernels are compared |
+| Arch | the running kernel's `/usr/lib/modules/$(uname -r)` is gone |
+| Alpine, openSUSE, OpenWrt | the running kernel's modules are gone, or a newer kernel of the same flavor is installed |
+| FreeBSD | `freebsd-version -k` differs from `uname -r`; fetched but uninstalled updates (`freebsd-update updatesready`) are mentioned in `reason` |
+| DragonFly BSD | can't tell; says so |
+
+With no kernels under `/usr/lib/modules` or `/lib/modules` (containers), the
+answer is "not required", with a reason saying it can't tell.
+
+### As a library
+
+The same verbs are a Rust API, without the CLI's dependencies: the `host`
+feature needs only std and serde.
+
+```toml
+upkg = { version = "0.19", default-features = false, features = ["host"] }
+```
+
+```rust
+use upkg::host::{Host, Options, Privilege};
+
+let host = Host::detect()?;
+let options = Options { dry_run: false, privilege: Privilege::AlreadyRoot };
+host.refresh(&options)?;
+let upgrade = host.full_upgrade(&options)?;
+println!("changed: {:?}, packages: {:?}", upgrade.changed(), upgrade.changes());
+host.cleanup(&options)?;
+let status = host.reboot_required()?; // serde Serialize + Deserialize
+```
+
+Each task returns an `Outcome`: every command run, its exit code, the last
+lines of its stdout and stderr, and what changed where the manager's summary
+says so (`None` where it doesn't). A failed command returns
+`Error::Failed`, which carries the outcome up to and including that step.
+Commands and the reboot check's file reads go through the `Runner` trait;
+`SystemRunner` runs real processes (captured, or echoed with
+`SystemRunner::echoing()`), and a test can pass its own to `Host::new`.
+
 ## Search
 
 `upkg search <query>` routes to the platform's native search:
@@ -259,4 +374,5 @@ to stderr.
 ```bash
 cargo build -p upkg
 just qq
+cargo build --no-default-features --features host   # the library alone
 ```
