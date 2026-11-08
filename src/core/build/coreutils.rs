@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
 use crate::core::storage::fs_util::StoreContext;
 use crate::types::{BuildPlan, Error};
@@ -23,6 +22,7 @@ pub(super) fn validate(plan: &BuildPlan, source: &str) -> Result<(), Error> {
     recipe::validate_reviewed(plan, RECIPE, "9.12_1", SOURCE_SHA256, FORMULA, source)
 }
 
+#[cfg(test)]
 fn formula_tokens(source: &str) -> Result<Vec<(String, String)>, Error> {
     recipe::formula_tokens(RECIPE, source)
 }
