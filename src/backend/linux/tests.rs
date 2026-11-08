@@ -3,64 +3,6 @@ use crate::backend::test_support::{assert_answers, assert_spec};
 use rstest::rstest;
 use std::assert_matches;
 
-#[rstest]
-#[case("ID=ubuntu\n", "apt", "ubuntu")]
-#[case("ID=debian\n", "apt", "debian")]
-#[case("ID=mint\nID_LIKE=debian\n", "apt", "debian-like")]
-#[case("ID=fedora\n", "dnf", "fedora")]
-#[case("ID=rhel\n", "dnf", "rhel")]
-#[case("ID=centos\n", "dnf", "centos")]
-#[case(
-    "ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n",
-    "dnf",
-    "rocky, quoted"
-)]
-#[case("ID=arch\n", "pacman", "arch")]
-#[case("ID=manjaro\nID_LIKE=arch\n", "pacman", "arch-like")]
-#[case("ID=opensuse\n", "zypper", "opensuse")]
-#[case(
-    "ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n",
-    "zypper",
-    "tumbleweed, quoted"
-)]
-#[case(
-    "ID=\"opensuse-leap\"\nID_LIKE=\"suse opensuse\"\n",
-    "zypper",
-    "leap, quoted"
-)]
-#[case("ID=\"sles\"\nID_LIKE=\"suse\"\n", "zypper", "sles, quoted")]
-#[case("ID=pop\nID_LIKE=\"ubuntu debian\"\n", "apt", "ubuntu-like, quoted")]
-#[case("ID=openwrt\n", "opkg", "openwrt")]
-#[case("ID=alpine\n", "apk", "alpine")]
-#[case("ID=postmarketos\nID_LIKE=alpine\n", "apk", "alpine-like")]
-fn detect_distro_from_os_release(
-    #[case] os_release: &str,
-    #[case] expected_manager: &str,
-    #[case] _description: &str,
-) {
-    let manager = detect_from(os_release, true).unwrap();
-    assert_eq!(manager.name(), expected_manager);
-}
-
-#[test]
-fn version_id_is_not_an_id() {
-    let result = detect_from("VERSION_ID=debian\nID=plan9\n", true);
-    assert_matches!(result, Err(UpkgError::Unsupported(_)));
-}
-
-#[test]
-fn detect_falls_back_to_yum_without_dnf() {
-    let manager = detect_from("ID=centos\n", false).unwrap();
-    assert_matches!(manager, LinuxManager::Yum);
-}
-
-#[test]
-fn detect_unsupported_distro() {
-    let result = detect_from("ID=unknown\n", true);
-    assert!(result.is_err());
-    assert_matches!(result, Err(UpkgError::Unsupported(_)));
-}
-
 #[test]
 fn package_lists_need_a_packages_file() {
     let empty = ["lock", "partial", "auxfiles"].map(OsString::from);
@@ -171,7 +113,7 @@ fn search_spec_non_exact(
 #[test]
 fn search_spec_no_sudo_wrapper() {
     let spec = LinuxManager::Apt.search_spec("git", false).unwrap();
-    assert_ne!(spec.command(), "sudo");
+    assert_ne!(spec.program(), "sudo");
 }
 
 #[rstest]

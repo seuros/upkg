@@ -10,12 +10,12 @@ pub mod ravenports;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
-#[cfg(not(target_os = "macos"))]
-use std::env;
-#[cfg(not(target_os = "macos"))]
-use std::path::Path;
-#[cfg(not(target_os = "macos"))]
-use std::process::Command;
+pub use upkg::command::CommandSpec;
+#[cfg(any(target_os = "android", target_os = "windows"))]
+pub use upkg::command::command_exists;
+
+#[cfg(target_os = "linux")]
+use linux::LinuxSpecs;
 
 use crate::error::UpkgError;
 
@@ -32,40 +32,6 @@ pub enum Backend {
     Ravenports,
 }
 
-/// How a command that needs root is run.
-#[cfg(unix)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Escalation {
-    /// Already root (containers, CI): run the command as is.
-    Root,
-    Sudo,
-    /// No sudo but doas, as on Alpine and the BSDs.
-    Doas,
-}
-
-#[cfg(unix)]
-impl Escalation {
-    /// Root, else sudo, else doas. Falls back to sudo when neither exists,
-    /// so the error names the missing tool.
-    pub fn detect() -> Self {
-        if is_root() {
-            Self::Root
-        } else if !command_exists("sudo") && command_exists("doas") {
-            Self::Doas
-        } else {
-            Self::Sudo
-        }
-    }
-}
-
-#[cfg(unix)]
-fn is_root() -> bool {
-    Command::new("id")
-        .arg("-u")
-        .output()
-        .is_ok_and(|output| output.stdout.trim_ascii() == b"0")
-}
-
 /// A manager whose program name is also the binary for every verb (install,
 /// uninstall, ...), with no `sudo` wrapper and no alternate binary per verb.
 /// Android's `pkg`/`apt` and Windows' `winget`/`choco` fit this shape; Linux
@@ -78,81 +44,6 @@ pub(crate) trait PackageManager {
     /// `CommandSpec::with_packages` against this manager's own program name.
     fn packages_spec(&self, args: &[&str], packages: &[String]) -> CommandSpec {
         CommandSpec::with_packages(self.name(), args, packages)
-    }
-}
-
-#[derive(Debug)]
-pub struct CommandSpec {
-    program: String,
-    args: Vec<String>,
-}
-
-impl CommandSpec {
-    pub fn new(program: impl Into<String>, args: impl Into<Vec<String>>) -> Self {
-        Self {
-            program: program.into(),
-            args: args.into(),
-        }
-    }
-
-    pub fn with_packages(program: impl Into<String>, args: &[&str], packages: &[String]) -> Self {
-        let mut argv: Vec<String> = args.iter().map(ToString::to_string).collect();
-        argv.extend(packages.iter().cloned());
-        Self::new(program, argv)
-    }
-
-    pub fn render(&self) -> String {
-        format!("{} {}", self.program, self.args.join(" "))
-            .trim()
-            .to_string()
-    }
-
-    /// Rewrites a `sudo` prefix: dropped for root, swapped for doas.
-    #[cfg(unix)]
-    pub fn escalate(self, escalation: Escalation) -> Self {
-        if self.program != "sudo" {
-            return self;
-        }
-        match escalation {
-            Escalation::Sudo => self,
-            Escalation::Doas => Self::new("doas", self.args),
-            Escalation::Root => {
-                let mut args = self.args.into_iter();
-                match args.next() {
-                    Some(program) => Self::new(program, args.collect::<Vec<_>>()),
-                    None => Self::new("sudo", Vec::<String>::new()),
-                }
-            }
-        }
-    }
-
-    /// The command as the current user can run it.
-    pub fn for_current_user(self) -> Self {
-        #[cfg(unix)]
-        {
-            self.escalate(Escalation::detect())
-        }
-        #[cfg(not(unix))]
-        {
-            self
-        }
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    pub fn into_command(self) -> Command {
-        let mut command = Command::new(self.program);
-        command.args(self.args);
-        command
-    }
-
-    #[cfg(test)]
-    pub fn command(&self) -> &str {
-        &self.program
-    }
-
-    #[cfg(test)]
-    pub fn args(&self) -> &[String] {
-        &self.args
     }
 }
 
@@ -434,36 +325,6 @@ impl Backend {
             Self::Ravenports => ravenports::list_spec(),
         }
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn command_exists(name: &str) -> bool {
-    if name.contains(std::path::MAIN_SEPARATOR) {
-        return Path::new(name).is_file();
-    }
-
-    let Some(paths) = env::var_os("PATH") else {
-        return false;
-    };
-
-    env::split_paths(&paths).any(|path| {
-        let candidate = path.join(name);
-        if candidate.is_file() {
-            return true;
-        }
-
-        #[cfg(windows)]
-        {
-            ["exe", "cmd", "bat"]
-                .iter()
-                .any(|ext| path.join(format!("{name}.{ext}")).is_file())
-        }
-
-        #[cfg(not(windows))]
-        {
-            false
-        }
-    })
 }
 
 #[cfg(test)]

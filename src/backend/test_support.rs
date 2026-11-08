@@ -6,7 +6,7 @@ use crate::error::UpkgError;
 
 /// Asserts `spec` runs `command` with exactly `args`.
 pub(super) fn assert_spec(spec: &CommandSpec, command: &str, args: &[&str]) {
-    assert_eq!(spec.command(), command, "spec: {}", spec.render());
+    assert_eq!(spec.program(), command, "spec: {}", spec.render());
     assert_eq!(spec.args(), args, "spec: {}", spec.render());
 }
 

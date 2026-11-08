@@ -53,3 +53,12 @@ fn usage_error_is_debug_printable() {
     let debug = format!("{:?}", err);
     assert!(debug.contains("Usage"));
 }
+
+#[test]
+fn host_errors_keep_their_message() {
+    let unsupported = UpkgError::from(upkg::host::Error::Unsupported("not here"));
+    assert!(matches!(unsupported, UpkgError::Unsupported("not here")));
+
+    let probe = UpkgError::from(upkg::host::Error::Probe("uname".into()));
+    assert_eq!(probe.to_string(), "reboot check failed: uname");
+}

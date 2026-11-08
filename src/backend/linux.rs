@@ -2,22 +2,13 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 
-use crate::backend::{Answer, CommandSpec, InstalledQuery, command_exists, dpkg_query};
+pub use upkg::host::LinuxManager;
+
+use crate::backend::{Answer, CommandSpec, InstalledQuery, dpkg_query};
 use crate::error::UpkgError;
 
 /// Where apt keeps downloaded package lists; container images ship it empty.
 const APT_LISTS: &str = "/var/lib/apt/lists";
-
-#[derive(Debug)]
-pub enum LinuxManager {
-    Apt,
-    Dnf,
-    Yum,
-    Pacman,
-    Zypper,
-    Opkg,
-    Apk,
-}
 
 fn reject_exact_if(exact: bool, manager: &'static str) -> Result<(), UpkgError> {
     if exact {
@@ -54,65 +45,9 @@ fn anchor_if_exact(query: &str, exact: bool) -> String {
     }
 }
 
+/// The running distribution's manager; detection lives with the host API.
 pub fn detect() -> Result<LinuxManager, UpkgError> {
-    let os_release = fs::read_to_string("/etc/os-release")?;
-    detect_from(&os_release, command_exists("dnf"))
-}
-
-/// The manager for an `/etc/os-release`; `has_dnf` picks dnf over yum.
-fn detect_from(os_release: &str, has_dnf: bool) -> Result<LinuxManager, UpkgError> {
-    let release = OsRelease::parse(os_release);
-    if release.is_like(&["debian", "ubuntu"]) {
-        Ok(LinuxManager::Apt)
-    } else if release.is_like(&["fedora", "rhel", "centos"]) {
-        Ok(if has_dnf {
-            LinuxManager::Dnf
-        } else {
-            LinuxManager::Yum
-        })
-    } else if release.is_like(&["arch"]) {
-        Ok(LinuxManager::Pacman)
-    } else if release.is_like(&["suse", "opensuse"]) || release.id.starts_with("opensuse") {
-        Ok(LinuxManager::Zypper)
-    } else if release.is_like(&["openwrt"]) {
-        Ok(LinuxManager::Opkg)
-    } else if release.is_like(&["alpine"]) {
-        Ok(LinuxManager::Apk)
-    } else {
-        Err(UpkgError::Unsupported("unsupported Linux distribution"))
-    }
-}
-
-/// The `ID` and `ID_LIKE` of an os-release file, unquoted.
-struct OsRelease {
-    id: String,
-    like: Vec<String>,
-}
-
-impl OsRelease {
-    fn parse(text: &str) -> Self {
-        let field = |name: &str| {
-            text.lines()
-                .filter_map(|line| line.trim().strip_prefix(name)?.strip_prefix('='))
-                .map(|value| value.trim().trim_matches(['"', '\'']).to_string())
-                .next_back()
-                .unwrap_or_default()
-        };
-        Self {
-            id: field("ID"),
-            like: field("ID_LIKE")
-                .split_whitespace()
-                .map(ToString::to_string)
-                .collect(),
-        }
-    }
-
-    /// Whether `ID` or any `ID_LIKE` entry is one of `families`.
-    fn is_like(&self, families: &[&str]) -> bool {
-        std::iter::once(&self.id)
-            .chain(&self.like)
-            .any(|id| families.contains(&id.as_str()))
-    }
+    Ok(LinuxManager::detect()?)
 }
 
 /// Whether apt has fetched package lists at least once.
@@ -128,27 +63,28 @@ fn lists_packages(names: impl IntoIterator<Item = OsString>) -> bool {
         .any(|name| name.to_string_lossy().contains("_Packages"))
 }
 
-impl LinuxManager {
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Apt => "apt",
-            Self::Dnf => "dnf",
-            Self::Yum => "yum",
-            Self::Pacman => "pacman",
-            Self::Zypper => "zypper",
-            Self::Opkg => "opkg",
-            Self::Apk => "apk",
-        }
+/// `sudo <manager> args... packages...`; opkg runs as root already.
+fn spec(manager: LinuxManager, args: &[&str], packages: &[String]) -> CommandSpec {
+    match manager {
+        LinuxManager::Opkg => CommandSpec::with_packages("opkg", args, packages),
+        _ => CommandSpec::with_packages("sudo", &[&[manager.name()], args].concat(), packages),
     }
+}
 
-    fn spec(&self, args: &[&str], packages: &[String]) -> CommandSpec {
-        match self {
-            Self::Opkg => CommandSpec::with_packages("opkg", args, packages),
-            _ => CommandSpec::with_packages("sudo", &[&[self.name()], args].concat(), packages),
-        }
-    }
+/// The package-operation commands of a Linux manager.
+pub trait LinuxSpecs {
+    fn install_spec(&self, packages: &[String]) -> CommandSpec;
+    fn refresh_spec(&self) -> Option<CommandSpec>;
+    fn uninstall_spec(&self, packages: &[String]) -> CommandSpec;
+    fn reinstall_spec(&self, packages: &[String]) -> CommandSpec;
+    fn upgrade_spec(&self, packages: &[String]) -> CommandSpec;
+    fn search_spec(&self, query: &str, exact: bool) -> Result<CommandSpec, UpkgError>;
+    fn list_spec(&self) -> CommandSpec;
+    fn installed_query(&self, package: &str) -> InstalledQuery;
+}
 
-    pub fn install_spec(&self, packages: &[String]) -> CommandSpec {
+impl LinuxSpecs for LinuxManager {
+    fn install_spec(&self, packages: &[String]) -> CommandSpec {
         let args: &[&str] = match self {
             Self::Apt | Self::Dnf | Self::Yum => &["install", "-y"],
             Self::Pacman => &["-S", "--noconfirm"],
@@ -157,21 +93,21 @@ impl LinuxManager {
             // Alpine images ship without an index; fetch it on every install.
             Self::Apk => &["add", "--update-cache"],
         };
-        self.spec(args, packages)
+        spec(*self, args, packages)
     }
 
     /// `apt update` when no package lists were ever fetched. Other managers
     /// refresh as part of the install (apk) or need no index.
-    pub fn refresh_spec(&self) -> Option<CommandSpec> {
+    fn refresh_spec(&self) -> Option<CommandSpec> {
         match self {
             Self::Apt if !has_package_lists(Path::new(APT_LISTS)) => {
-                Some(self.spec(&["update"], &[]))
+                Some(spec(*self, &["update"], &[]))
             }
             _ => None,
         }
     }
 
-    pub fn uninstall_spec(&self, packages: &[String]) -> CommandSpec {
+    fn uninstall_spec(&self, packages: &[String]) -> CommandSpec {
         let args: &[&str] = match self {
             Self::Apt | Self::Dnf | Self::Yum => &["remove", "-y"],
             Self::Pacman => &["-R", "--noconfirm"],
@@ -179,10 +115,10 @@ impl LinuxManager {
             Self::Opkg => &["remove"],
             Self::Apk => &["del"],
         };
-        self.spec(args, packages)
+        spec(*self, args, packages)
     }
 
-    pub fn reinstall_spec(&self, packages: &[String]) -> CommandSpec {
+    fn reinstall_spec(&self, packages: &[String]) -> CommandSpec {
         let args: &[&str] = match self {
             Self::Apt => &["install", "--reinstall", "-y"],
             Self::Dnf | Self::Yum => &["reinstall", "-y"],
@@ -192,10 +128,10 @@ impl LinuxManager {
             Self::Opkg => &["install", "--force-reinstall"],
             Self::Apk => &["fix", "--reinstall"],
         };
-        self.spec(args, packages)
+        spec(*self, args, packages)
     }
 
-    pub fn upgrade_spec(&self, packages: &[String]) -> CommandSpec {
+    fn upgrade_spec(&self, packages: &[String]) -> CommandSpec {
         let args: &[&str] = match self {
             Self::Apt if packages.is_empty() => &["upgrade", "-y"],
             Self::Apt => &["install", "--only-upgrade", "-y"],
@@ -208,10 +144,10 @@ impl LinuxManager {
             Self::Apk if packages.is_empty() => &["upgrade", "--update-cache"],
             Self::Apk => &["add", "--update-cache", "--upgrade"],
         };
-        self.spec(args, packages)
+        spec(*self, args, packages)
     }
 
-    pub fn search_spec(&self, query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
+    fn search_spec(&self, query: &str, exact: bool) -> Result<CommandSpec, UpkgError> {
         let args = match self {
             Self::Pacman => vec!["-Ss".to_string(), anchor_if_exact(query, exact)],
             Self::Opkg => vec!["find".to_string(), anchor_if_exact(query, exact)],
@@ -228,7 +164,7 @@ impl LinuxManager {
         Ok(CommandSpec::new(self.name(), args))
     }
 
-    pub fn list_spec(&self) -> CommandSpec {
+    fn list_spec(&self) -> CommandSpec {
         match self {
             Self::Apt => CommandSpec::new("dpkg", vec!["--get-selections".into()]),
             Self::Dnf => CommandSpec::new("dnf", vec!["list".into(), "--installed".into()]),
@@ -242,7 +178,7 @@ impl LinuxManager {
         }
     }
 
-    pub fn installed_query(&self, package: &str) -> InstalledQuery {
+    fn installed_query(&self, package: &str) -> InstalledQuery {
         match self {
             Self::Apt => dpkg_query(package),
             // dnf, yum and zypper all sit on the rpm database.

@@ -17,6 +17,8 @@ pub enum UpkgError {
         command: String,
         code: i32,
     },
+    /// From the host-maintenance library.
+    Host(upkg::host::Error),
 }
 
 impl fmt::Display for UpkgError {
@@ -32,6 +34,16 @@ impl fmt::Display for UpkgError {
             Self::CommandFailed { command, code } => {
                 write!(f, "`{command}` exited with status code {code}")
             }
+            Self::Host(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl From<upkg::host::Error> for UpkgError {
+    fn from(value: upkg::host::Error) -> Self {
+        match value {
+            upkg::host::Error::Unsupported(message) => Self::Unsupported(message),
+            other => Self::Host(other),
         }
     }
 }
