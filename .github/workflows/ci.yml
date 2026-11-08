@@ -29,6 +29,9 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      - name: Test the host library alone
+        run: cargo test --lib --no-default-features --features host
+
   freebsd:
     name: Test (freebsd-15.1)
     runs-on: ubuntu-latest
