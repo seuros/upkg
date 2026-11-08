@@ -38,6 +38,7 @@ use std::process::ExitCode;
 use backend::Backend;
 use cli::{Cli, CommandKind, PackageAction, PackageKind};
 use error::UpkgError;
+use upkg::host::{Host, Options, Privilege, StepState, SystemRunner, Task};
 
 fn main() -> ExitCode {
     match run() {
@@ -72,6 +73,8 @@ fn run() -> Result<ExitCode, UpkgError> {
             kind,
             refresh,
         } => search(&query, exact, kind, refresh),
+        CommandKind::Maintain { task, dry_run } => maintain(task, dry_run),
+        CommandKind::RebootRequired { json } => reboot_required(json),
         CommandKind::Print(text) => {
             print!("{text}");
             Ok(ExitCode::SUCCESS)
@@ -189,6 +192,42 @@ fn print_dry_run<'a>(
     println!("backend: {}", backend.name());
     for spec in specs {
         println!("dry-run: {}", spec.render());
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `refresh`, `upgrade --full` and `cleanup`, through the host library. The
+/// native tools' output streams through as they run.
+fn maintain(task: Task, dry_run: bool) -> Result<ExitCode, UpkgError> {
+    let host = Host::detect_with(SystemRunner::echoing())?;
+    let options = Options {
+        dry_run,
+        privilege: Privilege::Auto,
+    };
+    let outcome = host.perform(task, &options)?;
+    if dry_run {
+        println!("backend: {}", outcome.manager);
+    }
+    for step in &outcome.steps {
+        let command = step.command.as_deref().unwrap_or_default();
+        match &step.state {
+            StepState::Planned => println!("dry-run: {command}"),
+            StepState::Note { text } => eprintln!("note: {text}"),
+            StepState::Skipped { reason } => eprintln!("skipped: {command} ({reason})"),
+            StepState::Succeeded | StepState::Settled | StepState::Failed => {}
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Exits 0 whenever the check succeeds, whatever the answer.
+fn reboot_required(json: bool) -> Result<ExitCode, UpkgError> {
+    let status = Host::detect()?.reboot_required()?;
+    if json {
+        let line = serde_json::to_string(&status).map_err(std::io::Error::other)?;
+        println!("{line}");
+    } else {
+        println!("{}", status.summary());
     }
     Ok(ExitCode::SUCCESS)
 }

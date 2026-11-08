@@ -198,3 +198,72 @@ fn check_keeps_package_order() {
     };
     assert_eq!(packages, ["git", "libpq-dev"]);
 }
+
+#[rstest]
+#[case(&["refresh"], upkg::host::Task::Refresh, false)]
+#[case(&["refresh", "--dry-run"], upkg::host::Task::Refresh, true)]
+#[case(&["cleanup", "--dry-run"], upkg::host::Task::Cleanup, true)]
+#[case(&["upgrade", "--full"], upkg::host::Task::FullUpgrade, false)]
+#[case(&["upgrade", "--full", "--dry-run"], upkg::host::Task::FullUpgrade, true)]
+#[case(&["update", "--dry-run", "--full"], upkg::host::Task::FullUpgrade, true)]
+fn maintenance_commands(
+    #[case] args: &[&str],
+    #[case] expected_task: upkg::host::Task,
+    #[case] expected_dry_run: bool,
+) {
+    let CommandKind::Maintain { task, dry_run } = parse(args).expect("parse ok").command else {
+        panic!("expected a maintenance command");
+    };
+    assert_eq!(task, expected_task);
+    assert_eq!(dry_run, expected_dry_run);
+}
+
+#[test]
+fn plain_upgrade_keeps_its_behavior() {
+    let CommandKind::Package {
+        action, packages, ..
+    } = parse(&["upgrade", "git"]).unwrap().command
+    else {
+        panic!("expected package command");
+    };
+    assert_eq!(action, PackageAction::Upgrade);
+    assert_eq!(packages, ["git"]);
+}
+
+#[rstest]
+#[case(&["reboot-required"], false)]
+#[case(&["reboot-required", "--json"], true)]
+fn reboot_required_command(#[case] args: &[&str], #[case] expected_json: bool) {
+    let CommandKind::RebootRequired { json } = parse(args).unwrap().command else {
+        panic!("expected reboot-required");
+    };
+    assert_eq!(json, expected_json);
+}
+
+#[rstest]
+#[case(&["upgrade", "--full", "git"], "takes no package names")]
+#[case(&["upgrade", "--full", "--app"], "--app")]
+#[case(&["refresh", "git"], "git")]
+#[case(&["cleanup", "--full"], "--full")]
+#[case(&["reboot-required", "--dry-run"], "--dry-run")]
+fn maintenance_rejects_extras(#[case] args: &[&str], #[case] expected: &str) {
+    let error = parse(args).unwrap_err();
+    assert!(error.to_string().contains(expected), "{error}");
+    assert!(
+        matches!(error, UpkgError::Usage { code: 2, .. }),
+        "{error:?}"
+    );
+}
+
+#[rstest]
+#[case(&["--help"], "reboot-required")]
+#[case(&["--help"], "cleanup")]
+#[case(&["upgrade", "--help"], "--full")]
+#[case(&["refresh", "--help"], "--dry-run")]
+#[case(&["reboot-required", "--help"], "--json")]
+fn maintenance_help(#[case] args: &[&str], #[case] expected: &str) {
+    let CommandKind::Print(text) = parse(args).unwrap().command else {
+        panic!("expected help");
+    };
+    assert!(text.contains(expected), "{text}");
+}

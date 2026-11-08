@@ -2,6 +2,7 @@ use std::ffi::OsString;
 
 use super::{Cli, CommandKind, PackageAction, PackageKind};
 use crate::error::UpkgError;
+use upkg::host::Task;
 use usage::embedded::Outcome;
 use usage_rs as usage;
 
@@ -17,6 +18,8 @@ use usage_rs as usage;
     example = "upkg install --app ghostty",
     example = "upkg upgrade --dry-run neovim",
     example = "upkg search --exact git",
+    example = "upkg refresh && upkg upgrade --full && upkg cleanup",
+    example = "upkg reboot-required --json",
     after_help = "Compatibility: --self-upgrade is an alias for self-upgrade."
 )]
 struct Arguments {
@@ -33,7 +36,7 @@ enum Commands {
     #[usage(alias = "remove", alias = "rm")]
     Uninstall(RequiredPackages),
     /// Upgrade selected packages, or all packages when none are given
-    #[usage(alias = "update")]
+    #[usage(alias = "update", example = "upkg upgrade --full --dry-run")]
     Upgrade(OptionalPackages),
     /// Reinstall installed packages, keeping the old copy if it fails
     Reinstall(RequiredPackages),
@@ -46,6 +49,13 @@ enum Commands {
     /// Search for packages
     #[usage(alias = "s")]
     Search(Search),
+    /// Refresh package metadata without upgrading anything
+    Refresh(Maintenance),
+    /// Remove orphaned packages and clear the package cache
+    Cleanup(Maintenance),
+    /// Tell whether the host must reboot to run what is installed
+    #[usage(example = "upkg reboot-required --json")]
+    RebootRequired(RebootRequired),
     /// Upgrade upkg itself
     SelfUpgrade(SelfUpgrade),
     /// Diagnose the local package manager setup
@@ -84,8 +94,25 @@ struct RequiredPackages {
 struct OptionalPackages {
     #[usage(flatten)]
     options: PackageOptions,
+    /// Upgrade the whole system, new kernels and the base system included; takes no packages
+    #[usage(long, var)]
+    full: bool,
     /// Packages to upgrade (omit to upgrade all)
     packages: Vec<String>,
+}
+
+#[derive(usage::Args)]
+struct Maintenance {
+    /// Show the planned commands without running them
+    #[usage(long, var)]
+    dry_run: bool,
+}
+
+#[derive(usage::Args)]
+struct RebootRequired {
+    /// Print the answer as one JSON object
+    #[usage(long, var)]
+    json: bool,
 }
 
 #[derive(usage::Args)]
@@ -160,6 +187,32 @@ fn package_kind(app: bool) -> PackageKind {
     }
 }
 
+/// `upgrade --full` is the whole system or nothing: no names, no casks.
+fn upgrade(args: OptionalPackages) -> Result<CommandKind, UpkgError> {
+    if !args.full {
+        return Ok(package(PackageAction::Upgrade, args.options, args.packages));
+    }
+    let conflict = if !args.packages.is_empty() {
+        Some("upgrade --full upgrades everything and takes no package names")
+    } else if args.options.app {
+        Some("upgrade --full cannot be combined with --app")
+    } else {
+        None
+    };
+    if let Some(conflict) = conflict {
+        return Err(UpkgError::Usage {
+            message: format!(
+                "error: {conflict}\n\nFor more information, try 'upkg upgrade --help'.\n"
+            ),
+            code: 2,
+        });
+    }
+    Ok(CommandKind::Maintain {
+        task: Task::FullUpgrade,
+        dry_run: args.options.dry_run,
+    })
+}
+
 fn package(action: PackageAction, options: PackageOptions, packages: Vec<String>) -> CommandKind {
     CommandKind::Package {
         action,
@@ -194,7 +247,7 @@ pub(super) fn parse(args: impl Iterator<Item = OsString>) -> Result<Cli, UpkgErr
     let command = match arguments.command {
         Commands::Install(args) => package(PackageAction::Install, args.options, args.packages),
         Commands::Uninstall(args) => package(PackageAction::Uninstall, args.options, args.packages),
-        Commands::Upgrade(args) => package(PackageAction::Upgrade, args.options, args.packages),
+        Commands::Upgrade(args) => upgrade(args)?,
         Commands::Reinstall(args) => package(PackageAction::Reinstall, args.options, args.packages),
         Commands::List => CommandKind::List,
         Commands::Check(args) => CommandKind::Check {
@@ -206,6 +259,15 @@ pub(super) fn parse(args: impl Iterator<Item = OsString>) -> Result<Cli, UpkgErr
             kind: package_kind(args.app),
             refresh: args.refresh,
         },
+        Commands::Refresh(args) => CommandKind::Maintain {
+            task: Task::Refresh,
+            dry_run: args.dry_run,
+        },
+        Commands::Cleanup(args) => CommandKind::Maintain {
+            task: Task::Cleanup,
+            dry_run: args.dry_run,
+        },
+        Commands::RebootRequired(args) => CommandKind::RebootRequired { json: args.json },
         Commands::SelfUpgrade(args) => CommandKind::SelfUpgrade {
             dry_run: args.dry_run,
         },

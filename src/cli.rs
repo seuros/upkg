@@ -54,6 +54,14 @@ pub enum CommandKind {
         kind: PackageKind,
         refresh: bool,
     },
+    /// Host maintenance: refresh, `upgrade --full`, cleanup.
+    Maintain {
+        task: upkg::host::Task,
+        dry_run: bool,
+    },
+    RebootRequired {
+        json: bool,
+    },
     Print(String),
     SelfUpgrade {
         dry_run: bool,
