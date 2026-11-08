@@ -10,9 +10,26 @@ use std::assert_matches;
 #[case("ID=fedora\n", "dnf", "fedora")]
 #[case("ID=rhel\n", "dnf", "rhel")]
 #[case("ID=centos\n", "dnf", "centos")]
+#[case(
+    "ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n",
+    "dnf",
+    "rocky, quoted"
+)]
 #[case("ID=arch\n", "pacman", "arch")]
 #[case("ID=manjaro\nID_LIKE=arch\n", "pacman", "arch-like")]
 #[case("ID=opensuse\n", "zypper", "opensuse")]
+#[case(
+    "ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n",
+    "zypper",
+    "tumbleweed, quoted"
+)]
+#[case(
+    "ID=\"opensuse-leap\"\nID_LIKE=\"suse opensuse\"\n",
+    "zypper",
+    "leap, quoted"
+)]
+#[case("ID=\"sles\"\nID_LIKE=\"suse\"\n", "zypper", "sles, quoted")]
+#[case("ID=pop\nID_LIKE=\"ubuntu debian\"\n", "apt", "ubuntu-like, quoted")]
 #[case("ID=openwrt\n", "opkg", "openwrt")]
 #[case("ID=alpine\n", "apk", "alpine")]
 #[case("ID=postmarketos\nID_LIKE=alpine\n", "apk", "alpine-like")]
@@ -23,6 +40,12 @@ fn detect_distro_from_os_release(
 ) {
     let manager = detect_from(os_release, true).unwrap();
     assert_eq!(manager.name(), expected_manager);
+}
+
+#[test]
+fn version_id_is_not_an_id() {
+    let result = detect_from("VERSION_ID=debian\nID=plan9\n", true);
+    assert_matches!(result, Err(UpkgError::Unsupported(_)));
 }
 
 #[test]

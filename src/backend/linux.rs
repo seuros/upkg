@@ -61,41 +61,58 @@ pub fn detect() -> Result<LinuxManager, UpkgError> {
 
 /// The manager for an `/etc/os-release`; `has_dnf` picks dnf over yum.
 fn detect_from(os_release: &str, has_dnf: bool) -> Result<LinuxManager, UpkgError> {
-    if os_release.contains("ID=ubuntu")
-        || os_release.contains("ID=debian")
-        || os_release.contains("ID_LIKE=debian")
-    {
-        return Ok(LinuxManager::Apt);
+    let release = OsRelease::parse(os_release);
+    if release.is_like(&["debian", "ubuntu"]) {
+        Ok(LinuxManager::Apt)
+    } else if release.is_like(&["fedora", "rhel", "centos"]) {
+        Ok(if has_dnf {
+            LinuxManager::Dnf
+        } else {
+            LinuxManager::Yum
+        })
+    } else if release.is_like(&["arch"]) {
+        Ok(LinuxManager::Pacman)
+    } else if release.is_like(&["suse", "opensuse"]) || release.id.starts_with("opensuse") {
+        Ok(LinuxManager::Zypper)
+    } else if release.is_like(&["openwrt"]) {
+        Ok(LinuxManager::Opkg)
+    } else if release.is_like(&["alpine"]) {
+        Ok(LinuxManager::Apk)
+    } else {
+        Err(UpkgError::Unsupported("unsupported Linux distribution"))
     }
+}
 
-    if os_release.contains("ID=fedora")
-        || os_release.contains("ID=rhel")
-        || os_release.contains("ID=centos")
-        || os_release.contains("ID_LIKE=\"rhel fedora\"")
-    {
-        if has_dnf {
-            return Ok(LinuxManager::Dnf);
+/// The `ID` and `ID_LIKE` of an os-release file, unquoted.
+struct OsRelease {
+    id: String,
+    like: Vec<String>,
+}
+
+impl OsRelease {
+    fn parse(text: &str) -> Self {
+        let field = |name: &str| {
+            text.lines()
+                .filter_map(|line| line.trim().strip_prefix(name)?.strip_prefix('='))
+                .map(|value| value.trim().trim_matches(['"', '\'']).to_string())
+                .next_back()
+                .unwrap_or_default()
+        };
+        Self {
+            id: field("ID"),
+            like: field("ID_LIKE")
+                .split_whitespace()
+                .map(ToString::to_string)
+                .collect(),
         }
-        return Ok(LinuxManager::Yum);
     }
 
-    if os_release.contains("ID=arch") || os_release.contains("ID_LIKE=arch") {
-        return Ok(LinuxManager::Pacman);
+    /// Whether `ID` or any `ID_LIKE` entry is one of `families`.
+    fn is_like(&self, families: &[&str]) -> bool {
+        std::iter::once(&self.id)
+            .chain(&self.like)
+            .any(|id| families.contains(&id.as_str()))
     }
-
-    if os_release.contains("ID=opensuse") || os_release.contains("ID_LIKE=suse") {
-        return Ok(LinuxManager::Zypper);
-    }
-
-    if os_release.contains("ID=openwrt") || os_release.contains("ID_LIKE=openwrt") {
-        return Ok(LinuxManager::Opkg);
-    }
-
-    if os_release.contains("ID=alpine") || os_release.contains("ID_LIKE=alpine") {
-        return Ok(LinuxManager::Apk);
-    }
-
-    Err(UpkgError::Unsupported("unsupported Linux distribution"))
 }
 
 /// Whether apt has fetched package lists at least once.
