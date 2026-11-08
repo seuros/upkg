@@ -37,7 +37,8 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Run tests
-        uses: vmactions/freebsd-vm@v1
+        # @main: anyvm 0.7.6 (v1.5.9 pins 0.7.2, whose download 504s). Back to a tag once vmactions cuts one.
+        uses: vmactions/freebsd-vm@main
         with:
           release: "15.1"
           usesh: true
