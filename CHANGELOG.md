@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.19.0](https://github.com/seuros/upkg/compare/upkg-v0.18.0...upkg-v0.19.0) (2026-11-08)
+
+
+### Features
+
+* **cli:** add refresh, upgrade --full, cleanup and reboot-required ([2cc5c7a](https://github.com/seuros/upkg/commit/2cc5c7adcde944aa5fbb0554ec21d144357bf879))
+* **host:** add a host-maintenance library ([2a7a401](https://github.com/seuros/upkg/commit/2a7a401a638c738730a14de06c862437245316c3))
+
+
+### Bug Fixes
+
+* **linux:** detect distros from quoted os-release values ([ad5e017](https://github.com/seuros/upkg/commit/ad5e0176580d9a7b43330aab0c9f1768202d1e5a))
+
 ## [0.18.0](https://github.com/seuros/upkg/compare/upkg-v0.17.2...upkg-v0.18.0) (2026-11-08)
 
 
