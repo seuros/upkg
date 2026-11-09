@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.21.0](https://github.com/seuros/upkg/compare/upkg-v0.20.0...upkg-v0.21.0) (2026-11-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **host:** Runner no longer has exists, read_to_string, modified or read_dir; implement Filesystem and return it from Runner::filesystem() instead. A runner that relied on the defaults for is_root/has_command (the host's euid and PATH) must now implement them, or pass an explicit Privilege.
+* **manifest:** manifest::Error is #[non_exhaustive] and has a Refused variant; parse error messages changed wording (unknown key, missing key, `packages[i]` ...) and no longer quote the file.
+
+### Features
+
+* **host:** a Runner lends files only when it says so ([09cd672](https://github.com/seuros/upkg/commit/09cd672b8bb1aa8218c1ab0894646bdbe7011c5c))
+* **host:** Host::status and Host::missing, which upkg check now runs ([e925e69](https://github.com/seuros/upkg/commit/e925e69ebcab75cf64c0a8c2468e0098693d4ee4))
+* **manifest:** safe loader for untrusted checkouts, requested names, digest ([a6e5122](https://github.com/seuros/upkg/commit/a6e51226959e1ec6729a6e99fb87ddb440356a7a))
+
+
+### Bug Fixes
+
+* **cli:** read ./upkg.toml as an untrusted file ([a6351f6](https://github.com/seuros/upkg/commit/a6351f6f9c98bf4377267efa938f742b12fe5a44))
+
 ## [0.20.0](https://github.com/seuros/upkg/compare/upkg-v0.19.0...upkg-v0.20.0) (2026-11-09)
 
 
