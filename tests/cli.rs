@@ -42,6 +42,7 @@ fn text(bytes: &[u8]) -> String {
 
 #[test]
 fn help_uses_stdout_and_succeeds() {
+    let scratch = Scratch::new("help");
     for args in [
         vec!["--help"],
         vec!["help"],
@@ -49,13 +50,10 @@ fn help_uses_stdout_and_succeeds() {
         vec!["help", "install"],
         vec!["--self-upgrade", "--help"],
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_upkg"))
-            .args(&args)
-            .output()
-            .unwrap();
+        let output = upkg(&scratch.0, &args);
         assert!(output.status.success(), "{args:?}: {output:?}");
         assert!(output.stderr.is_empty(), "{output:?}");
-        let text = String::from_utf8(output.stdout).unwrap();
+        let text = text(&output.stdout);
         assert!(text.contains("Usage: upkg"), "{text}");
         if args.contains(&"install") || args.contains(&"--self-upgrade") {
             assert!(text.contains("--dry-run"), "{text}");
@@ -65,15 +63,13 @@ fn help_uses_stdout_and_succeeds() {
 
 #[test]
 fn version_output_is_unchanged() {
+    let scratch = Scratch::new("version");
     for flag in ["--version", "-V"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_upkg"))
-            .arg(flag)
-            .output()
-            .unwrap();
+        let output = upkg(&scratch.0, &[flag]);
         assert!(output.status.success());
         assert!(output.stderr.is_empty());
         assert_eq!(
-            String::from_utf8(output.stdout).unwrap(),
+            text(&output.stdout),
             format!("upkg {}\n", env!("CARGO_PKG_VERSION"))
         );
     }
