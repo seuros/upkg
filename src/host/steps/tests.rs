@@ -1,13 +1,7 @@
 use super::*;
 use crate::command::Privilege;
+use crate::host::test_support::linux;
 use rstest::rstest;
-
-const fn linux(manager: LinuxManager) -> Platform {
-    Platform::Linux {
-        manager,
-        rolling: false,
-    }
-}
 
 /// Each step as a line: the rendered command, `note: ...`, or the query and
 /// removal of a listed-removal step.

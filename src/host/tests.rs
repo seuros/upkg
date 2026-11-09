@@ -1,12 +1,5 @@
-use super::test_support::{Fake, exit};
+use super::test_support::{Fake, exit, linux};
 use super::*;
-
-const fn linux(manager: LinuxManager) -> Platform {
-    Platform::Linux {
-        manager,
-        rolling: false,
-    }
-}
 
 const FREEBSD: Platform = Platform::FreeBsd { pkgbase: false };
 

@@ -1,13 +1,6 @@
 use super::*;
-use crate::host::test_support::{Fake, exit};
+use crate::host::test_support::{Fake, exit, linux};
 use rstest::rstest;
-
-const fn linux(manager: LinuxManager) -> Platform {
-    Platform::Linux {
-        manager,
-        rolling: false,
-    }
-}
 
 fn running(kernel: &str) -> Fake {
     Fake::default().answer("uname -r", exit(0, &format!("{kernel}\n")))

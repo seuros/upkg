@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::{CommandSpec, Execution, Filesystem, Runner};
+use super::{CommandSpec, Execution, Filesystem, LinuxManager, Platform, Runner};
 
 #[derive(Default)]
 pub(super) struct Fake {
@@ -21,6 +21,13 @@ pub(super) struct Fake {
     commands: Vec<String>,
     root: bool,
     pub(super) ran: RefCell<Vec<String>>,
+}
+
+pub(super) const fn linux(manager: LinuxManager) -> Platform {
+    Platform::Linux {
+        manager,
+        rolling: false,
+    }
 }
 
 pub(super) fn exit(code: i32, stdout: &str) -> Execution {

@@ -1,21 +1,7 @@
 use rstest::rstest;
 
 use super::*;
-
-const fn linux(manager: LinuxManager) -> Platform {
-    Platform::Linux {
-        manager,
-        rolling: false,
-    }
-}
-
-fn exited(code: i32, stdout: &str) -> Execution {
-    Execution {
-        code: Some(code),
-        stdout: stdout.to_string(),
-        stderr: String::new(),
-    }
-}
+use crate::host::test_support::{exit, linux};
 
 #[rstest]
 #[case(
@@ -49,10 +35,10 @@ fn every_query_is_read_only_and_never_escalated(
 
 #[test]
 fn exit_status_is_the_answer() {
-    assert!(Answer::ExitStatus.installed(&exited(0, "")));
-    assert!(!Answer::ExitStatus.installed(&exited(1, "")));
+    assert!(Answer::ExitStatus.installed(&exit(0, "")));
+    assert!(!Answer::ExitStatus.installed(&exit(1, "")));
     // pkg and apk echo the name when installed; only the status counts.
-    assert!(!Answer::ExitStatus.installed(&exited(1, "git\n")));
+    assert!(!Answer::ExitStatus.installed(&exit(1, "git\n")));
     assert!(!Answer::ExitStatus.installed(&Execution::default()));
 }
 
@@ -69,7 +55,7 @@ fn dpkg_counts_the_second_status_letter(
     #[case] stdout: &str,
     #[case] installed: bool,
 ) {
-    assert_eq!(Answer::Dpkg.installed(&exited(code, stdout)), installed);
+    assert_eq!(Answer::Dpkg.installed(&exit(code, stdout)), installed);
 }
 
 #[rstest]
@@ -77,5 +63,5 @@ fn dpkg_counts_the_second_status_letter(
 #[case("Package: git\nStatus: install user not-installed\n", false)]
 #[case("", false)]
 fn opkg_reads_the_status_line(#[case] stdout: &str, #[case] installed: bool) {
-    assert_eq!(Answer::Opkg.installed(&exited(0, stdout)), installed);
+    assert_eq!(Answer::Opkg.installed(&exit(0, stdout)), installed);
 }
