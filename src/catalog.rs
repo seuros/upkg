@@ -8,6 +8,10 @@
 //!
 //! Resolution is exact-match only. There is no fuzzy matching, which is what
 //! keeps this from becoming a typo-squat redirect surface.
+//!
+//! Backends are named by their catalog key: `apt`, `dnf`, `yum`, `pacman`,
+//! `zypper`, `apk`, `opkg`, `freebsd` (`DragonFly` too), `rvn`, `termux`,
+//! `winget`, `choco`.
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -33,6 +37,7 @@ fn catalog() -> &'static BTreeMap<String, Entry> {
 ///
 /// Returns the catalog value when (and only when) the exact canonical name has
 /// an entry that names this backend; otherwise the input is returned unchanged.
+#[must_use]
 pub fn resolve_one(backend_key: &str, name: &str) -> String {
     debug_assert_ne!(backend_key, UPSTREAM_KEY, "`upstream` is not a backend key");
     catalog()
@@ -43,6 +48,7 @@ pub fn resolve_one(backend_key: &str, name: &str) -> String {
 }
 
 /// Resolve a list of canonical names for `backend_key`, preserving order.
+#[must_use]
 pub fn resolve(backend_key: &str, packages: &[String]) -> Vec<String> {
     packages
         .iter()

@@ -1,6 +1,5 @@
 #[cfg(target_os = "android")]
 pub mod android;
-pub mod catalog;
 #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
 pub mod freebsd;
 #[cfg(target_os = "linux")]
@@ -10,6 +9,7 @@ pub mod ravenports;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
+use upkg::catalog;
 pub use upkg::command::CommandSpec;
 #[cfg(any(target_os = "android", target_os = "windows"))]
 pub use upkg::command::command_exists;

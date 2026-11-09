@@ -12,6 +12,8 @@
 //! The default `cli` feature builds the `upkg` binary on top of it.
 
 #[cfg(feature = "host")]
+pub mod catalog;
+#[cfg(feature = "host")]
 pub mod command;
 #[cfg(feature = "host")]
 pub mod host;

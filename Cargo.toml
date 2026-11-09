@@ -31,7 +31,6 @@ cli = [
     "host",
     "dep:usage-rs",
     "dep:serde_json",
-    "dep:toml",
     "dep:tokio",
     "dep:rama",
     "dep:flate2",
@@ -52,16 +51,15 @@ cli = [
     "dep:chrono-machines",
     "dep:shlex",
 ]
-# The host-maintenance library (`upkg::host`): std and serde, nothing else.
-host = ["dep:serde"]
+# The host library (`upkg::host`, `upkg::catalog`): std, serde and a TOML
+# parser, nothing else.
+host = ["dep:serde", "dep:toml"]
 
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"], optional = true }
 serde_json = { version = "1.0.151", optional = true }
-usage-rs = { version = "6.12.0", default-features = false, features = ["help", "diagnostics", "completions"], optional = true }
-
-[target.'cfg(not(target_os = "macos"))'.dependencies]
 toml = { version = "1.1.6", default-features = false, features = ["std", "serde", "parse"], optional = true }
+usage-rs = { version = "6.12.0", default-features = false, features = ["help", "diagnostics", "completions"], optional = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "sync", "fs", "process"], optional = true }
