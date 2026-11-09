@@ -1,9 +1,7 @@
+use std::path::PathBuf;
+
 use super::*;
 use rstest::rstest;
-
-fn names(names: &[&str]) -> Vec<String> {
-    names.iter().map(ToString::to_string).collect()
-}
 
 fn invalid(text: &str) -> String {
     match text.parse::<Manifest>() {
@@ -25,6 +23,10 @@ impl Scratch {
         let path = dir.join(FILE_NAME);
         std::fs::write(&path, text).unwrap();
         Self(path)
+    }
+
+    fn dir(&self) -> &Path {
+        self.0.parent().unwrap()
     }
 }
 
@@ -51,22 +53,48 @@ fn an_empty_list_is_a_manifest() {
 }
 
 #[rstest]
-#[case::unknown_key("packages = []\npakages = [\"git\"]\n", "unknown field `pakages`")]
+#[case::unknown_key(
+    "packages = []\npakages = [\"git\"]\n",
+    "line 2, column 1: unknown key `pakages`; the only key is `packages`"
+)]
 #[case::future_table(
     "packages = []\n[freebsd]\npackages = [\"git\"]\n",
-    "unknown field `freebsd`"
+    "line 2, column 2: unknown key `freebsd`"
 )]
-#[case::missing_packages("", "missing field `packages`")]
-#[case::not_a_list("packages = \"git\"\n", "invalid type")]
-#[case::not_strings("packages = [1]\n", "invalid type")]
-#[case::not_toml("packages = [\"git\"\n", "TOML parse error")]
-#[case::empty_name("packages = [\"\"]\n", "is empty")]
-#[case::option("packages = [\"--allow-unauthenticated\"]\n", "starts with `-`")]
+#[case::missing_packages("", "missing key `packages`")]
+#[case::not_a_list(
+    "packages = \"git\"\n",
+    "line 1, column 12: `packages` must be a list of package names"
+)]
+#[case::not_strings(
+    "packages = [\"git\", 1]\n",
+    "line 1, column 20: `packages[1]` must be a string"
+)]
+#[case::not_toml("packages = [\"git\"\n", "line 1, column 18: unclosed array")]
+#[case::empty_name("packages = [\"\"]\n", "`packages[0]` is empty")]
+#[case::option(
+    "packages = [\"--allow-unauthenticated\"]\n",
+    "`packages[0]` starts with `-`"
+)]
 #[case::two_words("packages = [\"git curl\"]\n", "whitespace")]
 #[case::newline("packages = [\"git\\n\"]\n", "whitespace")]
-fn parse_errors_say_what_is_wrong(#[case] text: &str, #[case] expected: &str) {
+fn parse_errors_say_where_and_what(#[case] text: &str, #[case] expected: &str) {
     let message = invalid(text);
     assert!(message.contains(expected), "{message}");
+}
+
+#[rstest]
+#[case::wrong_type("packages = \"SECRET\"\n")]
+#[case::bad_name("packages = [\"-SECRET\"]\n")]
+#[case::spaced_name("packages = [\"SECRET word\"]\n")]
+#[case::unknown_quoted_key("\"SECRET\\u001b[31m\" = 1\npackages = []\n")]
+#[case::long_key(&format!("SECRET{} = 1\npackages = []\n", "x".repeat(80)))]
+#[case::syntax("packages = [\"git\"]\nSECRET SECRET\n")]
+#[case::unterminated("packages = [\"SECRET\n")]
+fn parse_errors_never_quote_the_file(#[case] text: &str) {
+    let message = invalid(text);
+    assert!(!message.contains("SECRET"), "{message}");
+    assert!(message.starts_with("line "), "{message}");
 }
 
 #[test]
@@ -85,7 +113,7 @@ fn load_names_the_file_in_errors() {
         shown.starts_with(&scratch.0.display().to_string()),
         "{shown}"
     );
-    assert!(shown.contains("unknown field `extra`"), "{shown}");
+    assert!(shown.contains("unknown key `extra`"), "{shown}");
 }
 
 #[test]
@@ -105,7 +133,100 @@ fn a_missing_file_is_a_read_error_saying_not_found() {
         panic!("a missing file must be Error::Read");
     };
     assert_eq!(shown, path);
-    assert_eq!(source.kind(), io::ErrorKind::NotFound);
+    assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+    assert!(Manifest::load(&path).unwrap_err().is_not_found());
+}
+
+#[test]
+fn load_refuses_a_file_past_the_cap() {
+    let big = format!("packages = []\n#{}\n", "x".repeat(65 * 1024));
+    let scratch = Scratch::new("load-big", &big);
+    let error = Manifest::load(&scratch.0).unwrap_err();
+    assert!(matches!(error, Error::Refused { .. }), "{error:?}");
+    assert!(!error.is_not_found());
+}
+
+#[test]
+fn load_from_dir_reads_the_dirs_upkg_toml() {
+    let scratch = Scratch::new("dir-valid", "packages = [\"git\"]\n");
+    let manifest = Manifest::load_from_dir(scratch.dir()).unwrap().unwrap();
+    assert_eq!(manifest.packages(), ["git"]);
+}
+
+#[test]
+fn load_from_dir_without_a_manifest_is_none() {
+    let scratch = Scratch::new("dir-none", "");
+    std::fs::remove_file(&scratch.0).unwrap();
+    assert!(Manifest::load_from_dir(scratch.dir()).unwrap().is_none());
+}
+
+#[test]
+fn load_from_dir_with_an_empty_list_is_an_empty_manifest() {
+    let scratch = Scratch::new("dir-empty", "packages = []\n");
+    let manifest = Manifest::load_from_dir(scratch.dir()).unwrap().unwrap();
+    assert_eq!(manifest.packages(), Vec::<String>::new());
+}
+
+#[cfg(unix)]
+#[test]
+fn load_from_dir_never_follows_a_symlink() {
+    let target = Scratch::new("dir-symlink-target", "packages = [\"git\"]\n");
+    let scratch = Scratch::new("dir-symlink", "");
+    std::fs::remove_file(&scratch.0).unwrap();
+    std::os::unix::fs::symlink(&target.0, &scratch.0).unwrap();
+    let error = Manifest::load_from_dir(scratch.dir()).unwrap_err();
+    let Error::Refused { path, reason } = &error else {
+        panic!("a symlink must be refused, got {error:?}");
+    };
+    assert_eq!(path, &scratch.0);
+    assert!(reason.contains("not a regular file"), "{reason}");
+    // Through `load`, a path someone chose, the same link is followed.
+    assert_eq!(Manifest::load(&scratch.0).unwrap().packages(), ["git"]);
+}
+
+#[test]
+fn load_from_dir_refuses_a_directory() {
+    let scratch = Scratch::new("dir-dir", "");
+    std::fs::remove_file(&scratch.0).unwrap();
+    std::fs::create_dir(&scratch.0).unwrap();
+    let error = Manifest::load_from_dir(scratch.dir()).unwrap_err();
+    assert!(matches!(error, Error::Refused { .. }), "{error:?}");
+}
+
+#[test]
+fn load_from_dir_refuses_a_file_past_the_cap() {
+    let big = format!("packages = []\n#{}\n", "x".repeat(65 * 1024));
+    let scratch = Scratch::new("dir-big", &big);
+    let error = Manifest::load_from_dir(scratch.dir()).unwrap_err();
+    let Error::Refused { reason, .. } = &error else {
+        panic!("a huge file must be refused, got {error:?}");
+    };
+    assert!(reason.contains("64 KiB"), "{reason}");
+}
+
+#[test]
+fn load_from_dir_refuses_text_that_is_not_utf8() {
+    let scratch = Scratch::new("dir-binary", "");
+    std::fs::write(&scratch.0, b"packages = [\"\xff\"]\n").unwrap();
+    let error = Manifest::load_from_dir(scratch.dir()).unwrap_err();
+    assert_eq!(error.detail(), "not UTF-8 text");
+}
+
+#[test]
+fn load_from_dir_errors_name_the_file_and_say_where() {
+    let scratch = Scratch::new("dir-invalid", "packages = [\"git\"]\nextra = \"SECRET\"\n");
+    let error = Manifest::load_from_dir(scratch.dir()).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "{}: line 2, column 1: unknown key `extra`; the only key is `packages`",
+            scratch.0.display()
+        )
+    );
+    assert_eq!(
+        error.detail(),
+        "line 2, column 1: unknown key `extra`; the only key is `packages`"
+    );
 }
 
 #[rstest]
@@ -125,74 +246,4 @@ fn resolve_gives_native_names_per_backend(#[case] backend: &str, #[case] expecte
     let set = manifest.resolve(backend);
     assert_eq!(set.backend(), backend);
     assert_eq!(set.packages(), expected);
-}
-
-#[test]
-fn unknown_names_pass_through_verbatim() {
-    let set = PackageSet::resolve("pacman", &names(&["ripgrep", "libpq-dev"]));
-    assert_eq!(set.packages(), ["postgresql-libs", "ripgrep"]);
-}
-
-#[test]
-fn key_is_backend_colon_sorted_unique_native_names() {
-    let set = PackageSet::resolve("freebsd", &names(&["protobuf-compiler", "pkg-config"]));
-    assert_eq!(set.key(), "freebsd:pkgconf protobuf");
-}
-
-#[test]
-fn key_ignores_order_duplicates_and_spelling() {
-    let written = PackageSet::resolve(
-        "freebsd",
-        &names(&["protobuf-compiler", "pkg-config", "protobuf-compiler"]),
-    );
-    // Native names, in another order, and both spellings of pkgconf.
-    let other = PackageSet::resolve("freebsd", &names(&["protobuf", "pkgconf", "pkg-config"]));
-    assert_eq!(written.key(), other.key());
-    assert_eq!(written, other);
-}
-
-#[test]
-fn key_differs_per_backend() {
-    let wanted = names(&["git"]);
-    assert_eq!(PackageSet::resolve("apt", &wanted).key(), "apt:git");
-    assert_ne!(
-        PackageSet::resolve("apt", &wanted).key(),
-        PackageSet::resolve("dnf", &wanted).key()
-    );
-}
-
-#[test]
-fn key_of_nothing_is_the_backend_alone() {
-    let set = PackageSet::resolve("apk", &[]);
-    assert!(set.is_empty());
-    assert_eq!(set.key(), "apk:");
-}
-
-#[test]
-fn package_set_round_trips_through_json() {
-    let set = PackageSet::resolve("freebsd", &names(&["protobuf-compiler", "pkg-config"]));
-    let json = serde_json::to_string(&set).unwrap();
-    assert_eq!(
-        json,
-        r#"{"backend":"freebsd","packages":["pkgconf","protobuf"]}"#
-    );
-    assert_eq!(serde_json::from_str::<PackageSet>(&json).unwrap(), set);
-}
-
-#[test]
-fn deserializing_normalizes_like_resolving() {
-    let set: PackageSet =
-        serde_json::from_str(r#"{"backend":"apt","packages":["protobuf-compiler","git","git"]}"#)
-            .unwrap();
-    assert_eq!(set.key(), "apt:git protobuf-compiler");
-}
-
-#[rstest]
-#[case::option_as_name(r#"{"backend":"apt","packages":["-oAPT::Get::AllowUnauthenticated=1"]}"#)]
-#[case::spaced_name(r#"{"backend":"apt","packages":["git curl"]}"#)]
-#[case::empty_backend(r#"{"backend":"","packages":["git"]}"#)]
-#[case::colon_backend(r#"{"backend":"apt:git","packages":[]}"#)]
-#[case::unknown_field(r#"{"backend":"apt","packages":[],"extra":1}"#)]
-fn deserializing_refuses_what_resolving_cannot_produce(#[case] json: &str) {
-    assert!(serde_json::from_str::<PackageSet>(json).is_err(), "{json}");
 }

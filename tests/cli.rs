@@ -176,7 +176,10 @@ fn an_invalid_manifest_fails_before_touching_any_backend() {
         assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
         let stderr = text(&output.stderr);
         assert!(stderr.starts_with("error: upkg.toml: "), "{stderr}");
-        assert!(stderr.contains("unknown field `pakages`"), "{stderr}");
+        assert!(
+            stderr.contains("line 1, column 1: unknown key `pakages`"),
+            "{stderr}"
+        );
     }
 }
 

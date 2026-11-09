@@ -15,27 +15,37 @@
 //! use upkg::manifest::Manifest;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let manifest = Manifest::load("upkg.toml")?;
+//! // A checkout's own upkg.toml: a regular file, or nothing.
+//! let Some(manifest) = Manifest::load_from_dir("/srv/checkout")? else {
+//!     return Ok(());
+//! };
 //! let host = Host::detect()?;
 //! let packages = manifest.resolve(host.platform().catalog_key());
-//! println!("image key: {}", packages.key()); // "apt:pkg-config protobuf-compiler"
+//! println!("image {}: {}", packages.digest(), packages.key()); // "apt:pkg-config protobuf-compiler"
 //! let options = Options { dry_run: false, privilege: Privilege::AlreadyRoot };
 //! host.install(&packages, &options)?;
 //! # Ok(())
 //! # }
 //! ```
 
-use std::fmt;
-use std::io;
-use std::path::{Path, PathBuf};
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
+mod error;
+mod parse;
+mod set;
 
-use crate::catalog;
+pub use error::Error;
+pub use set::{Package, PackageSet};
 
 /// The manifest's file name. `upkg` reads it from the current directory only.
 pub const FILE_NAME: &str = "upkg.toml";
+
+/// The largest manifest upkg reads, in bytes. A list of package names is a
+/// few hundred; anything near this is not a manifest.
+pub const MAX_LEN: u64 = 64 * 1024;
 
 /// A parsed `upkg.toml`: canonical package names, as written.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,27 +53,89 @@ pub struct Manifest {
     packages: Vec<String>,
 }
 
-/// The file as TOML sees it. New keys (per-OS lists, say) are added here;
-/// until then they are errors.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Raw {
-    packages: Vec<String>,
-}
-
 impl Manifest {
-    /// Reads and parses the manifest at `path`.
+    /// Reads and parses the manifest at `path`, wherever it leads: a path
+    /// someone chose, such as `upkg install --manifest PATH`. For the
+    /// `upkg.toml` of a directory whose content nobody vetted, use
+    /// [`Manifest::load_from_dir`].
     ///
     /// # Errors
     ///
-    /// [`Error::Read`] when the file can't be read (its `source` says
-    /// [`io::ErrorKind::NotFound`] when there is none), [`Error::Invalid`]
-    /// when it isn't a valid manifest.
+    /// [`Error::Read`] when the file can't be read
+    /// ([`Error::is_not_found`] when there is none), [`Error::Refused`] when
+    /// it is larger than [`MAX_LEN`], [`Error::Invalid`] when it isn't a
+    /// valid manifest.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref();
-        let text = std::fs::read_to_string(path).map_err(|source| Error::Read {
+        let file = File::open(path).map_err(|source| Error::Read {
             path: path.to_path_buf(),
             source,
+        })?;
+        Self::read(file, path)
+    }
+
+    /// Reads `<dir>/upkg.toml`, if there is one, as a root process may read
+    /// a file from a checkout it doesn't trust: the file must be a regular
+    /// file (a symlink is refused, never followed), no larger than
+    /// [`MAX_LEN`], and errors quote none of it beyond a key name.
+    ///
+    /// `Ok(None)` when there is no `upkg.toml`; a manifest listing no
+    /// packages is `Some` of an empty one.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] for a symlink, a directory, a device, a file
+    /// larger than [`MAX_LEN`], or one swapped for another while it was
+    /// opened; [`Error::Read`] when it can't be read; [`Error::Invalid`]
+    /// when it isn't a valid manifest.
+    pub fn load_from_dir(dir: impl AsRef<Path>) -> Result<Option<Self>, Error> {
+        let path = dir.as_ref().join(FILE_NAME);
+        let read = |source| Error::Read {
+            path: path.clone(),
+            source,
+        };
+        let refused = |reason| Error::Refused {
+            path: path.clone(),
+            reason,
+        };
+        let checked = match std::fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(read(error)),
+            Ok(meta) => meta,
+        };
+        if !checked.file_type().is_file() {
+            return Err(refused(NOT_A_FILE));
+        }
+        if checked.len() > MAX_LEN {
+            return Err(refused(TOO_LARGE));
+        }
+        let file = File::open(&path).map_err(read)?;
+        // The name could have become a symlink since it was looked at:
+        // what was opened must be the file that was checked.
+        if !same_file(&checked, &file.metadata().map_err(read)?) {
+            return Err(refused(SWAPPED));
+        }
+        Self::read(file, &path).map(Some)
+    }
+
+    /// At most [`MAX_LEN`] bytes of `file`, parsed.
+    fn read(file: File, path: &Path) -> Result<Self, Error> {
+        let mut bytes = Vec::new();
+        file.take(MAX_LEN + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|source| Error::Read {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if bytes.len() as u64 > MAX_LEN {
+            return Err(Error::Refused {
+                path: path.to_path_buf(),
+                reason: TOO_LARGE,
+            });
+        }
+        let text = String::from_utf8(bytes).map_err(|_| Error::Invalid {
+            path: Some(path.to_path_buf()),
+            message: "not UTF-8 text".to_string(),
         })?;
         text.parse().map_err(|error: Error| error.at(path))
     }
@@ -83,177 +155,34 @@ impl Manifest {
     }
 }
 
+const NOT_A_FILE: &str =
+    "is not a regular file (a symlink, a directory or a device); upkg reads only a plain upkg.toml";
+const TOO_LARGE: &str = "is larger than 64 KiB, which no list of package names is";
+const SWAPPED: &str = "was replaced while it was being opened";
+
+/// Whether `opened` is the file `checked` described.
+#[cfg(unix)]
+fn same_file(checked: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    checked.dev() == opened.dev() && checked.ino() == opened.ino()
+}
+
+/// Whether `opened` is the file `checked` described; without inode numbers,
+/// at least still a regular file.
+#[cfg(not(unix))]
+fn same_file(_checked: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
+    opened.is_file()
+}
+
 impl FromStr for Manifest {
     type Err = Error;
 
     fn from_str(text: &str) -> Result<Self, Error> {
-        let raw: Raw = toml::from_str(text).map_err(|error| Error::Invalid {
+        let packages = parse::packages(text).map_err(|message| Error::Invalid {
             path: None,
-            message: error.to_string().trim_end().to_string(),
+            message,
         })?;
-        for name in &raw.packages {
-            check_name(name).map_err(|message| Error::Invalid {
-                path: None,
-                message,
-            })?;
-        }
-        Ok(Self {
-            packages: raw.packages,
-        })
-    }
-}
-
-/// A name must reach the native manager as one plain argument: never empty,
-/// never an option, never split by a shell.
-fn check_name(name: &str) -> Result<(), String> {
-    let problem = if name.is_empty() {
-        "is empty"
-    } else if name.starts_with('-') {
-        "starts with `-`; a package manager would read it as an option"
-    } else if name.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        "contains whitespace or a control character"
-    } else {
-        return Ok(());
-    };
-    Err(format!("package name {name:?} {problem}"))
-}
-
-/// Packages resolved for one backend: native names, sorted and deduplicated.
-///
-/// Serializes as `{"backend": "freebsd", "packages": ["pkgconf", "protobuf"]}`;
-/// deserializing sorts, deduplicates and checks the names again, so a set that
-/// crossed a process boundary holds what [`PackageSet::key`] promises.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "RawSet")]
-pub struct PackageSet {
-    backend: String,
-    packages: Vec<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawSet {
-    backend: String,
-    packages: Vec<String>,
-}
-
-impl TryFrom<RawSet> for PackageSet {
-    type Error = String;
-
-    fn try_from(raw: RawSet) -> Result<Self, String> {
-        if raw.backend.is_empty()
-            || raw
-                .backend
-                .chars()
-                .any(|c| c == ':' || c.is_whitespace() || c.is_control())
-        {
-            return Err(format!("backend {:?} is not a catalog key", raw.backend));
-        }
-        for name in &raw.packages {
-            check_name(name)?;
-        }
-        Ok(Self::native(raw.backend, raw.packages))
-    }
-}
-
-impl PackageSet {
-    /// Resolves canonical `packages` for `backend` (a catalog key) through
-    /// the alias catalog.
-    #[must_use]
-    pub fn resolve(backend: &str, packages: &[String]) -> Self {
-        Self::native(backend.to_string(), catalog::resolve(backend, packages))
-    }
-
-    fn native(backend: String, mut packages: Vec<String>) -> Self {
-        packages.sort_unstable();
-        packages.dedup();
-        Self { backend, packages }
-    }
-
-    /// The catalog key the names were resolved for.
-    #[must_use]
-    pub fn backend(&self) -> &str {
-        &self.backend
-    }
-
-    /// Native names, sorted and deduplicated.
-    #[must_use]
-    pub fn packages(&self) -> &[String] {
-        &self.packages
-    }
-
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.packages.is_empty()
-    }
-
-    /// One string naming exactly this set: the backend, a colon, then the
-    /// native names joined by single spaces (`freebsd:pkgconf protobuf`;
-    /// `apt:` when empty). Equal sets give equal keys whatever order or
-    /// spelling the manifest used, so it can key a cache of prepared images.
-    ///
-    /// Stable across upkg releases; changing the format is a breaking change.
-    /// The names inside it follow the alias catalog, so a release that maps a
-    /// name differently yields a different key, as it should: that is a
-    /// different set of packages. It does not identify the distribution or
-    /// its release (Debian 12 and Ubuntu 24.04 are both `apt`); fold the base
-    /// image's own identity in alongside it.
-    #[must_use]
-    pub fn key(&self) -> String {
-        format!("{}:{}", self.backend, self.packages.join(" "))
-    }
-}
-
-/// Why a manifest could not be loaded.
-#[derive(Debug)]
-pub enum Error {
-    /// The file could not be read.
-    Read { path: PathBuf, source: io::Error },
-    /// Not TOML, an unknown key, a wrong type, or an unusable package name.
-    Invalid {
-        /// The file, when the manifest came from one.
-        path: Option<PathBuf>,
-        message: String,
-    },
-}
-
-impl Error {
-    fn at(self, file: &Path) -> Self {
-        match self {
-            Self::Invalid {
-                path: None,
-                message,
-            } => Self::Invalid {
-                path: Some(file.to_path_buf()),
-                message,
-            },
-            other => other,
-        }
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Read { path, source } => write!(f, "{}: {source}", path.display()),
-            Self::Invalid {
-                path: Some(path),
-                message,
-            } => write!(f, "{}: {message}", path.display()),
-            Self::Invalid {
-                path: None,
-                message,
-            } => write!(f, "{message}"),
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Read { source, .. } => Some(source),
-            Self::Invalid { .. } => None,
-        }
+        Ok(Self { packages })
     }
 }
 
