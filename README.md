@@ -15,6 +15,7 @@ That's it. Same command on Debian, Fedora, Arch, openSUSE, OpenWrt, Termux, Free
 ## What it actually does
 
 - One command surface: `upkg install`, `upkg uninstall`, `upkg upgrade`.
+- One file for the system packages a project needs: `upkg.toml`.
 - Keeps a whole host current: `upkg refresh`, `upkg upgrade --full`, `upkg cleanup`, `upkg reboot-required`.
 - Routes to the platform package manager where that is the right boundary, with a built-in Homebrew-compatible engine on macOS.
 - Keeps the names people already know: no new catalog, no parallel universe.
@@ -50,10 +51,11 @@ headers: `libpq-dev` on Debian, `libpq-devel` on Fedora, `postgresql-libs` on
 Arch.
 
 For those, upkg keeps a small compiled-in alias catalog
-(`src/backend/catalog/aliases.toml`). It is **divergent names only** and is
+(`src/catalog/aliases.toml`). It is **divergent names only** and is
 deliberately not a registry: if a name is the same on every backend it is left
 out. Resolution is exact-match with verbatim fallthrough, so an unknown name is
-never rewritten or guessed at.
+never rewritten or guessed at. The macOS engine resolves too, under the `brew`
+key: `upkg install protobuf-compiler` installs the `protobuf` formula.
 
 ```toml
 [libpq-dev]
@@ -135,6 +137,7 @@ in a workflow:
 steps:
   - uses: seuros/setup-upkg@master
   - run: upkg install imagemagick
+  - run: upkg install   # whatever the repo's upkg.toml lists
 ```
 
 `@master` tracks the latest action and installs the latest upkg release. Pin
@@ -146,6 +149,8 @@ Forgejo Actions.
 
 ```bash
 upkg install git curl
+upkg install                      # what ./upkg.toml lists
+upkg install --manifest ci/upkg.toml
 upkg install ghostty
 upkg install --app ghostty
 upkg install --dry-run ripgrep
@@ -158,6 +163,7 @@ upkg cleanup
 upkg reboot-required --json
 upkg list
 upkg check git libpq-dev
+upkg check                        # what ./upkg.toml lists
 upkg search ripgrep
 upkg search --app ghostty
 upkg search --exact git
@@ -190,12 +196,41 @@ upkg completion fish > ~/.config/fish/completions/upkg.fish
 upkg completion bash > ~/.local/share/bash-completion/completions/upkg
 ```
 
+## upkg.toml
+
+A project's system packages, the ones its build needs before `cargo build` or
+`bundle install` can even start, go in `upkg.toml` at the repository root:
+
+```toml
+packages = ["protobuf-compiler", "pkg-config", "libssl-dev"]
+```
+
+Same names as on the command line, same alias catalog, same verbatim
+fallthrough. Then, on a laptop, in CI, or in a fresh container:
+
+```bash
+upkg install            # installs what ./upkg.toml lists
+upkg check              # says what's missing, needs no root
+```
+
+That's the whole format. Any other key is an error, not a shrug, so a typo
+fails loudly instead of installing nothing. Names that start with `-` are
+refused too: a package list is not a place to smuggle flags into a root
+command.
+
+upkg reads `./upkg.toml` only when you name no packages, and only from the
+current directory: it never walks up the tree. `install` runs as root, and a
+file three levels up (a monorepo root, someone's home directory) has no
+business deciding what root installs. Run it where the file is, or say which
+one with `--manifest PATH`.
+
 ## Check
 
 `upkg check <package>...` answers whether packages are installed, for scripts
 and deploy tools that verify a host before touching it. Names go through the
 alias catalog first, so `upkg check libpq-dev` asks pacman about
-`postgresql-libs`. It never needs root and never changes anything.
+`postgresql-libs`. It never needs root and never changes anything. With no
+names, it checks what `./upkg.toml` (or `--manifest PATH`) lists.
 
 ```console
 $ upkg check git llvm19
@@ -306,7 +341,7 @@ answer is "not required", with a reason saying it can't tell.
 ### As a library
 
 The same verbs are a Rust API, without the CLI's dependencies: the `host`
-feature needs only std and serde.
+feature needs only std, serde and a TOML parser.
 
 ```toml
 upkg = { version = "0.19", default-features = false, features = ["host"] }
@@ -331,6 +366,37 @@ says so (`None` where it doesn't). A failed command returns
 Commands and the reboot check's file reads go through the `Runner` trait;
 `SystemRunner` runs real processes (captured, or echoed with
 `SystemRunner::echoing()`), and a test can pass its own to `Host::new`.
+
+`upkg.toml` is a library call away too, for tools that prepare machines from
+a repository (a CI runner building a job's container or jail, say):
+
+```rust
+use upkg::host::{Host, Options, Privilege};
+use upkg::manifest::Manifest;
+
+let manifest = Manifest::load("upkg.toml")?;
+let host = Host::detect()?;
+let packages = manifest.resolve(host.platform().catalog_key());
+let key = packages.key(); // "freebsd:pkgconf protobuf"
+let options = Options { dry_run: false, privilege: Privilege::AlreadyRoot };
+host.install(&packages, &options)?;
+```
+
+`resolve` takes any catalog key, so the set can be worked out before the
+machine exists: `Platform::FreeBsd { pkgbase: false }.catalog_key()`, or
+`Platform::from_os_release(..)` for a container image. A `PackageSet` holds
+native names, sorted and deduplicated, and serializes as
+`{"backend", "packages"}` to cross into a root helper. Its `key()` is the
+backend, a colon, and those names joined by spaces: equal sets, equal keys,
+whatever order the file used. The format is stable. It changes when the
+catalog maps a name differently, which is a different set of packages and
+should be a different cache entry; it does not identify the distribution
+release, so fold the base image's identity in yourself.
+
+`Host::install` is unattended: apt-get with debconf silenced (and
+`apt-get update` first when apt never fetched an index, as in a fresh
+container), `pkg` with `ASSUME_ALWAYS_YES` so a fresh jail bootstraps pkg
+itself, pacman with `--needed`. It refuses a set resolved for another backend.
 
 ## Search
 
