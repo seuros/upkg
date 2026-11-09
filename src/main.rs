@@ -199,13 +199,7 @@ fn check_packages(packages: &[String]) -> Result<ExitCode, UpkgError> {
     let results = native::check_native(packages)?;
 
     #[cfg(not(target_os = "macos"))]
-    let results = {
-        let backend = Backend::detect()?;
-        packages
-            .iter()
-            .map(|package| check::on_backend(&backend, package))
-            .collect::<Result<Vec<_>, _>>()?
-    };
+    let results = check::on_backend(&Backend::detect()?, packages)?;
 
     Ok(check::report(&results))
 }

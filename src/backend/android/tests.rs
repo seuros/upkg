@@ -74,3 +74,26 @@ fn upgrade_spec_handles_empty_packages() {
     let spec = AndroidManager::Pkg.upgrade_spec(&[]);
     assert_eq!(spec.args(), ["upgrade", "-y"]);
 }
+
+#[test]
+fn termux_check_asks_dpkg() {
+    assert_spec(
+        &installed_query("git"),
+        "dpkg-query",
+        &["--show", "--showformat=${db:Status-Abbrev}\\n", "git"],
+    );
+}
+
+#[rstest]
+#[case(true, "ii \n", true)]
+#[case(true, "hi \n", true)]
+#[case(true, "rc \n", false)]
+#[case(true, "un \nii \n", true)]
+#[case(false, "", false)]
+fn termux_dpkg_counts_the_second_status_letter(
+    #[case] success: bool,
+    #[case] stdout: &str,
+    #[case] installed: bool,
+) {
+    assert_eq!(dpkg_installed(success, stdout), installed);
+}

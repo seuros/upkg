@@ -4,7 +4,7 @@ use std::path::Path;
 
 pub use upkg::host::LinuxManager;
 
-use crate::backend::{Answer, CommandSpec, InstalledQuery, dpkg_query};
+use crate::backend::CommandSpec;
 use crate::error::UpkgError;
 
 /// Where apt keeps downloaded package lists; container images ship it empty.
@@ -80,7 +80,6 @@ pub trait LinuxSpecs {
     fn upgrade_spec(&self, packages: &[String]) -> CommandSpec;
     fn search_spec(&self, query: &str, exact: bool) -> Result<CommandSpec, UpkgError>;
     fn list_spec(&self) -> CommandSpec;
-    fn installed_query(&self, package: &str) -> InstalledQuery;
 }
 
 impl LinuxSpecs for LinuxManager {
@@ -175,19 +174,6 @@ impl LinuxSpecs for LinuxManager {
             }
             Self::Opkg => CommandSpec::new("opkg", vec!["list-installed".into()]),
             Self::Apk => CommandSpec::new("apk", vec!["info".into()]),
-        }
-    }
-
-    fn installed_query(&self, package: &str) -> InstalledQuery {
-        match self {
-            Self::Apt => dpkg_query(package),
-            // dnf, yum and zypper all sit on the rpm database.
-            Self::Dnf | Self::Yum | Self::Zypper => {
-                InstalledQuery::new("rpm", &["-q"], package, Answer::ExitStatus)
-            }
-            Self::Pacman => InstalledQuery::new("pacman", &["-Q"], package, Answer::ExitStatus),
-            Self::Opkg => InstalledQuery::new("opkg", &["status"], package, Answer::OpkgStatus),
-            Self::Apk => InstalledQuery::new("apk", &["info", "-e"], package, Answer::ExitStatus),
         }
     }
 }

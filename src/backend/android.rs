@@ -20,6 +20,25 @@ pub fn detect() -> Result<AndroidManager, UpkgError> {
     ))
 }
 
+/// `check` on Termux: the one platform it covers outside the host library,
+/// whose catalog key (`termux`) is not a host's. Asked like Debian's dpkg.
+pub fn installed_query(native: &str) -> CommandSpec {
+    CommandSpec::with_packages(
+        "dpkg-query",
+        &["--show", "--showformat=${db:Status-Abbrev}\\n"],
+        &[native.to_string()],
+    )
+}
+
+/// `${db:Status-Abbrev}`: a second character `i` means installed (`ii`,
+/// `hi`); `rc` is a removed package's leftover config.
+pub fn dpkg_installed(success: bool, stdout: &str) -> bool {
+    success
+        && stdout
+            .lines()
+            .any(|line| line.as_bytes().get(1) == Some(&b'i'))
+}
+
 impl PackageManager for AndroidManager {
     fn name(&self) -> &'static str {
         match self {

@@ -22,6 +22,9 @@
 //! let host = Host::detect()?;
 //! let packages = manifest.resolve(host.platform().catalog_key());
 //! println!("image {}: {}", packages.digest(), packages.key()); // "apt:pkg-config protobuf-compiler"
+//! for package in host.missing(&packages)? {
+//!     println!("missing: {package}"); // "protobuf-compiler (protobuf)" on FreeBSD
+//! }
 //! let options = Options { dry_run: false, privilege: Privilege::AlreadyRoot };
 //! host.install(&packages, &options)?;
 //! # Ok(())

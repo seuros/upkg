@@ -13,6 +13,7 @@ use upkg::catalog;
 pub use upkg::command::CommandSpec;
 #[cfg(any(target_os = "android", target_os = "windows"))]
 pub use upkg::command::command_exists;
+use upkg::host::Platform;
 
 #[cfg(target_os = "linux")]
 use linux::LinuxSpecs;
@@ -45,74 +46,6 @@ pub(crate) trait PackageManager {
     fn packages_spec(&self, args: &[&str], packages: &[String]) -> CommandSpec {
         CommandSpec::with_packages(self.name(), args, packages)
     }
-}
-
-/// How a manager's installed-query reports its answer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Answer {
-    /// Exit status 0 means installed: `pkg info -e`, `rpm -q`, `pacman -Q`, `apk info -e`.
-    #[cfg_attr(target_os = "windows", allow(dead_code))]
-    ExitStatus,
-    /// `dpkg-query`'s `${db:Status-Abbrev}`: second char `i` means installed.
-    #[cfg(any(target_os = "android", target_os = "linux"))]
-    DpkgStatus,
-    /// `opkg status`'s `Status:` line ends in `installed` or `not-installed`.
-    #[cfg(target_os = "linux")]
-    OpkgStatus,
-}
-
-impl Answer {
-    // Only dpkg and opkg read stdout; elsewhere every answer is the exit status.
-    #[cfg_attr(
-        not(any(target_os = "android", target_os = "linux")),
-        allow(unused_variables, clippy::missing_const_for_fn)
-    )]
-    pub fn installed(self, success: bool, stdout: &[u8]) -> bool {
-        match self {
-            Self::ExitStatus => success,
-            #[cfg(any(target_os = "android", target_os = "linux"))]
-            Self::DpkgStatus => {
-                success
-                    && stdout
-                        .split(|&byte| byte == b'\n')
-                        .any(|line| line.get(1) == Some(&b'i'))
-            }
-            #[cfg(target_os = "linux")]
-            Self::OpkgStatus => String::from_utf8_lossy(stdout).lines().any(|line| {
-                line.strip_prefix("Status:")
-                    .and_then(|status| status.split_whitespace().last())
-                    == Some("installed")
-            }),
-        }
-    }
-}
-
-/// A read-only "is this package installed?" query for one native name.
-#[derive(Debug)]
-pub struct InstalledQuery {
-    pub spec: CommandSpec,
-    pub answer: Answer,
-}
-
-impl InstalledQuery {
-    #[cfg_attr(target_os = "windows", allow(dead_code))]
-    pub fn new(program: &str, args: &[&str], package: &str, answer: Answer) -> Self {
-        Self {
-            spec: CommandSpec::with_packages(program, args, &[package.to_string()]),
-            answer,
-        }
-    }
-}
-
-/// dpkg's view of a package, shared by apt and Termux.
-#[cfg(any(target_os = "android", target_os = "linux"))]
-pub(crate) fn dpkg_query(package: &str) -> InstalledQuery {
-    InstalledQuery::new(
-        "dpkg-query",
-        &["--show", "--showformat=${db:Status-Abbrev}\\n"],
-        package,
-        Answer::DpkgStatus,
-    )
 }
 
 impl Backend {
@@ -197,25 +130,37 @@ impl Backend {
         catalog::resolve(self.catalog_key(), packages)
     }
 
-    /// The native name `package` resolves to on this backend.
+    /// The native name `package` resolves to on this backend: Termux's
+    /// `check` asks for one name at a time.
+    #[cfg(target_os = "android")]
     pub fn resolve(&self, package: &str) -> String {
         catalog::resolve_one(self.catalog_key(), package)
     }
 
-    /// Asks whether `native` (already resolved) is installed; never sudo.
-    #[cfg_attr(target_os = "windows", allow(unused_variables))]
-    pub fn installed_query(&self, native: &str) -> Result<InstalledQuery, UpkgError> {
+    /// The host library's platform, for `check`'s queries
+    /// ([`Host::status`](upkg::host::Host::status)). Termux, winget, choco
+    /// and rvn have none.
+    pub const fn host_platform(&self) -> Result<Platform, UpkgError> {
         match self {
             #[cfg(target_os = "android")]
-            Self::Android(_) => Ok(dpkg_query(native)),
+            Self::Android(_) => Err(UpkgError::Unsupported(
+                "Termux is checked by the CLI, not the host library",
+            )),
+            // Rolling or not only changes how a system upgrades.
             #[cfg(target_os = "linux")]
-            Self::Linux(manager) => Ok(manager.installed_query(native)),
+            Self::Linux(manager) => Ok(Platform::Linux {
+                manager: *manager,
+                rolling: false,
+            }),
             #[cfg(target_os = "windows")]
             Self::Windows(_) => Err(UpkgError::Unsupported(
                 "check is not supported by winget or choco",
             )),
-            #[cfg(any(target_os = "freebsd", target_os = "dragonfly"))]
-            Self::FreeBsd => Ok(freebsd::installed_query(native)),
+            // pkgbase or not only changes how a system upgrades.
+            #[cfg(target_os = "freebsd")]
+            Self::FreeBsd => Ok(Platform::FreeBsd { pkgbase: false }),
+            #[cfg(target_os = "dragonfly")]
+            Self::FreeBsd => Ok(Platform::DragonFly),
             #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             Self::Ravenports => Err(UpkgError::Unsupported("check is not supported by rvn")),
         }

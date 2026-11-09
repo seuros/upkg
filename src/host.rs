@@ -20,6 +20,7 @@
 
 mod changes;
 mod error;
+mod installed;
 mod outcome;
 mod platform;
 mod reboot;
@@ -28,13 +29,14 @@ mod steps;
 
 pub use changes::Changes;
 pub use error::Error;
+pub use installed::PackageStatus;
 pub use outcome::{Outcome, StepOutcome, StepState, TAIL_LINES, Task};
 pub use platform::{LinuxManager, Platform};
 pub use reboot::RebootStatus;
 pub use runner::{Execution, Filesystem, LocalFilesystem, Runner, SystemRunner};
 
 pub use crate::command::{CommandSpec, Privilege};
-use crate::manifest::PackageSet;
+use crate::manifest::{Package, PackageSet};
 
 use changes::count;
 use outcome::tail;
@@ -145,19 +147,71 @@ impl<R: Runner> Host<R> {
     /// [`Error::WrongBackend`] when `packages` were resolved for another
     /// backend, or as [`Host::refresh`].
     pub fn install(&self, packages: &PackageSet, options: &Options) -> Result<Outcome, Error> {
-        let host = self.platform.catalog_key();
-        if packages.backend() != host {
-            return Err(Error::WrongBackend {
-                host,
-                packages: packages.backend().to_string(),
-            });
-        }
+        self.resolved_here(packages)?;
         let steps = if packages.is_empty() {
             vec![Step::Note("no packages to install")]
         } else {
             steps::install(self.platform, packages.packages(), self.needs_index())
         };
         self.run_steps(Task::Install, steps, *options)
+    }
+
+    /// Whether this host has each package of `packages`: one status per
+    /// name asked for ([`PackageSet::entries`]), in the set's order. It asks
+    /// the package database, one query per native name (`dpkg-query`,
+    /// `rpm -q`, `pacman -Q`, `apk info -e`, `opkg status`, `pkg info -e`),
+    /// never as root and never changing anything; `--dry-run` and privilege
+    /// don't apply. This is what `upkg check` runs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::WrongBackend`] when `packages` were resolved for another
+    /// backend; [`Error::Io`] when a query could not be run at all.
+    pub fn status(&self, packages: &PackageSet) -> Result<Vec<PackageStatus>, Error> {
+        self.resolved_here(packages)?;
+        let mut installed = std::collections::HashMap::new();
+        for native in packages.packages() {
+            let (spec, answer) = installed::query(self.platform, native);
+            let execution = self.execute(&spec, &spec.render())?;
+            installed.insert(native.as_str(), answer.installed(&execution));
+        }
+        Ok(packages
+            .entries()
+            .iter()
+            .map(|package| PackageStatus {
+                installed: installed.get(package.native()) == Some(&true),
+                package: package.clone(),
+            })
+            .collect())
+    }
+
+    /// The packages of `packages` this host lacks, as [`Host::status`] finds
+    /// them. Each shows as `protobuf-compiler (protobuf)` where the catalog
+    /// renamed it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Host::status`].
+    pub fn missing(&self, packages: &PackageSet) -> Result<Vec<Package>, Error> {
+        Ok(self
+            .status(packages)?
+            .into_iter()
+            .filter(|status| !status.installed)
+            .map(|status| status.package)
+            .collect())
+    }
+
+    /// Refuses names resolved for another backend.
+    fn resolved_here(&self, packages: &PackageSet) -> Result<(), Error> {
+        let host = self.platform.catalog_key();
+        if packages.backend() == host {
+            Ok(())
+        } else {
+            Err(Error::WrongBackend {
+                host,
+                packages: packages.backend().to_string(),
+            })
+        }
     }
 
     /// Runs `task`, stopping at the first failed step.

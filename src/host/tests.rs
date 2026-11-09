@@ -412,6 +412,95 @@ fn install_of_nothing_runs_nothing() {
 }
 
 #[test]
+fn status_asks_once_per_native_name_and_reports_every_name_asked_for() {
+    // pkgconf is installed; protobuf is not.
+    let fake = Fake::default().answer("ASSUME_ALWAYS_YES=no pkg info -e protobuf", exit(70, ""));
+    let host = Host::new(FREEBSD, fake);
+    let packages = PackageSet::resolve(
+        "freebsd",
+        &[
+            "protobuf-compiler".to_string(),
+            "pkg-config".to_string(),
+            "pkgconf".to_string(),
+        ],
+    );
+    let status = host.status(&packages).unwrap();
+    let shown: Vec<(String, bool)> = status
+        .iter()
+        .map(|status| (status.package.to_string(), status.installed))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("pkg-config (pkgconf)".to_string(), true),
+            ("pkgconf".to_string(), true),
+            ("protobuf-compiler (protobuf)".to_string(), false),
+        ]
+    );
+    assert_eq!(
+        host.runner.ran(),
+        [
+            "ASSUME_ALWAYS_YES=no pkg info -e pkgconf",
+            "ASSUME_ALWAYS_YES=no pkg info -e protobuf",
+        ]
+    );
+}
+
+#[test]
+fn missing_is_what_status_found_absent() {
+    let dpkg =
+        |name: &str| format!("dpkg-query --show --showformat=${{db:Status-Abbrev}}\\n {name}");
+    let fake = Fake::default()
+        .answer(&dpkg("pkg-config"), exit(0, "ii \n"))
+        .answer(&dpkg("protobuf-compiler"), exit(0, "rc \n"));
+    let host = Host::new(linux(LinuxManager::Apt), fake);
+    let missing = host.missing(&wanted("apt")).unwrap();
+    let names: Vec<(&str, &str)> = missing
+        .iter()
+        .map(|package| (package.requested(), package.native()))
+        .collect();
+    assert_eq!(names, [("protobuf-compiler", "protobuf-compiler")]);
+}
+
+#[test]
+fn status_needs_no_root_and_no_files() {
+    // Not root, no sudo, no filesystem: none of it is asked for.
+    let host = Host::new(linux(LinuxManager::Pacman), Fake::default().without_files());
+    let status = host.status(&wanted("pacman")).unwrap();
+    assert!(status.iter().all(|status| status.installed));
+    assert_eq!(
+        host.runner.ran(),
+        ["pacman -Q pkgconf", "pacman -Q protobuf"]
+    );
+}
+
+#[test]
+fn status_of_nothing_asks_nothing() {
+    let host = Host::new(FREEBSD, Fake::default());
+    let status = host.status(&PackageSet::resolve("freebsd", &[])).unwrap();
+    assert_eq!(status, []);
+    assert_eq!(host.runner.ran(), Vec::<String>::new());
+}
+
+#[test]
+fn status_refuses_packages_resolved_for_another_backend() {
+    let host = Host::new(FREEBSD, Fake::default());
+    let error = host.missing(&wanted("apt")).unwrap_err();
+    assert!(matches!(error, Error::WrongBackend { .. }), "{error}");
+    assert_eq!(host.runner.ran(), Vec::<String>::new());
+}
+
+#[test]
+fn status_fails_when_a_query_cannot_run() {
+    let fake = Fake::default().missing("rpm -q pkgconf-pkg-config");
+    let host = Host::new(linux(LinuxManager::Dnf), fake);
+    let Err(Error::Io { context, .. }) = host.status(&wanted("dnf")) else {
+        panic!("a query that can't start is Error::Io");
+    };
+    assert_eq!(context, "rpm -q pkgconf-pkg-config");
+}
+
+#[test]
 fn install_without_files_fetches_apts_index_rather_than_guess() {
     let fake = Fake::default()
         .dir("/var/lib/apt/lists", &["x_Packages"])

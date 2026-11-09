@@ -1,8 +1,11 @@
 //! `upkg check`: whether packages are installed, without changing anything.
 
 use std::process::ExitCode;
+
 #[cfg(not(target_os = "macos"))]
-use std::process::Stdio;
+use upkg::host::{CommandSpec, Execution, Host, PackageStatus, Runner, SystemRunner};
+#[cfg(not(target_os = "macos"))]
+use upkg::manifest::PackageSet;
 
 #[cfg(not(target_os = "macos"))]
 use crate::backend::Backend;
@@ -45,23 +48,75 @@ fn exit_code(results: &[Checked]) -> ExitCode {
     }
 }
 
-/// Runs the backend's installed-query for `requested`; stderr passes through.
+/// Asks whether each of `requested` is installed, one result per name as
+/// given: through the host library ([`Host::status`]) on Linux and the
+/// BSDs, through dpkg on Termux.
 #[cfg(not(target_os = "macos"))]
-pub fn on_backend(backend: &Backend, requested: &str) -> Result<Checked, UpkgError> {
+pub fn on_backend(backend: &Backend, requested: &[String]) -> Result<Vec<Checked>, UpkgError> {
+    #[cfg(target_os = "android")]
+    if let Backend::Android(_) = backend {
+        return requested
+            .iter()
+            .map(|name| on_termux(backend, name))
+            .collect();
+    }
+    let platform = backend.host_platform()?;
+    let set = PackageSet::resolve(platform.catalog_key(), requested);
+    let statuses = Host::new(platform, ShowStderr).status(&set)?;
+    Ok(in_order(requested, &statuses))
+}
+
+/// `statuses` in the order (and with the repeats) of `requested`.
+#[cfg(not(target_os = "macos"))]
+fn in_order(requested: &[String], statuses: &[PackageStatus]) -> Vec<Checked> {
+    requested
+        .iter()
+        .filter_map(|name| {
+            statuses
+                .iter()
+                .find(|status| status.package.requested() == name)
+        })
+        .map(|status| Checked {
+            requested: status.package.requested().to_string(),
+            native: status.package.native().to_string(),
+            installed: status.installed,
+        })
+        .collect()
+}
+
+/// The system's runner, showing each query's stderr once it ends: the
+/// native tool's own explanation of a miss.
+#[cfg(not(target_os = "macos"))]
+struct ShowStderr;
+
+#[cfg(not(target_os = "macos"))]
+impl Runner for ShowStderr {
+    fn run(&self, spec: &CommandSpec) -> std::io::Result<Execution> {
+        let execution = SystemRunner::new().run(spec)?;
+        eprint!("{}", execution.stderr);
+        Ok(execution)
+    }
+}
+
+/// Termux's dpkg, asked directly; stderr passes through.
+#[cfg(target_os = "android")]
+fn on_termux(backend: &Backend, requested: &str) -> Result<Checked, UpkgError> {
+    use crate::backend::android;
+
     let native = backend.resolve(requested);
-    let query = backend.installed_query(&native)?;
-    let rendered = query.spec.render();
+    let query = android::installed_query(&native);
+    let rendered = query.render();
     let output = query
-        .spec
         .into_command()
-        .stderr(Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
         .output()
         .map_err(|err| std::io::Error::new(err.kind(), format!("`{rendered}`: {err}")))?;
     Ok(Checked {
         requested: requested.to_string(),
-        installed: query
-            .answer
-            .installed(output.status.success(), &output.stdout),
+        installed: android::dpkg_installed(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stdout),
+        ),
         native,
     })
 }

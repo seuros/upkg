@@ -1,6 +1,6 @@
 //! Shared assertions for per-platform backend tests.
 
-use super::{Answer, CommandSpec};
+use super::CommandSpec;
 #[cfg(not(target_os = "windows"))]
 use crate::error::UpkgError;
 
@@ -8,17 +8,6 @@ use crate::error::UpkgError;
 pub(super) fn assert_spec(spec: &CommandSpec, command: &str, args: &[&str]) {
     assert_eq!(spec.program(), command, "spec: {}", spec.render());
     assert_eq!(spec.args(), args, "spec: {}", spec.render());
-}
-
-/// Each case: answer, query exited 0, query stdout, expected "installed".
-pub(super) fn assert_answers(cases: &[(Answer, bool, &str, bool)]) {
-    for &(answer, success, stdout, expected) in cases {
-        assert_eq!(
-            answer.installed(success, stdout.as_bytes()),
-            expected,
-            "{answer:?} success={success} stdout={stdout:?}"
-        );
-    }
 }
 
 /// pkg(8) and rvn share the `search -e <query>` exact-match contract.
