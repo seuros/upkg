@@ -3,6 +3,17 @@ use crate::check::Checked;
 use crate::cli::{PackageAction, PackageKind};
 use crate::error::UpkgError;
 
+/// The engine's alias-catalog key: names are Homebrew's.
+const CATALOG_KEY: &str = "brew";
+
+/// Formula names through the alias catalog; app (cask) tokens pass as given.
+fn resolve(packages: &[String], kind: PackageKind) -> Vec<String> {
+    match kind {
+        PackageKind::Auto => upkg::catalog::resolve(CATALOG_KEY, packages),
+        PackageKind::App => packages.to_vec(),
+    }
+}
+
 impl From<PackageKind> for PackageKindHint {
     fn from(kind: PackageKind) -> Self {
         match kind {
@@ -13,6 +24,7 @@ impl From<PackageKind> for PackageKindHint {
 }
 
 pub fn run(action: PackageAction, packages: &[String], kind: PackageKind) -> Result<(), UpkgError> {
+    let packages = &resolve(packages, kind);
     let options = crate::api::InstallOptions {
         package_kind: kind.into(),
         ..crate::api::InstallOptions::default()
@@ -33,7 +45,7 @@ pub fn print_dry_run(
 ) -> Result<(), UpkgError> {
     let command = action.as_str();
     let package_args = match kind {
-        PackageKind::Auto => packages.to_vec(),
+        PackageKind::Auto => resolve(packages, kind),
         PackageKind::App => packages
             .iter()
             .map(|package| crate::package_ref::normalize_app_name(package))
@@ -85,13 +97,15 @@ pub fn check_native(packages: &[String]) -> Result<Vec<Checked>, UpkgError> {
     let installed = crate::api::installed_names(&options).map_err(UpkgError::Native)?;
     Ok(packages
         .iter()
-        .map(|requested| Checked {
-            requested: requested.clone(),
-            native: requested.clone(),
-            installed: installed.iter().any(|name| {
-                name == requested
-                    || crate::package_ref::cask_token(name) == Some(requested.as_str())
-            }),
+        .map(|requested| {
+            let native = upkg::catalog::resolve_one(CATALOG_KEY, requested);
+            Checked {
+                requested: requested.clone(),
+                installed: installed.iter().any(|name| {
+                    *name == native || crate::package_ref::cask_token(name) == Some(native.as_str())
+                }),
+                native,
+            }
         })
         .collect())
 }
@@ -115,3 +129,6 @@ pub fn list_native() -> Result<(), UpkgError> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

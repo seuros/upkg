@@ -21,15 +21,25 @@
 #   3. Exact match only. Lookups are by the literal canonical key; there is
 #      no fuzzy matching, on purpose.
 #
-# Backend keys: apt, dnf, yum, pacman, zypper, opkg, freebsd, rvn, termux,
-# winget, choco. Omit a key when you cannot verify that manager's name;
-# upkg falls through to the canonical name verbatim.
+# Backend keys: apt, dnf, yum, pacman, zypper, apk, opkg, freebsd, rvn,
+# termux, brew (the macOS engine, Homebrew formula names), winget, choco.
+# Omit a key when you cannot verify that manager's name; upkg falls through
+# to the canonical name verbatim.
+#
+# Name the package that ships the thing (protoc, headers), not one that
+# merely `Provides:` it: install may follow a provide, but `upkg check`
+# asks rpm and pacman by package name, and they don't.
 
 [libpq-dev]
 upstream = "https://www.postgresql.org"
 apt = "libpq-dev"
 dnf = "libpq-devel"
 pacman = "postgresql-libs"
+# openSUSE's unversioned meta package, pulling the default major's -devel.
+zypper = "postgresql-devel"
+# Termux's `libpq` subpackage carries only the shared library.
+termux = "postgresql"
+brew = "libpq"
 
 [libssl-dev]
 upstream = "https://www.openssl.org"
@@ -37,6 +47,11 @@ apt = "libssl-dev"
 dnf = "openssl-devel"
 pacman = "openssl"
 zypper = "libopenssl-devel"
+apk = "openssl-dev"
+termux = "openssl"
+brew = "openssl@3"
+# No freebsd key: base ships OpenSSL and its headers. security/openssl is a
+# second, newer copy, not the headers for the first.
 
 [zlib1g-dev]
 upstream = "https://www.zlib.net"
@@ -51,3 +66,40 @@ apt = "libffi-dev"
 dnf = "libffi-devel"
 pacman = "libffi"
 zypper = "libffi-devel"
+
+[libsqlite3-dev]
+upstream = "https://www.sqlite.org"
+apt = "libsqlite3-dev"
+dnf = "sqlite-devel"
+pacman = "sqlite"
+zypper = "sqlite3-devel"
+apk = "sqlite-dev"
+freebsd = "sqlite3"
+termux = "libsqlite"
+brew = "sqlite"
+
+# The compiler, protoc. Not the runtime library, whose names diverge again.
+[protobuf-compiler]
+upstream = "https://protobuf.dev"
+apt = "protobuf-compiler"
+dnf = "protobuf-compiler"
+pacman = "protobuf"
+# openSUSE ships protoc in the -devel package.
+zypper = "protobuf-devel"
+apk = "protoc"
+freebsd = "protobuf"
+termux = "protobuf"
+brew = "protobuf"
+
+# pkgconf is the pkg-config everyone ships now; Debian's and Ubuntu's
+# `pkg-config` is a transitional package for it (Ubuntu 22.04 still ships
+# freedesktop's original, same command).
+[pkg-config]
+upstream = "https://github.com/pkgconf/pkgconf"
+apt = "pkg-config"
+dnf = "pkgconf-pkg-config"
+pacman = "pkgconf"
+zypper = "pkgconf-pkg-config"
+apk = "pkgconf"
+freebsd = "pkgconf"
+brew = "pkgconf"

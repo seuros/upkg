@@ -11,7 +11,7 @@
 //!
 //! Backends are named by their catalog key: `apt`, `dnf`, `yum`, `pacman`,
 //! `zypper`, `apk`, `opkg`, `freebsd` (`DragonFly` too), `rvn`, `termux`,
-//! `winget`, `choco`.
+//! `brew` (the macOS engine), `winget`, `choco`.
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
