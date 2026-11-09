@@ -3,6 +3,7 @@
   "packages": {
     ".": {
       "component": "upkg",
+      "bump-minor-pre-major": true,
       "extra-files": [
         "README.md",
         "src/lib.rs"
