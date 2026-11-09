@@ -2,7 +2,11 @@
   "release-type": "rust",
   "packages": {
     ".": {
-      "component": "upkg"
+      "component": "upkg",
+      "extra-files": [
+        "README.md",
+        "src/lib.rs"
+      ]
     }
   }
 }

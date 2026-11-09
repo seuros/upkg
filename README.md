@@ -343,9 +343,11 @@ answer is "not required", with a reason saying it can't tell.
 The same verbs are a Rust API, without the CLI's dependencies: the `host`
 feature needs only std, serde and a TOML parser.
 
+<!-- x-release-please-start-version -->
 ```toml
-upkg = { version = "0.19", default-features = false, features = ["host"] }
+upkg = { version = "0.20.0", default-features = false, features = ["host"] }
 ```
+<!-- x-release-please-end -->
 
 ```rust
 use upkg::host::{Host, Options, Privilege};
@@ -363,9 +365,15 @@ Each task returns an `Outcome`: every command run, its exit code, the last
 lines of its stdout and stderr, and what changed where the manager's summary
 says so (`None` where it doesn't). A failed command returns
 `Error::Failed`, which carries the outcome up to and including that step.
-Commands and the reboot check's file reads go through the `Runner` trait;
-`SystemRunner` runs real processes (captured, or echoed with
-`SystemRunner::echoing()`), and a test can pass its own to `Host::new`.
+Commands go through the `Runner` trait, and all a runner must do is `run`
+one. `SystemRunner` runs real processes (captured, or echoed with
+`SystemRunner::echoing()`) and answers for the running system: root or not,
+what's on `PATH`, and its files. A runner of your own (a test, a jail, a
+container) answers none of that unless it says so, so it can't quietly read
+this machine's `/etc/os-release` on behalf of another one. Lend files with
+`Runner::filesystem()`; without them, Linux detection and the reboot check
+fail with `Unsupported`, and an install fetches apt's index rather than
+guess whether it has one.
 
 `upkg.toml` is a library call away too, for tools that prepare machines from
 a repository (a CI runner building a job's container or jail, say):
@@ -374,24 +382,47 @@ a repository (a CI runner building a job's container or jail, say):
 use upkg::host::{Host, Options, Privilege};
 use upkg::manifest::Manifest;
 
-let manifest = Manifest::load("upkg.toml")?;
+let Some(manifest) = Manifest::load_from_dir(&checkout)? else {
+    return Ok(()); // no upkg.toml
+};
 let host = Host::detect()?;
 let packages = manifest.resolve(host.platform().catalog_key());
 let key = packages.key(); // "freebsd:pkgconf protobuf"
+let image = format!("base-{}", packages.digest()); // "base-3ce9857d"
+for package in host.missing(&packages)? {
+    eprintln!("missing: {package}"); // "protobuf-compiler (protobuf)"
+}
 let options = Options { dry_run: false, privilege: Privilege::AlreadyRoot };
 host.install(&packages, &options)?;
 ```
+
+`Manifest::load_from_dir` reads a checkout's `upkg.toml` the way a root
+process should read anything a stranger wrote: a regular file or `None`,
+never a symlink, at most 64 KiB, and errors that say where and what (line,
+column, a key name) without quoting the file. It's what `upkg install` and
+`upkg check` use for `./upkg.toml`. `Manifest::load` follows the path it's
+given, for a path someone chose (`--manifest PATH`).
+
+`Host::status` asks the package database whether each package is installed,
+with the queries `upkg check` makes: no root, no changes. `Host::missing` is
+the short version.
 
 `resolve` takes any catalog key, so the set can be worked out before the
 machine exists: `Platform::FreeBsd { pkgbase: false }.catalog_key()`, or
 `Platform::from_os_release(..)` for a container image. A `PackageSet` holds
 native names, sorted and deduplicated, and serializes as
-`{"backend", "packages"}` to cross into a root helper. Its `key()` is the
+`{"backend", "packages"}` to cross into a root helper. `entries()` pairs each
+name asked for with its native one (`protobuf-compiler` and `protobuf`), for
+messages; the requested names don't cross serde, and two spellings of one
+set are still one set. Its `key()` is the
 backend, a colon, and those names joined by spaces: equal sets, equal keys,
 whatever order the file used. The format is stable. It changes when the
 catalog maps a name differently, which is a different set of packages and
 should be a different cache entry; it does not identify the distribution
-release, so fold the base image's identity in yourself.
+release, so fold the base image's identity in yourself. `digest()` is the key
+in eight hex digits (32-bit FNV-1a of its bytes), stable the same way, for
+names that must stay short; 32 bits collide, so keep the set next to whatever
+the digest names and compare before trusting it.
 
 `Host::install` is unattended: apt-get with debconf silenced (and
 `apt-get update` first when apt never fetched an index, as in a fresh
