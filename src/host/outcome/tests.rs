@@ -99,4 +99,5 @@ fn tasks_name_their_command() {
     assert_eq!(Task::Refresh.as_str(), "refresh");
     assert_eq!(Task::FullUpgrade.as_str(), "upgrade --full");
     assert_eq!(Task::Cleanup.as_str(), "cleanup");
+    assert_eq!(Task::Install.as_str(), "install");
 }

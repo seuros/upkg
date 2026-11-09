@@ -297,3 +297,116 @@ fn detect_finds_a_platform_or_says_unsupported() {
         Err(other) => panic!("{other}"),
     }
 }
+
+fn wanted(backend: &str) -> PackageSet {
+    let canonical = ["protobuf-compiler".to_string(), "pkg-config".to_string()];
+    PackageSet::resolve(backend, &canonical)
+}
+
+const ROOT_APT_INSTALL: &str = "DEBIAN_FRONTEND=noninteractive apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y pkg-config protobuf-compiler";
+
+#[test]
+fn install_dry_run_plans_native_names_and_runs_nothing() {
+    let host = Host::new(FREEBSD, Fake::default());
+    let options = Options {
+        dry_run: true,
+        privilege: Privilege::Sudo,
+    };
+    let outcome = host.install(&wanted("freebsd"), &options).unwrap();
+    assert_eq!(host.runner.ran(), Vec::<String>::new());
+    assert_eq!(outcome.task, Task::Install);
+    assert_eq!(outcome.manager, "pkg");
+    assert_eq!(outcome.steps.len(), 1);
+    assert_eq!(outcome.steps[0].state, StepState::Planned);
+    assert_eq!(
+        outcome.steps[0].command.as_deref(),
+        Some("sudo ASSUME_ALWAYS_YES=yes pkg install -y pkgconf protobuf")
+    );
+}
+
+#[test]
+fn install_as_root_fetches_a_missing_apt_index_first() {
+    let host = Host::new(linux(LinuxManager::Apt), Fake::default());
+    host.install(&wanted("apt"), &ROOT).unwrap();
+    assert_eq!(host.runner.ran(), ["apt-get update", ROOT_APT_INSTALL]);
+}
+
+#[test]
+fn install_skips_the_index_apt_already_has() {
+    let fake = Fake::default().dir(
+        "/var/lib/apt/lists",
+        &[
+            "lock",
+            "deb.debian.org_debian_dists_trixie_main_binary-amd64_Packages.lz4",
+        ],
+    );
+    let host = Host::new(linux(LinuxManager::Apt), fake);
+    host.install(&wanted("apt"), &ROOT).unwrap();
+    assert_eq!(host.runner.ran(), [ROOT_APT_INSTALL]);
+}
+
+#[test]
+fn install_counts_what_it_installed() {
+    let fake = Fake::default()
+        .dir("/var/lib/apt/lists", &["x_Packages"])
+        .answer(
+            ROOT_APT_INSTALL,
+            exit(
+                0,
+                "0 upgraded, 4 newly installed, 0 to remove and 0 not upgraded.\n",
+            ),
+        );
+    let host = Host::new(linux(LinuxManager::Apt), fake);
+    let outcome = host.install(&wanted("apt"), &ROOT).unwrap();
+    assert_eq!(outcome.changed(), Some(true));
+    assert_eq!(
+        outcome.changes(),
+        Some(Changes {
+            installed: 4,
+            ..Changes::default()
+        })
+    );
+}
+
+#[test]
+fn install_failure_carries_the_outcome() {
+    let fake = Fake::default().answer(
+        "pacman -S --needed --noconfirm pkgconf protobuf",
+        exit(1, "error: target not found: protobuf\n"),
+    );
+    let host = Host::new(linux(LinuxManager::Pacman), fake);
+    let Err(Error::Failed { code, outcome, .. }) = host.install(&wanted("pacman"), &ROOT) else {
+        panic!("a failed install must be Error::Failed");
+    };
+    assert_eq!(code, Some(1));
+    assert_eq!(outcome.task, Task::Install);
+    assert_eq!(outcome.steps[0].state, StepState::Failed);
+}
+
+#[test]
+fn install_refuses_packages_resolved_for_another_backend() {
+    let host = Host::new(linux(LinuxManager::Apk), Fake::default());
+    let Err(Error::WrongBackend {
+        host: key,
+        packages,
+    }) = host.install(&wanted("apt"), &ROOT)
+    else {
+        panic!("apt's names must not reach apk");
+    };
+    assert_eq!((key, packages.as_str()), ("apk", "apt"));
+    assert_eq!(host.runner.ran(), Vec::<String>::new());
+}
+
+#[test]
+fn install_of_nothing_runs_nothing() {
+    let host = Host::new(FREEBSD, Fake::default());
+    let outcome = host
+        .install(&PackageSet::resolve("freebsd", &[]), &ROOT)
+        .unwrap();
+    assert_eq!(host.runner.ran(), Vec::<String>::new());
+    assert_eq!(outcome.changed(), Some(false));
+    let StepState::Note { text } = &outcome.steps[0].state else {
+        panic!("an empty install is a note");
+    };
+    assert_eq!(text, "no packages to install");
+}

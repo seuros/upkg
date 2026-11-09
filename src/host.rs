@@ -34,6 +34,7 @@ pub use reboot::RebootStatus;
 pub use runner::{Execution, Runner, SystemRunner};
 
 pub use crate::command::{CommandSpec, Privilege};
+use crate::manifest::PackageSet;
 
 use changes::count;
 use outcome::tail;
@@ -133,12 +134,43 @@ impl<R: Runner> Host<R> {
         reboot::check(self.platform, &self.runner)
     }
 
+    /// Installs `packages`, unattended: apt fetches its index first when it
+    /// never has (a fresh container), and pkg bootstraps itself if it must
+    /// (a fresh jail). Resolve the set for this host with
+    /// `manifest.resolve(host.platform().catalog_key())`; an empty set runs
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::WrongBackend`] when `packages` were resolved for another
+    /// backend, or as [`Host::refresh`].
+    pub fn install(&self, packages: &PackageSet, options: &Options) -> Result<Outcome, Error> {
+        let host = self.platform.catalog_key();
+        if packages.backend() != host {
+            return Err(Error::WrongBackend {
+                host,
+                packages: packages.backend().to_string(),
+            });
+        }
+        let steps = if packages.is_empty() {
+            vec![Step::Note("no packages to install")]
+        } else {
+            steps::install(self.platform, packages.packages(), self.needs_index())
+        };
+        self.run_steps(Task::Install, steps, *options)
+    }
+
     /// Runs `task`, stopping at the first failed step.
     ///
     /// # Errors
     ///
-    /// As [`Host::refresh`].
+    /// As [`Host::refresh`]; [`Error::Unsupported`] for [`Task::Install`],
+    /// which takes packages ([`Host::install`]).
     pub fn perform(&self, task: Task, options: &Options) -> Result<Outcome, Error> {
+        self.run_steps(task, steps::plan(self.platform, task)?, *options)
+    }
+
+    fn run_steps(&self, task: Task, steps: Vec<Step>, options: Options) -> Result<Outcome, Error> {
         let privilege = self.privilege(options.privilege);
         let mut outcome = Outcome {
             task,
@@ -146,10 +178,25 @@ impl<R: Runner> Host<R> {
             dry_run: options.dry_run,
             steps: Vec::new(),
         };
-        for step in steps::plan(self.platform, task)? {
+        for step in steps {
             self.step(step, privilege, options.dry_run, &mut outcome)?;
         }
         Ok(outcome)
+    }
+
+    /// Whether apt has never fetched a package list: apt names them
+    /// `<repo>_Packages`, plus `.lz4`/`.gz` when compressed.
+    fn needs_index(&self) -> bool {
+        matches!(
+            self.platform,
+            Platform::Linux {
+                manager: LinuxManager::Apt,
+                ..
+            }
+        ) && !self
+            .runner
+            .read_dir(std::path::Path::new(APT_LISTS))
+            .is_ok_and(|names| names.iter().any(|name| name.contains("_Packages")))
     }
 
     fn privilege(&self, requested: Privilege) -> Privilege {
@@ -288,6 +335,9 @@ impl<R: Runner> Host<R> {
         })
     }
 }
+
+/// Where apt keeps downloaded package lists; container images ship it empty.
+const APT_LISTS: &str = "/var/lib/apt/lists";
 
 /// Appends a step that ran; turns a failed one into [`Error::Failed`].
 fn record(

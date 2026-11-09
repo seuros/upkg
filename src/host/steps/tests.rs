@@ -193,3 +193,65 @@ fn every_privileged_step_escalates_through_privilege() {
         }
     }
 }
+
+fn install_lines(platform: Platform, fetch_index: bool) -> Vec<String> {
+    let packages = ["pkgconf".to_string(), "protobuf".to_string()];
+    install(platform, &packages, fetch_index)
+        .into_iter()
+        .map(|step| match step {
+            Step::Run { spec, .. } => spec.render(),
+            other => panic!("install plans only commands, got {other:?}"),
+        })
+        .collect()
+}
+
+#[rstest]
+#[case(LinuxManager::Dnf, "sudo dnf install -y pkgconf protobuf")]
+#[case(LinuxManager::Yum, "sudo yum install -y pkgconf protobuf")]
+#[case(
+    LinuxManager::Pacman,
+    "sudo pacman -S --needed --noconfirm pkgconf protobuf"
+)]
+#[case(
+    LinuxManager::Zypper,
+    "sudo zypper --non-interactive install pkgconf protobuf"
+)]
+#[case(LinuxManager::Apk, "sudo apk add --update-cache pkgconf protobuf")]
+#[case(LinuxManager::Opkg, "opkg install pkgconf protobuf")]
+fn install_is_one_unattended_command(#[case] manager: LinuxManager, #[case] expected: &str) {
+    assert_eq!(install_lines(linux(manager), false), [expected]);
+}
+
+#[test]
+fn apt_installs_unattended_and_fetches_a_missing_index() {
+    let install = format!("{APT_ENV} install -y pkgconf protobuf");
+    assert_eq!(
+        install_lines(linux(LinuxManager::Apt), false),
+        std::slice::from_ref(&install)
+    );
+    assert_eq!(
+        install_lines(linux(LinuxManager::Apt), true),
+        ["sudo apt-get update".to_string(), install]
+    );
+}
+
+#[rstest]
+#[case(Platform::FreeBsd { pkgbase: false })]
+#[case(Platform::FreeBsd { pkgbase: true })]
+#[case(Platform::DragonFly)]
+fn pkg_installs_without_asking_even_to_bootstrap(#[case] platform: Platform) {
+    assert_eq!(
+        install_lines(platform, false),
+        ["sudo ASSUME_ALWAYS_YES=yes pkg install -y pkgconf protobuf"]
+    );
+}
+
+#[test]
+fn install_task_has_no_plan_without_packages() {
+    for platform in [linux(LinuxManager::Apt), Platform::DragonFly] {
+        let Err(Error::Unsupported(message)) = plan(platform, Task::Install) else {
+            panic!("Task::Install must be refused on {platform:?}");
+        };
+        assert!(message.contains("Host::install"), "{message}");
+    }
+}

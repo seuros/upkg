@@ -2,8 +2,11 @@
 //!
 //! With the `host` feature, [`host`] keeps a Linux or FreeBSD machine
 //! current: refresh metadata, upgrade everything (kernels and base system
-//! included), clean up, and tell whether a reboot is due. It needs nothing
-//! beyond std and serde:
+//! included), clean up, and tell whether a reboot is due. [`manifest`] reads
+//! a project's `upkg.toml` and resolves it through the [`catalog`] into the
+//! native names one backend installs, with a stable key for that set, and
+//! [`host::Host::install`] installs them. It needs nothing beyond std, serde
+//! and a TOML parser:
 //!
 //! ```toml
 //! upkg = { version = "0.19", default-features = false, features = ["host"] }
@@ -17,3 +20,5 @@ pub mod catalog;
 pub mod command;
 #[cfg(feature = "host")]
 pub mod host;
+#[cfg(feature = "host")]
+pub mod manifest;

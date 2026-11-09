@@ -80,3 +80,18 @@ fn pkgbase_is_uname_owned_by_a_package() {
     assert!(pkgbase(&Pkg(Some(0))));
     assert!(!pkgbase(&Pkg(Some(1))));
 }
+
+#[rstest]
+#[case(Platform::Linux { manager: LinuxManager::Apt, rolling: false }, "apt")]
+#[case(Platform::Linux { manager: LinuxManager::Dnf, rolling: false }, "dnf")]
+#[case(Platform::Linux { manager: LinuxManager::Yum, rolling: false }, "yum")]
+#[case(Platform::Linux { manager: LinuxManager::Pacman, rolling: false }, "pacman")]
+#[case(Platform::Linux { manager: LinuxManager::Zypper, rolling: true }, "zypper")]
+#[case(Platform::Linux { manager: LinuxManager::Apk, rolling: false }, "apk")]
+#[case(Platform::Linux { manager: LinuxManager::Opkg, rolling: false }, "opkg")]
+#[case(Platform::FreeBsd { pkgbase: false }, "freebsd")]
+#[case(Platform::FreeBsd { pkgbase: true }, "freebsd")]
+#[case(Platform::DragonFly, "freebsd")]
+fn catalog_key_names_the_platforms_aliases(#[case] platform: Platform, #[case] expected: &str) {
+    assert_eq!(platform.catalog_key(), expected);
+}

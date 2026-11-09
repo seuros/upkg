@@ -78,16 +78,58 @@ fn freebsd_update(command: &str) -> Step {
 pub fn plan(platform: Platform, task: Task) -> Result<Vec<Step>, Error> {
     match platform {
         Platform::Linux { manager, rolling } => linux(manager, rolling, task),
-        Platform::FreeBsd { pkgbase } => Ok(bsd(
+        Platform::FreeBsd { pkgbase } => bsd(
             task,
             if pkgbase {
                 Base::Packaged
             } else {
                 Base::FreebsdUpdate
             },
-        )),
-        Platform::DragonFly => Ok(bsd(task, Base::Source)),
+        ),
+        Platform::DragonFly => bsd(task, Base::Source),
     }
+}
+
+/// [`Task::Install`] has no plan of its own: it needs the packages.
+const fn needs_packages() -> Error {
+    Error::Unsupported("install takes packages: use Host::install")
+}
+
+/// The steps that install `packages`, already native names, unattended.
+/// `fetch_index` runs `apt-get update` first, for an apt that never fetched
+/// a package list (a fresh container).
+pub fn install(platform: Platform, packages: &[String], fetch_index: bool) -> Vec<Step> {
+    use LinuxManager::{Apk, Apt, Dnf, Opkg, Pacman, Yum, Zypper};
+
+    let (spec, counter) = match platform {
+        Platform::Linux { manager, .. } => match manager {
+            Apt => (apt_get(&["install", "-y"]), Counter::Apt),
+            Dnf | Yum => (sudo(manager.name(), &["install", "-y"]), Counter::Dnf),
+            // --needed: what is installed stays as is.
+            Pacman => (
+                sudo("pacman", &["-S", "--needed", "--noconfirm"]),
+                Counter::Pacman(Direction::Installed),
+            ),
+            Zypper => (
+                sudo("zypper", &["--non-interactive", "install"]),
+                Counter::Zypper,
+            ),
+            Opkg => (plain("opkg", &["install"]), Counter::Unknown),
+            // Alpine images ship without an index; --update-cache fetches it.
+            Apk => (sudo("apk", &["add", "--update-cache"]), Counter::Apk),
+        },
+        // ASSUME_ALWAYS_YES also answers pkg's own bootstrap in a fresh jail.
+        Platform::FreeBsd { .. } | Platform::DragonFly => (
+            sudo("pkg", &["install", "-y"]).env("ASSUME_ALWAYS_YES", "yes"),
+            Counter::Pkg,
+        ),
+    };
+    let mut steps = Vec::with_capacity(2);
+    if fetch_index {
+        steps.push(run(sudo("apt-get", &["update"]), Counter::Nothing));
+    }
+    steps.push(run(spec.arguments(packages.iter().cloned()), counter));
+    steps
 }
 
 fn linux(manager: LinuxManager, rolling: bool, task: Task) -> Result<Vec<Step>, Error> {
@@ -168,6 +210,7 @@ fn linux(manager: LinuxManager, rolling: bool, task: Task) -> Result<Vec<Step>, 
         (Task::Cleanup, Opkg) => vec![Step::Note(
             "opkg keeps no package cache and tracks no orphans; nothing to clean",
         )],
+        (Task::Install, _) => return Err(needs_packages()),
     };
     Ok(steps)
 }
@@ -187,8 +230,8 @@ fn pkg(args: &[&str], counter: Counter) -> Step {
     run(sudo("pkg", args), counter)
 }
 
-fn bsd(task: Task, base: Base) -> Vec<Step> {
-    match task {
+fn bsd(task: Task, base: Base) -> Result<Vec<Step>, Error> {
+    let steps = match task {
         Task::Refresh => vec![pkg(&["update"], Counter::Nothing)],
         Task::FullUpgrade => {
             let mut steps = vec![pkg(&["upgrade", "-y"], Counter::Pkg)];
@@ -209,7 +252,9 @@ fn bsd(task: Task, base: Base) -> Vec<Step> {
             pkg(&["autoremove", "-y"], Counter::Pkg),
             pkg(&["clean", "-ay"], Counter::Nothing),
         ],
-    }
+        Task::Install => return Err(needs_packages()),
+    };
+    Ok(steps)
 }
 
 #[cfg(test)]

@@ -137,6 +137,17 @@ impl Platform {
         }
     }
 
+    /// The key this platform's names go by in the alias catalog
+    /// ([`crate::catalog`]): the Linux manager's name, `freebsd` for both
+    /// BSDs (`DragonFly`'s `DPorts` keep FreeBSD's package names).
+    #[must_use]
+    pub const fn catalog_key(&self) -> &'static str {
+        match self {
+            Self::Linux { manager, .. } => manager.name(),
+            Self::FreeBsd { .. } | Self::DragonFly => "freebsd",
+        }
+    }
+
     /// The running system's platform. Ravenports is not considered: it
     /// manages `/raven`, not the host.
     ///

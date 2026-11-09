@@ -23,6 +23,13 @@ pub enum Error {
     },
     /// The reboot check could not reach an answer.
     Probe(String),
+    /// Packages resolved for one backend were handed to a host of another.
+    WrongBackend {
+        /// The host's catalog key.
+        host: &'static str,
+        /// The key the packages were resolved for.
+        packages: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -37,6 +44,10 @@ impl fmt::Display for Error {
             } => write!(f, "`{command}` exited with status code {code}"),
             Self::Failed { command, .. } => write!(f, "`{command}` was killed by a signal"),
             Self::Probe(message) => write!(f, "reboot check failed: {message}"),
+            Self::WrongBackend { host, packages } => write!(
+                f,
+                "packages resolved for `{packages}` cannot be installed on a `{host}` host"
+            ),
         }
     }
 }

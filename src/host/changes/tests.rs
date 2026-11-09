@@ -46,6 +46,16 @@ const fn changes(upgraded: u32, installed: u32, removed: u32) -> Changes {
     "checking dependencies...\n\nPackages (2) a-1  b-2\n",
     Some(changes(0, 0, 2))
 )]
+#[case::pacman_install(
+    Counter::Pacman(Direction::Installed),
+    "resolving dependencies...\n\nPackages (2) pkgconf-2.4  protobuf-30.2\n",
+    Some(changes(0, 2, 0))
+)]
+#[case::opkg_unknown(
+    Counter::Unknown,
+    "Installing protobuf (3.21) to root...\nConfiguring protobuf.\n",
+    None
+)]
 #[case::pacman_nothing(
     Counter::Pacman(Direction::Upgraded),
     ":: Starting full system upgrade...\n there is nothing to do\n",

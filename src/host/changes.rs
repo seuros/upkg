@@ -46,12 +46,15 @@ pub enum Counter {
     Pkg,
     /// `freebsd-update install`: base changed unless it had nothing to do.
     FreebsdUpdate,
+    /// Output that doesn't say what changed (opkg).
+    Unknown,
 }
 
 /// Which way a pacman transaction went.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Upgraded,
+    Installed,
     Removed,
 }
 
@@ -70,6 +73,7 @@ pub fn count(counter: Counter, stdout: &str, settled: bool) -> (Option<bool>, Op
         Counter::FreebsdUpdate if settled => Some(Changes::default()),
         // Base files changed, but they are not packages.
         Counter::FreebsdUpdate => return (Some(true), None),
+        Counter::Unknown => None,
     };
     (changes.map(|changes| !changes.is_empty()), changes)
 }
@@ -147,6 +151,10 @@ fn pacman(stdout: &str, direction: Direction) -> Option<Changes> {
     Some(match direction {
         Direction::Upgraded => Changes {
             upgraded: count,
+            ..Changes::default()
+        },
+        Direction::Installed => Changes {
+            installed: count,
             ..Changes::default()
         },
         Direction::Removed => Changes {

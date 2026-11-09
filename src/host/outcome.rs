@@ -14,6 +14,8 @@ pub enum Task {
     FullUpgrade,
     /// Remove orphaned packages and clear the package cache.
     Cleanup,
+    /// Install packages ([`Host::install`](super::Host::install)).
+    Install,
 }
 
 impl Task {
@@ -24,6 +26,7 @@ impl Task {
             Self::Refresh => "refresh",
             Self::FullUpgrade => "upgrade --full",
             Self::Cleanup => "cleanup",
+            Self::Install => "install",
         }
     }
 }
