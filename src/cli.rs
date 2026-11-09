@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 use crate::error::UpkgError;
 
@@ -36,17 +37,30 @@ impl PackageAction {
     }
 }
 
+/// Where `install` and `check` read packages when none are named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManifestSource {
+    /// `./upkg.toml`, and only there: no search up the tree.
+    WorkingDir,
+    /// `--manifest PATH`.
+    Path(PathBuf),
+}
+
 #[derive(Debug)]
 pub enum CommandKind {
     Package {
         action: PackageAction,
+        /// Empty exactly when `manifest` is set.
         packages: Vec<String>,
+        /// Install only: no names given, so read them from here.
+        manifest: Option<ManifestSource>,
         dry_run: bool,
         kind: PackageKind,
     },
     List,
     Check {
         packages: Vec<String>,
+        manifest: Option<ManifestSource>,
     },
     Search {
         query: String,
@@ -67,6 +81,16 @@ pub enum CommandKind {
         dry_run: bool,
     },
     Shaman,
+}
+
+/// A usage error for `upkg <command>` (exit 2), worded like usage-rs's own.
+pub fn usage_error(command: &str, problem: &str) -> UpkgError {
+    UpkgError::Usage {
+        message: format!(
+            "error: {problem}\n\nFor more information, try 'upkg {command} --help'.\n"
+        ),
+        code: 2,
+    }
 }
 
 impl Cli {

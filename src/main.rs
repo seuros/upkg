@@ -32,13 +32,15 @@ mod types;
 #[cfg(target_os = "macos")]
 pub use types::*;
 
+use std::path::Path;
 use std::process::ExitCode;
 
 #[cfg(not(target_os = "macos"))]
 use backend::Backend;
-use cli::{Cli, CommandKind, PackageAction, PackageKind};
+use cli::{Cli, CommandKind, ManifestSource, PackageAction, PackageKind};
 use error::UpkgError;
 use upkg::host::{Host, Options, Privilege, StepState, SystemRunner, Task};
+use upkg::manifest::{self, Manifest};
 
 fn main() -> ExitCode {
     match run() {
@@ -61,12 +63,37 @@ fn run() -> Result<ExitCode, UpkgError> {
     match cli.command {
         CommandKind::Package {
             action,
+            manifest: Some(source),
+            dry_run,
+            kind,
+            ..
+        } => {
+            let packages = manifest_packages("install", &source)?;
+            if packages.is_empty() {
+                eprintln!("note: {} lists no packages", source_path(&source).display());
+                return Ok(ExitCode::SUCCESS);
+            }
+            package(action, &packages, dry_run, kind)
+        }
+        CommandKind::Package {
+            action,
             packages,
+            manifest: None,
             dry_run,
             kind,
         } => package(action, &packages, dry_run, kind),
         CommandKind::List => list(),
-        CommandKind::Check { packages } => check_packages(&packages),
+        CommandKind::Check { packages, manifest } => match manifest {
+            Some(source) => {
+                let packages = manifest_packages("check", &source)?;
+                if packages.is_empty() {
+                    // Nothing to ask, so no backend to find.
+                    return Ok(ExitCode::SUCCESS);
+                }
+                check_packages(&packages)
+            }
+            None => check_packages(&packages),
+        },
         CommandKind::Search {
             query,
             exact,
@@ -81,6 +108,31 @@ fn run() -> Result<ExitCode, UpkgError> {
         }
         CommandKind::SelfUpgrade { dry_run } => self_upgrade(dry_run),
         CommandKind::Shaman => shaman(),
+    }
+}
+
+fn source_path(source: &ManifestSource) -> &Path {
+    match source {
+        ManifestSource::WorkingDir => Path::new(manifest::FILE_NAME),
+        ManifestSource::Path(path) => path,
+    }
+}
+
+/// The names `source` lists, read before any backend is detected. No
+/// ./upkg.toml is a usage error: the command was given nothing to work on.
+fn manifest_packages(command: &str, source: &ManifestSource) -> Result<Vec<String>, UpkgError> {
+    match Manifest::load(source_path(source)) {
+        Ok(manifest) => Ok(manifest.packages().to_vec()),
+        Err(manifest::Error::Read { source: error, .. })
+            if *source == ManifestSource::WorkingDir
+                && error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            Err(cli::usage_error(
+                command,
+                "no packages named, and no upkg.toml in the current directory",
+            ))
+        }
+        Err(error) => Err(UpkgError::Manifest(error)),
     }
 }
 

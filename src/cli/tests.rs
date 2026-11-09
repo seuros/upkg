@@ -34,12 +34,13 @@ fn aliases(#[case] args: &[&str], #[case] expected: &str) {
 #[case(&[], "command")]
 #[case(&["nonesuch"], "nonesuch")]
 #[case(&["--unknown"], "--unknown")]
-#[case(&["install"], "<PACKAGES>")]
-#[case(&["install", "--app"], "<PACKAGES>")]
+#[case(&["install", "--app"], "--app needs app names")]
+#[case(&["install", "--manifest"], "--manifest")]
+#[case(&["install", "--manifest", "ci/upkg.toml", "git"], "not both")]
+#[case(&["check", "--manifest", "ci/upkg.toml", "git"], "not both")]
 #[case(&["uninstall"], "<PACKAGES>")]
 #[case(&["uninstall", "--dry-run"], "<PACKAGES>")]
 #[case(&["reinstall"], "<PACKAGES>")]
-#[case(&["check"], "<PACKAGES>")]
 #[case(&["search"], "<QUERY>")]
 #[case(&["search", "--exact"], "<QUERY>")]
 #[case(&["list", "extra"], "extra")]
@@ -99,6 +100,7 @@ fn package_command(
     let CommandKind::Package {
         action,
         packages,
+        manifest,
         dry_run,
         kind,
     } = parse(args).expect("parse should succeed").command
@@ -107,6 +109,7 @@ fn package_command(
     };
     assert_eq!(action, expected_action);
     assert_eq!(packages, expected_packages);
+    assert_eq!(manifest, None);
     assert_eq!(dry_run, expected_dry_run);
     assert_eq!(kind, expected_kind);
 }
@@ -136,7 +139,7 @@ fn unknown_flags_remain_positional_values(#[case] command: &str) {
     let cli = parse(&[command, "--unknown"]).unwrap();
     match cli.command {
         CommandKind::Package { packages, .. } => assert_eq!(packages, ["--unknown"]),
-        CommandKind::Check { packages } => assert_eq!(packages, ["--unknown"]),
+        CommandKind::Check { packages, .. } => assert_eq!(packages, ["--unknown"]),
         CommandKind::Search { query, .. } => assert_eq!(query, "--unknown"),
         _ => panic!("unexpected command"),
     }
@@ -192,7 +195,8 @@ fn self_upgrade_command(#[case] args: &[&str], #[case] expected_dry_run: bool) {
 
 #[test]
 fn check_keeps_package_order() {
-    let CommandKind::Check { packages } = parse(&["check", "git", "libpq-dev"]).unwrap().command
+    let CommandKind::Check { packages, .. } =
+        parse(&["check", "git", "libpq-dev"]).unwrap().command
     else {
         panic!("expected check command");
     };
@@ -266,4 +270,70 @@ fn maintenance_help(#[case] args: &[&str], #[case] expected: &str) {
         panic!("expected help");
     };
     assert!(text.contains(expected), "{text}");
+}
+
+#[rstest]
+#[case(&["install"], Some(ManifestSource::WorkingDir))]
+#[case(&["install", "--dry-run"], Some(ManifestSource::WorkingDir))]
+#[case(
+    &["install", "--manifest", "ci/upkg.toml"],
+    Some(ManifestSource::Path("ci/upkg.toml".into()))
+)]
+#[case(&["install", "git"], None)]
+// After `--`, `--manifest` is a package name like any other.
+#[case(&["install", "--", "--manifest"], None)]
+fn install_reads_a_manifest_only_without_names(
+    #[case] args: &[&str],
+    #[case] expected: Option<ManifestSource>,
+) {
+    let CommandKind::Package {
+        action: PackageAction::Install,
+        packages,
+        manifest,
+        ..
+    } = parse(args).unwrap().command
+    else {
+        panic!("expected install");
+    };
+    assert_eq!(packages.is_empty(), expected.is_some(), "{packages:?}");
+    assert_eq!(manifest, expected);
+}
+
+#[rstest]
+#[case(&["check"], Some(ManifestSource::WorkingDir))]
+#[case(
+    &["check", "--manifest", "/srv/app/upkg.toml"],
+    Some(ManifestSource::Path("/srv/app/upkg.toml".into()))
+)]
+#[case(&["check", "git"], None)]
+fn check_reads_a_manifest_only_without_names(
+    #[case] args: &[&str],
+    #[case] expected: Option<ManifestSource>,
+) {
+    let CommandKind::Check { manifest, .. } = parse(args).unwrap().command else {
+        panic!("expected check");
+    };
+    assert_eq!(manifest, expected);
+}
+
+#[test]
+fn other_package_commands_never_read_a_manifest() {
+    for args in [
+        &["upgrade"][..],
+        &["uninstall", "git"],
+        &["reinstall", "git"],
+    ] {
+        let CommandKind::Package { manifest, .. } = parse(args).unwrap().command else {
+            panic!("expected a package command for {args:?}");
+        };
+        assert_eq!(manifest, None, "{args:?}");
+    }
+    // Unknown flags are package names there, as they always were.
+    let CommandKind::Package { packages, .. } = parse(&["uninstall", "--manifest", "upkg.toml"])
+        .unwrap()
+        .command
+    else {
+        panic!("expected uninstall");
+    };
+    assert_eq!(packages, ["--manifest", "upkg.toml"]);
 }

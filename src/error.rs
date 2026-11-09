@@ -19,6 +19,8 @@ pub enum UpkgError {
     },
     /// From the host-maintenance library.
     Host(upkg::host::Error),
+    /// An upkg.toml that can't be read or isn't valid.
+    Manifest(upkg::manifest::Error),
 }
 
 impl fmt::Display for UpkgError {
@@ -35,6 +37,7 @@ impl fmt::Display for UpkgError {
                 write!(f, "`{command}` exited with status code {code}")
             }
             Self::Host(err) => write!(f, "{err}"),
+            Self::Manifest(err) => write!(f, "{err}"),
         }
     }
 }

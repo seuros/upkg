@@ -1,6 +1,7 @@
 use std::ffi::OsString;
+use std::path::PathBuf;
 
-use super::{Cli, CommandKind, PackageAction, PackageKind};
+use super::{Cli, CommandKind, ManifestSource, PackageAction, PackageKind, usage_error};
 use crate::error::UpkgError;
 use upkg::host::Task;
 use usage::embedded::Outcome;
@@ -15,6 +16,7 @@ use usage_rs as usage;
     completion,
     spec_endpoint = false,
     example = "upkg install curl git",
+    example = "upkg install --dry-run",
     example = "upkg install --app ghostty",
     example = "upkg upgrade --dry-run neovim",
     example = "upkg search --exact git",
@@ -29,9 +31,9 @@ struct Arguments {
 
 #[derive(usage::Subcommands)]
 enum Commands {
-    /// Install one or more packages
-    #[usage(alias = "i")]
-    Install(RequiredPackages),
+    /// Install packages, or what ./upkg.toml lists when none are named
+    #[usage(alias = "i", example = "upkg install --manifest ci/upkg.toml")]
+    Install(InstallPackages),
     /// Uninstall one or more packages
     #[usage(alias = "remove", alias = "rm")]
     Uninstall(RequiredPackages),
@@ -43,8 +45,8 @@ enum Commands {
     /// List installed packages
     #[usage(alias = "ls")]
     List,
-    /// Check whether packages are installed; exits 1 when any is missing
-    #[usage(example = "upkg check git libpq-dev")]
+    /// Check whether packages (or what ./upkg.toml lists) are installed; exits 1 when any is missing
+    #[usage(example = "upkg check git libpq-dev", example = "upkg check")]
     Check(CheckPackages),
     /// Search for packages
     #[usage(alias = "s")]
@@ -91,6 +93,18 @@ struct RequiredPackages {
 
 #[derive(usage::Args)]
 #[usage(unknown_flags = "value")]
+struct InstallPackages {
+    #[usage(flatten)]
+    options: PackageOptions,
+    /// Read the packages from this upkg.toml instead of ./upkg.toml
+    #[usage(long, value_name = "PATH")]
+    manifest: Option<PathBuf>,
+    /// Packages to install (omit to install what upkg.toml lists)
+    packages: Vec<String>,
+}
+
+#[derive(usage::Args)]
+#[usage(unknown_flags = "value")]
 struct OptionalPackages {
     #[usage(flatten)]
     options: PackageOptions,
@@ -118,8 +132,10 @@ struct RebootRequired {
 #[derive(usage::Args)]
 #[usage(unknown_flags = "value")]
 struct CheckPackages {
-    /// Packages to look for
-    #[usage(required = true)]
+    /// Read the packages from this upkg.toml instead of ./upkg.toml
+    #[usage(long, value_name = "PATH")]
+    manifest: Option<PathBuf>,
+    /// Packages to look for (omit to check what upkg.toml lists)
     packages: Vec<String>,
 }
 
@@ -200,12 +216,7 @@ fn upgrade(args: OptionalPackages) -> Result<CommandKind, UpkgError> {
         None
     };
     if let Some(conflict) = conflict {
-        return Err(UpkgError::Usage {
-            message: format!(
-                "error: {conflict}\n\nFor more information, try 'upkg upgrade --help'.\n"
-            ),
-            code: 2,
-        });
+        return Err(usage_error("upgrade", conflict));
     }
     Ok(CommandKind::Maintain {
         task: Task::FullUpgrade,
@@ -217,9 +228,44 @@ fn package(action: PackageAction, options: PackageOptions, packages: Vec<String>
     CommandKind::Package {
         action,
         packages,
+        manifest: None,
         dry_run: options.dry_run,
         kind: package_kind(options.app),
     }
+}
+
+/// Named packages, or else a manifest: `--manifest PATH`, or ./upkg.toml.
+fn manifest_source(
+    command: &str,
+    manifest: Option<PathBuf>,
+    packages: &[String],
+) -> Result<Option<ManifestSource>, UpkgError> {
+    match (manifest, packages.is_empty()) {
+        (Some(_), false) => Err(usage_error(
+            command,
+            "name packages or pass --manifest, not both",
+        )),
+        (Some(path), true) => Ok(Some(ManifestSource::Path(path))),
+        (None, true) => Ok(Some(ManifestSource::WorkingDir)),
+        (None, false) => Ok(None),
+    }
+}
+
+fn install(args: InstallPackages) -> Result<CommandKind, UpkgError> {
+    let manifest = manifest_source("install", args.manifest, &args.packages)?;
+    if manifest.is_some() && args.options.app {
+        return Err(usage_error(
+            "install",
+            "--app needs app names; upkg.toml lists system packages",
+        ));
+    }
+    Ok(CommandKind::Package {
+        action: PackageAction::Install,
+        packages: args.packages,
+        manifest,
+        dry_run: args.options.dry_run,
+        kind: package_kind(args.options.app),
+    })
 }
 
 pub(super) fn parse(args: impl Iterator<Item = OsString>) -> Result<Cli, UpkgError> {
@@ -245,12 +291,13 @@ pub(super) fn parse(args: impl Iterator<Item = OsString>) -> Result<Cli, UpkgErr
         }
     };
     let command = match arguments.command {
-        Commands::Install(args) => package(PackageAction::Install, args.options, args.packages),
+        Commands::Install(args) => install(args)?,
         Commands::Uninstall(args) => package(PackageAction::Uninstall, args.options, args.packages),
         Commands::Upgrade(args) => upgrade(args)?,
         Commands::Reinstall(args) => package(PackageAction::Reinstall, args.options, args.packages),
         Commands::List => CommandKind::List,
         Commands::Check(args) => CommandKind::Check {
+            manifest: manifest_source("check", args.manifest, &args.packages)?,
             packages: args.packages,
         },
         Commands::Search(args) => CommandKind::Search {
