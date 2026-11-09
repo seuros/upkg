@@ -120,20 +120,25 @@ fn source_path(source: &ManifestSource) -> &Path {
 
 /// The names `source` lists, read before any backend is detected. No
 /// ./upkg.toml is a usage error: the command was given nothing to work on.
+///
+/// `install` runs as root, often in a checkout someone else wrote, so the
+/// working directory's upkg.toml is read like any untrusted one: a regular
+/// file or nothing, never a symlink to wherever (`/dev/zero` hangs a
+/// reader, `/etc/shadow` ends up in a parse error). `--manifest PATH` is a
+/// path the operator chose, and is followed like any other argument.
 fn manifest_packages(command: &str, source: &ManifestSource) -> Result<Vec<String>, UpkgError> {
-    match Manifest::load(source_path(source)) {
-        Ok(manifest) => Ok(manifest.packages().to_vec()),
-        Err(manifest::Error::Read { source: error, .. })
-            if *source == ManifestSource::WorkingDir
-                && error.kind() == std::io::ErrorKind::NotFound =>
-        {
-            Err(cli::usage_error(
+    let manifest = match source {
+        // The empty path is the working directory, and keeps errors naming
+        // a plain `upkg.toml`.
+        ManifestSource::WorkingDir => Manifest::load_from_dir("")?.ok_or_else(|| {
+            cli::usage_error(
                 command,
                 "no packages named, and no upkg.toml in the current directory",
-            ))
-        }
-        Err(error) => Err(UpkgError::Manifest(error)),
-    }
+            )
+        })?,
+        ManifestSource::Path(path) => Manifest::load(path)?,
+    };
+    Ok(manifest.packages().to_vec())
 }
 
 fn package(

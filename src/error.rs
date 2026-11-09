@@ -51,6 +51,12 @@ impl From<upkg::host::Error> for UpkgError {
     }
 }
 
+impl From<upkg::manifest::Error> for UpkgError {
+    fn from(value: upkg::manifest::Error) -> Self {
+        Self::Manifest(value)
+    }
+}
+
 impl From<std::io::Error> for UpkgError {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)

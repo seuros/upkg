@@ -183,6 +183,24 @@ fn an_invalid_manifest_fails_before_touching_any_backend() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn a_symlinked_manifest_is_refused_before_touching_any_backend() {
+    let elsewhere = Scratch::new("symlink-target").with_manifest("packages = [\"git\"]\n");
+    let scratch = Scratch::new("symlink-manifest");
+    std::os::unix::fs::symlink(elsewhere.0.join("upkg.toml"), scratch.0.join("upkg.toml")).unwrap();
+    for args in [&["install", "--dry-run"][..], &["check"]] {
+        let output = upkg(&scratch.0, args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{args:?}: {output:?}");
+        let stderr = text(&output.stderr);
+        assert!(
+            stderr.starts_with("error: upkg.toml: is not a regular file"),
+            "{stderr}"
+        );
+    }
+}
+
 #[test]
 fn an_empty_manifest_installs_nothing_and_says_so() {
     let scratch = Scratch::new("empty-manifest").with_manifest("packages = []\n");
