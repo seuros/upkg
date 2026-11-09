@@ -345,7 +345,7 @@ feature needs only std, serde and a TOML parser.
 
 <!-- x-release-please-start-version -->
 ```toml
-upkg = { version = "0.20.0", default-features = false, features = ["host"] }
+upkg = { version = "0.21.0", default-features = false, features = ["host"] }
 ```
 <!-- x-release-please-end -->
 
