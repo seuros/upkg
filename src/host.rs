@@ -31,7 +31,7 @@ pub use error::Error;
 pub use outcome::{Outcome, StepOutcome, StepState, TAIL_LINES, Task};
 pub use platform::{LinuxManager, Platform};
 pub use reboot::RebootStatus;
-pub use runner::{Execution, Runner, SystemRunner};
+pub use runner::{Execution, Filesystem, LocalFilesystem, Runner, SystemRunner};
 
 pub use crate::command::{CommandSpec, Privilege};
 use crate::manifest::PackageSet;
@@ -185,7 +185,8 @@ impl<R: Runner> Host<R> {
     }
 
     /// Whether apt has never fetched a package list: apt names them
-    /// `<repo>_Packages`, plus `.lz4`/`.gz` when compressed.
+    /// `<repo>_Packages`, plus `.lz4`/`.gz` when compressed. A runner that
+    /// lends no files can't say, so the index is fetched.
     fn needs_index(&self) -> bool {
         matches!(
             self.platform,
@@ -193,10 +194,11 @@ impl<R: Runner> Host<R> {
                 manager: LinuxManager::Apt,
                 ..
             }
-        ) && !self
-            .runner
-            .read_dir(std::path::Path::new(APT_LISTS))
-            .is_ok_and(|names| names.iter().any(|name| name.contains("_Packages")))
+        ) && !self.runner.filesystem().is_some_and(|files| {
+            files
+                .read_dir(std::path::Path::new(APT_LISTS))
+                .is_ok_and(|names| names.iter().any(|name| name.contains("_Packages")))
+        })
     }
 
     fn privilege(&self, requested: Privilege) -> Privilege {

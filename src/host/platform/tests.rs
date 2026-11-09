@@ -95,3 +95,13 @@ fn pkgbase_is_uname_owned_by_a_package() {
 fn catalog_key_names_the_platforms_aliases(#[case] platform: Platform, #[case] expected: &str) {
     assert_eq!(platform.catalog_key(), expected);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_detection_needs_a_runner_that_lends_files() {
+    let detected = Platform::detect(&Pkg(Some(0)));
+    assert!(
+        matches!(detected, Err(Error::Unsupported(_))),
+        "{detected:?}"
+    );
+}

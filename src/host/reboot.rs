@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use super::{Error, LinuxManager, Platform, Runner};
+use super::{Error, Filesystem, LinuxManager, Platform, Runner};
 use crate::command::CommandSpec;
 
 /// The answer to "does this host need a reboot?".
@@ -66,10 +66,13 @@ const MODULE_DIRS: [&str; 2] = ["/usr/lib/modules", "/lib/modules"];
 const FREEBSD_KERNEL: &str = "/boot/kernel/kernel";
 
 pub fn check(platform: Platform, runner: &impl Runner) -> Result<RebootStatus, Error> {
+    let files = runner.filesystem().ok_or(Error::Unsupported(
+        "the reboot check reads the host's files, and this runner lends none",
+    ))?;
     let running = probe(runner, "uname", &["-r"])?;
     match platform {
-        Platform::Linux { manager, .. } => Ok(linux(manager, running, runner)),
-        Platform::FreeBsd { pkgbase } => freebsd(running, pkgbase, runner),
+        Platform::Linux { manager, .. } => Ok(linux(manager, running, runner, files)),
+        Platform::FreeBsd { pkgbase } => freebsd(running, pkgbase, runner, files),
         Platform::DragonFly => Ok(RebootStatus {
             reason: Some("cannot tell: DragonFly records no installed kernel version".into()),
             ..RebootStatus::not_required(running)
@@ -96,14 +99,19 @@ fn probe(runner: &impl Runner, program: &str, args: &[&str]) -> Result<String, E
     Ok(line.to_string())
 }
 
-fn since(runner: &impl Runner, path: &Path) -> Option<String> {
-    runner.modified(path).ok().map(rfc3339)
+fn since(files: &dyn Filesystem, path: &Path) -> Option<String> {
+    files.modified(path).ok().map(rfc3339)
 }
 
-fn linux(manager: LinuxManager, running: String, runner: &impl Runner) -> RebootStatus {
-    let kernels = Kernels::read(runner);
+fn linux(
+    manager: LinuxManager,
+    running: String,
+    runner: &impl Runner,
+    files: &dyn Filesystem,
+) -> RebootStatus {
+    let kernels = Kernels::read(files);
     match manager {
-        LinuxManager::Apt => debian(running, kernels.as_ref(), runner),
+        LinuxManager::Apt => debian(running, kernels.as_ref(), files),
         LinuxManager::Dnf | LinuxManager::Yum => match needs_restarting(manager, runner) {
             Some(Restart {
                 required: true,
@@ -128,29 +136,29 @@ fn linux(manager: LinuxManager, running: String, runner: &impl Runner) -> Reboot
                     .and_then(|kernels| kernels.newest(&running)),
                 ..RebootStatus::not_required(running)
             },
-            None => kernel_verdict(running, kernels.as_ref(), Rule::MissingOrNewer, runner),
+            None => kernel_verdict(running, kernels.as_ref(), Rule::MissingOrNewer, files),
         },
         // One kernel per package, replaced in place: only a missing module
         // tree means the running kernel is gone.
-        LinuxManager::Pacman => kernel_verdict(running, kernels.as_ref(), Rule::Missing, runner),
+        LinuxManager::Pacman => kernel_verdict(running, kernels.as_ref(), Rule::Missing, files),
         LinuxManager::Zypper | LinuxManager::Apk | LinuxManager::Opkg => {
-            kernel_verdict(running, kernels.as_ref(), Rule::MissingOrNewer, runner)
+            kernel_verdict(running, kernels.as_ref(), Rule::MissingOrNewer, files)
         }
     }
 }
 
-fn debian(running: String, kernels: Option<&Kernels>, runner: &impl Runner) -> RebootStatus {
+fn debian(running: String, kernels: Option<&Kernels>, files: &dyn Filesystem) -> RebootStatus {
     let installed_kernel = kernels
         .as_ref()
         .and_then(|kernels| kernels.newest(&running));
     let flag = Path::new(DEBIAN_FLAG);
-    if !runner.exists(flag) {
+    if !files.exists(flag) {
         return RebootStatus {
             installed_kernel,
             ..RebootStatus::not_required(running)
         };
     }
-    let packages = runner
+    let packages = files
         .read_to_string(Path::new(DEBIAN_PACKAGES))
         .map(|text| package_list(&text))
         .unwrap_or_default();
@@ -159,7 +167,7 @@ fn debian(running: String, kernels: Option<&Kernels>, runner: &impl Runner) -> R
         reason: Some(format!("{DEBIAN_FLAG} exists")),
         packages,
         installed_kernel,
-        since: since(runner, flag),
+        since: since(files, flag),
         ..RebootStatus::not_required(running)
     }
 }
@@ -220,10 +228,10 @@ struct Kernels {
 }
 
 impl Kernels {
-    fn read(runner: &impl Runner) -> Option<Self> {
+    fn read(files: &dyn Filesystem) -> Option<Self> {
         MODULE_DIRS.iter().find_map(|dir| {
             let dir = PathBuf::from(dir);
-            let releases: Vec<String> = runner
+            let releases: Vec<String> = files
                 .read_dir(&dir)
                 .ok()?
                 .into_iter()
@@ -250,7 +258,7 @@ fn kernel_verdict(
     running: String,
     kernels: Option<&Kernels>,
     rule: Rule,
-    runner: &impl Runner,
+    files: &dyn Filesystem,
 ) -> RebootStatus {
     let Some(kernels) = kernels else {
         return RebootStatus {
@@ -265,7 +273,7 @@ fn kernel_verdict(
     let verdict = verdict(&running, &kernels.releases, newest.as_deref(), rule);
     let since = verdict
         .and(newest.as_ref())
-        .and_then(|newest| since(runner, &kernels.dir.join(newest)));
+        .and_then(|newest| since(files, &kernels.dir.join(newest)));
     RebootStatus {
         required: verdict.is_some(),
         reason: verdict.map(|verdict| verdict.reason(&running, newest.as_deref(), &kernels.dir)),
@@ -370,12 +378,17 @@ fn split_chunk(text: &str) -> (&str, &str) {
     text.split_at(end)
 }
 
-fn freebsd(running: String, pkgbase: bool, runner: &impl Runner) -> Result<RebootStatus, Error> {
+fn freebsd(
+    running: String,
+    pkgbase: bool,
+    runner: &impl Runner,
+    files: &dyn Filesystem,
+) -> Result<RebootStatus, Error> {
     let installed = probe(runner, "freebsd-version", &["-k"])?;
     let pending = !pkgbase && updates_ready(runner);
     let mut status = freebsd_verdict(running, installed, pending);
     if status.required {
-        status.since = since(runner, Path::new(FREEBSD_KERNEL));
+        status.since = since(files, Path::new(FREEBSD_KERNEL));
     }
     Ok(status)
 }

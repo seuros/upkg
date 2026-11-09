@@ -37,3 +37,43 @@ fn drain_copies_what_it_captures() {
     assert_eq!(captured, b"hello");
     assert_eq!(echoed, b"hello");
 }
+
+/// A runner that only runs commands, as one driving a jail would start out.
+struct CommandsOnly;
+
+impl Runner for CommandsOnly {
+    fn run(&self, _spec: &CommandSpec) -> io::Result<Execution> {
+        Ok(Execution::default())
+    }
+}
+
+#[test]
+fn a_runner_that_only_runs_commands_knows_nothing_of_this_machine() {
+    let runner = CommandsOnly;
+    assert!(!runner.is_root());
+    // `sh` is on this machine's PATH; the runner doesn't say so.
+    assert!(!runner.has_command("sh"));
+    assert!(runner.filesystem().is_none());
+}
+
+#[test]
+fn system_runner_reads_this_machines_files() {
+    let runner = SystemRunner::new();
+    let files = runner.filesystem().expect("the running system has files");
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    assert!(files.exists(&manifest));
+    assert!(
+        files
+            .read_to_string(&manifest)
+            .unwrap()
+            .contains("name = \"upkg\"")
+    );
+    assert!(files.modified(&manifest).is_ok());
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    assert!(
+        files
+            .read_dir(&src)
+            .unwrap()
+            .contains(&"lib.rs".to_string())
+    );
+}

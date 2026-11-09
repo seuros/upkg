@@ -163,7 +163,10 @@ impl Platform {
     pub fn detect(runner: &impl Runner) -> Result<Self, Error> {
         #[cfg(target_os = "linux")]
         {
-            let os_release = runner
+            let files = runner.filesystem().ok_or(Error::Unsupported(
+                "telling Linux distributions apart reads /etc/os-release, and this runner lends no files",
+            ))?;
+            let os_release = files
                 .read_to_string(std::path::Path::new(OS_RELEASE))
                 .map_err(|source| Error::Io {
                     context: OS_RELEASE.to_string(),

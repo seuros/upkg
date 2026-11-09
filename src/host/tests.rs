@@ -410,3 +410,25 @@ fn install_of_nothing_runs_nothing() {
     };
     assert_eq!(text, "no packages to install");
 }
+
+#[test]
+fn install_without_files_fetches_apts_index_rather_than_guess() {
+    let fake = Fake::default()
+        .dir("/var/lib/apt/lists", &["x_Packages"])
+        .without_files();
+    let host = Host::new(linux(LinuxManager::Apt), fake);
+    host.install(&wanted("apt"), &ROOT).unwrap();
+    assert_eq!(host.runner.ran(), ["apt-get update", ROOT_APT_INSTALL]);
+}
+
+#[test]
+fn reboot_check_without_files_is_unsupported_not_a_guess() {
+    let fake = Fake::default()
+        .answer("uname -r", exit(0, "6.1.0-25-amd64\n"))
+        .file("/var/run/reboot-required", "", 0)
+        .without_files();
+    let host = Host::new(linux(LinuxManager::Apt), fake);
+    let error = host.reboot_required().unwrap_err();
+    assert!(matches!(error, Error::Unsupported(_)), "{error}");
+    assert_eq!(host.runner.ran(), Vec::<String>::new());
+}

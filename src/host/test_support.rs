@@ -6,7 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::{CommandSpec, Execution, Runner};
+use super::{CommandSpec, Execution, Filesystem, Runner};
 
 #[derive(Default)]
 pub(super) struct Fake {
@@ -14,6 +14,8 @@ pub(super) struct Fake {
     answers: HashMap<String, Execution>,
     /// Commands that cannot start at all.
     missing: Vec<String>,
+    /// Lends no files, like a runner driving another machine.
+    no_files: bool,
     files: HashMap<PathBuf, (String, SystemTime)>,
     dirs: HashMap<PathBuf, Vec<String>>,
     commands: Vec<String>,
@@ -62,6 +64,11 @@ impl Fake {
         self
     }
 
+    pub(super) const fn without_files(mut self) -> Self {
+        self.no_files = true;
+        self
+    }
+
     pub(super) const fn root(mut self) -> Self {
         self.root = true;
         self
@@ -94,6 +101,12 @@ impl Runner for Fake {
         self.commands.iter().any(|known| known == name) || (name == "sudo" && !self.root)
     }
 
+    fn filesystem(&self) -> Option<&dyn Filesystem> {
+        (!self.no_files).then_some(self as &dyn Filesystem)
+    }
+}
+
+impl Filesystem for Fake {
     fn exists(&self, path: &Path) -> bool {
         self.files.contains_key(path) || self.dirs.contains_key(path)
     }

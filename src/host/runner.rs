@@ -1,5 +1,5 @@
-//! The seam between upkg and the machine: commands, and the few files the
-//! reboot check reads.
+//! The seam between upkg and the machine: commands, and the few files some
+//! answers read.
 
 use std::fs;
 use std::io::{self, Read, Write};
@@ -25,11 +25,13 @@ impl Execution {
     }
 }
 
-/// Runs commands and answers questions about the filesystem.
+/// Runs commands on the machine a [`Host`](super::Host) maintains.
 ///
-/// Implement [`Runner::run`] to fake command execution in tests. The other
-/// methods default to the real system; override them to fake the reboot
-/// check's files, root detection and `PATH` lookups as well.
+/// [`Runner::run`] is all a runner must do. Everything else it can be asked
+/// defaults to "don't know", never to the machine this process runs on: a
+/// runner that drives a container, a jail or another machine is safe as
+/// written, and says more only where it knows more. [`SystemRunner`] is
+/// the one that answers for the running system.
 pub trait Runner {
     /// Runs `spec` to completion and returns its exit status and output.
     ///
@@ -38,41 +40,71 @@ pub trait Runner {
     /// The process could not be started or its output could not be read.
     fn run(&self, spec: &CommandSpec) -> io::Result<Execution>;
 
-    /// Whether the effective user is root.
+    /// Whether commands run as root. Decides what
+    /// [`Privilege::Auto`](crate::command::Privilege::Auto) means; when
+    /// unknown (`false`), privileged commands go through `sudo`.
     fn is_root(&self) -> bool {
-        command::is_root()
+        false
     }
 
-    /// Whether `name` is an executable on `PATH`.
-    fn has_command(&self, name: &str) -> bool {
-        command::command_exists(name)
+    /// Whether `name` is an executable where commands run. Unknown
+    /// (`false`) by default.
+    fn has_command(&self, _name: &str) -> bool {
+        false
     }
 
-    fn exists(&self, path: &Path) -> bool {
-        path.exists()
+    /// The files of the machine commands run on, for the few answers that
+    /// read them: Linux detection (`/etc/os-release`), the reboot check, and
+    /// whether apt ever fetched an index. `None` by default, and those
+    /// answers then fail with [`Error::Unsupported`](super::Error::Unsupported)
+    /// (an install fetches apt's index rather than guess) instead of
+    /// reading this process's own files.
+    fn filesystem(&self) -> Option<&dyn Filesystem> {
+        None
     }
+}
+
+/// Read-only access to a machine's files, as a [`Runner`] lends it.
+pub trait Filesystem {
+    fn exists(&self, path: &Path) -> bool;
 
     /// # Errors
     ///
     /// As [`fs::read_to_string`].
-    fn read_to_string(&self, path: &Path) -> io::Result<String> {
-        fs::read_to_string(path)
-    }
+    fn read_to_string(&self, path: &Path) -> io::Result<String>;
 
     /// When `path` was last modified.
     ///
     /// # Errors
     ///
     /// As [`fs::metadata`].
-    fn modified(&self, path: &Path) -> io::Result<SystemTime> {
-        fs::metadata(path)?.modified()
-    }
+    fn modified(&self, path: &Path) -> io::Result<SystemTime>;
 
     /// The names of the entries in `dir`.
     ///
     /// # Errors
     ///
     /// As [`fs::read_dir`].
+    fn read_dir(&self, dir: &Path) -> io::Result<Vec<String>>;
+}
+
+/// The running system's own files.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LocalFilesystem;
+
+impl Filesystem for LocalFilesystem {
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+
+    fn read_to_string(&self, path: &Path) -> io::Result<String> {
+        fs::read_to_string(path)
+    }
+
+    fn modified(&self, path: &Path) -> io::Result<SystemTime> {
+        fs::metadata(path)?.modified()
+    }
+
     fn read_dir(&self, dir: &Path) -> io::Result<Vec<String>> {
         fs::read_dir(dir)?
             .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
@@ -80,8 +112,11 @@ pub trait Runner {
     }
 }
 
-/// Runs real processes. stdin is closed so nothing can stop to ask a
-/// question; stdout and stderr are captured, and echoed live when asked.
+/// Runs real processes on the running system, and answers for it.
+///
+/// Its effective user, its `PATH` and its files ([`LocalFilesystem`]) are
+/// this machine's. stdin is closed so nothing can stop to ask a question;
+/// stdout and stderr are captured, and echoed live when asked.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemRunner {
     echo: bool,
@@ -125,6 +160,18 @@ impl Runner for SystemRunner {
             stdout: String::from_utf8_lossy(&stdout?).into_owned(),
             stderr: String::from_utf8_lossy(&stderr?).into_owned(),
         })
+    }
+
+    fn is_root(&self) -> bool {
+        command::is_root()
+    }
+
+    fn has_command(&self, name: &str) -> bool {
+        command::command_exists(name)
+    }
+
+    fn filesystem(&self) -> Option<&dyn Filesystem> {
+        Some(&LocalFilesystem)
     }
 }
 
