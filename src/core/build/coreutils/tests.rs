@@ -75,30 +75,13 @@ fn guard_compares_syntax_shape_not_just_lexemes() {
     );
 }
 
-fn fake_dependencies(root: &Path) -> HashMap<String, DepInfo> {
-    let mut deps = HashMap::new();
-    for (name, file) in [
-        ("gmp", "include/gmp.h"),
-        ("openssl@4", "include/openssl/ssl.h"),
-        ("texinfo", "bin/makeinfo"),
-    ] {
-        let path = root.join(name);
-        fs::create_dir_all(path.join(file).parent().unwrap()).unwrap();
-        fs::write(path.join(file), "").unwrap();
-        deps.insert(
-            name.to_string(),
-            DepInfo {
-                cellar_path: path.to_str().unwrap().to_string(),
-            },
-        );
-    }
-    deps
-}
-
 #[test]
 fn dependency_environment_uses_kegs_and_quotes_paths() {
     let tmp = tempfile::tempdir().unwrap();
-    let deps = fake_dependencies(&tmp.path().join("dependencies with spaces"));
+    let deps = recipe::fake_dependencies(
+        DEPENDENCY_FILES,
+        &tmp.path().join("dependencies with spaces"),
+    );
     check_dependencies(&deps).unwrap();
     let env: HashMap<_, _> = build_environment(&deps).unwrap().into_iter().collect();
     let paths: Vec<_> = std::env::split_paths(&env["PATH"]).collect();
@@ -207,7 +190,7 @@ printf "install:\n\tmkdir -p '%s/bin' '%s/share/man/man1'\n\ttouch '%s/bin/gcat'
     )
     .unwrap();
     fs::set_permissions(&configure, fs::Permissions::from_mode(0o755)).unwrap();
-    let deps = fake_dependencies(tmp.path());
+    let deps = recipe::fake_dependencies(DEPENDENCY_FILES, tmp.path());
     let plan = plan(&tmp.path().join("keg with spaces"));
     build(&plan, &source, &patch, &deps).await.unwrap();
     create_compatibility_links(&plan.cellar_path).unwrap();

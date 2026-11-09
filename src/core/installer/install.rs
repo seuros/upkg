@@ -27,7 +27,7 @@ use crate::clock::unix_secs;
 use crate::core::cellar::link::Linker;
 use crate::core::cellar::materialize::Cellar;
 use crate::core::installer::cask::resolve_cask;
-use crate::core::network::api::ApiClient;
+use crate::core::network::api::{ApiClient, cask_has_old_token};
 use crate::core::network::download::{DownloadRequest, ParallelDownloader};
 use crate::core::progress::InstallProgress;
 #[cfg(test)]
@@ -343,12 +343,7 @@ impl Installer {
             let Some(cask_json) = load_latest_cask_metadata_json(&path, token)? else {
                 continue;
             };
-            if cask_json
-                .get("old_tokens")
-                .and_then(serde_json::Value::as_array)
-                .map(|tokens| tokens.iter().any(|token| token.as_str() == Some(requested)))
-                .unwrap_or(false)
-            {
+            if cask_has_old_token(&cask_json, requested) {
                 return Ok(token.to_string());
             }
         }

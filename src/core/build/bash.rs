@@ -15,6 +15,11 @@ use super::recipe;
 use super::source::download_verified_source;
 
 const FORMULA: &str = include_str!("bash/formula.rb");
+const DEPENDENCY_FILES: &[(&str, &str)] = &[
+    ("ncurses", "include/curses.h"),
+    ("readline", "include/readline/readline.h"),
+    ("gettext", "include/libintl.h"),
+];
 const RECIPE: &str = "bash";
 const VERSION: &str = "5.3.20";
 const SOURCE_SHA256: &str = "0d5cd86965f869a26cf64f4b71be7b96f90a3ba8b3d74e27e8e9d9d5550f31ba";
@@ -118,15 +123,7 @@ pub(super) fn validate(plan: &BuildPlan, source: &str) -> Result<(), Error> {
 }
 
 pub(super) fn check_dependencies(deps: &HashMap<String, DepInfo>) -> Result<(), Error> {
-    recipe::check_dependency_files(
-        RECIPE,
-        deps,
-        &[
-            ("ncurses", "include/curses.h"),
-            ("readline", "include/readline/readline.h"),
-            ("gettext", "include/libintl.h"),
-        ],
-    )
+    recipe::check_dependency_files(RECIPE, deps, DEPENDENCY_FILES)
 }
 
 pub(super) async fn check_linkage(deps: &HashMap<String, DepInfo>) -> Result<(), Error> {

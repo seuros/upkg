@@ -16,6 +16,11 @@ const SOURCE_SHA256: &str = "a480198559733e9b3da999e90543ac6f888a2caa544d8d664c5
 const PATCH_URL: &str = "https://github.com/coreutils/coreutils/commit/782a1e5bc2090212273bb731dceee2cc2a071e54.patch?full_index=1";
 const PATCH_SHA256: &str = "d93cf338341d9418522a637e3c99c4211a25a967d0cffd2f036fd18871f15e35";
 const DEPENDENCIES: &[&str] = &["gmp", "openssl@4", "texinfo"];
+const DEPENDENCY_FILES: &[(&str, &str)] = &[
+    ("gmp", "include/gmp.h"),
+    ("openssl@4", "include/openssl/ssl.h"),
+    ("texinfo", "bin/makeinfo"),
+];
 const RECIPE: &str = "coreutils";
 
 pub(super) fn validate(plan: &BuildPlan, source: &str) -> Result<(), Error> {
@@ -28,15 +33,7 @@ fn formula_tokens(source: &str) -> Result<Vec<(String, String)>, Error> {
 }
 
 pub(super) fn check_dependencies(deps: &HashMap<String, DepInfo>) -> Result<(), Error> {
-    recipe::check_dependency_files(
-        RECIPE,
-        deps,
-        &[
-            ("gmp", "include/gmp.h"),
-            ("openssl@4", "include/openssl/ssl.h"),
-            ("texinfo", "bin/makeinfo"),
-        ],
-    )
+    recipe::check_dependency_files(RECIPE, deps, DEPENDENCY_FILES)
 }
 
 fn dependency_path<'a>(deps: &'a HashMap<String, DepInfo>, name: &str) -> Result<&'a Path, Error> {

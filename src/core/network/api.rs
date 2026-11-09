@@ -161,11 +161,7 @@ impl ApiClient {
                 message: format!("failed to fetch formula rb: {e}"),
             })?;
 
-        if !response.status().is_success() {
-            return Err(Error::NetworkFailure {
-                message: format!("formula rb fetch returned HTTP {}", response.status()),
-            });
-        }
+        let response = super::ensure_success(response, "formula rb fetch")?;
 
         let body = response
             .try_into_string()
@@ -256,7 +252,7 @@ impl ApiClient {
             );
         }
 
-        let response = super::ensure_success(response)?;
+        let response = super::ensure_success(response, "formula fetch")?;
 
         let etag = header_string(&response, "etag");
 
@@ -455,7 +451,7 @@ impl ApiClient {
             return Ok(None);
         }
 
-        let response = super::ensure_success(response)?;
+        let response = super::ensure_success(response, "cask fetch")?;
 
         response
             .try_into_json::<serde_json::Value>()
@@ -473,11 +469,7 @@ impl ApiClient {
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
-        if !response.status().is_success() {
-            return Err(Error::NetworkFailure {
-                message: format!("cask index returned HTTP {}", response.status()),
-            });
-        }
+        let response = super::ensure_success(response, "cask index")?;
 
         let casks = response
             .try_into_json::<Vec<serde_json::Value>>()
@@ -487,12 +479,7 @@ impl ApiClient {
             })?;
 
         Ok(casks.into_iter().find_map(|cask| {
-            let is_old_token = cask
-                .get("old_tokens")
-                .and_then(serde_json::Value::as_array)
-                .map(|tokens| tokens.iter().any(|old| old.as_str() == Some(token)))
-                .unwrap_or(false);
-            is_old_token
+            cask_has_old_token(&cask, token)
                 .then(|| cask.get("token").and_then(serde_json::Value::as_str))
                 .flatten()
                 .map(ToString::to_string)
@@ -647,6 +634,12 @@ impl ApiClient {
 
         Ok(None)
     }
+}
+
+pub(crate) fn cask_has_old_token(cask: &serde_json::Value, token: &str) -> bool {
+    cask.get("old_tokens")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|tokens| tokens.iter().any(|old| old.as_str() == Some(token)))
 }
 
 fn header_string(response: &Response, name: &str) -> Option<String> {

@@ -118,6 +118,28 @@ pub(super) fn check_dependency_files(
     Ok(())
 }
 
+#[cfg(test)]
+pub(super) fn fake_dependencies(
+    required: &[(&str, &str)],
+    root: &Path,
+) -> HashMap<String, DepInfo> {
+    required
+        .iter()
+        .map(|(name, file)| {
+            let keg = root.join(name);
+            let path = keg.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "").unwrap();
+            (
+                (*name).to_string(),
+                DepInfo {
+                    cellar_path: keg.to_str().unwrap().to_string(),
+                },
+            )
+        })
+        .collect()
+}
+
 /// Each `(dependency, dylib)` must carry an absolute install name that exists,
 /// or the built binary would fail to load it.
 pub(super) async fn check_linkage(

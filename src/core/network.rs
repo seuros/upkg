@@ -11,10 +11,10 @@ use rama::http::Response;
 
 use crate::types::Error;
 
-pub(crate) fn ensure_success(response: Response) -> Result<Response, Error> {
+pub(crate) fn ensure_success(response: Response, what: &str) -> Result<Response, Error> {
     if !response.status().is_success() {
         return Err(Error::NetworkFailure {
-            message: format!("HTTP {}", response.status()),
+            message: format!("{what} returned HTTP {}", response.status()),
         });
     }
     Ok(response)

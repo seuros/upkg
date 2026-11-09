@@ -438,7 +438,7 @@ async fn fetch_response_internal(
         response
     };
 
-    super::ensure_success(response)
+    super::ensure_success(response, "download")
 }
 
 async fn get_cached_token_for_url_internal(token_cache: &TokenCache, url: &str) -> Option<String> {
@@ -499,11 +499,7 @@ async fn fetch_bearer_token_internal(
             message: format!("token request failed: {e}"),
         })?;
 
-    if !response.status().is_success() {
-        return Err(Error::NetworkFailure {
-            message: format!("token request returned HTTP {}", response.status()),
-        });
-    }
+    let response = super::ensure_success(response, "token request")?;
 
     let token_response: TokenResponse =
         response
