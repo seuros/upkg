@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.20.0](https://github.com/seuros/upkg/compare/upkg-v0.19.0...upkg-v0.20.0) (2026-11-09)
+
+
+### Features
+
+* **catalog:** alias protoc, pkg-config and sqlite headers; macOS resolves too ([6225015](https://github.com/seuros/upkg/commit/6225015bb9e2c7429a6502fed131ad6c6976ef1e))
+* **cli:** install and check read ./upkg.toml when no packages are named ([091bd1c](https://github.com/seuros/upkg/commit/091bd1c8199c67cd4862f77116e2439369f5bac4))
+* **manifest:** read upkg.toml, resolve it per backend, install it as root ([b4d32d3](https://github.com/seuros/upkg/commit/b4d32d30a607243602611979b71f0b9433d389a8))
+
 ## [0.19.0](https://github.com/seuros/upkg/compare/upkg-v0.18.0...upkg-v0.19.0) (2026-11-08)
 
 
