@@ -24,7 +24,7 @@ use cask_ops::{
 pub use factory::create_installer;
 
 use crate::clock::unix_secs;
-use crate::core::cellar::link::Linker;
+use crate::core::cellar::link::{Linker, PostInstallScript};
 use crate::core::cellar::materialize::Cellar;
 use crate::core::installer::cask::resolve_cask;
 use crate::core::network::api::{ApiClient, cask_has_old_token};
@@ -93,7 +93,7 @@ impl Installer {
         store_key: &str,
         post_install_steps: &[PostInstallStep],
     ) -> Result<(), Error> {
-        warn_skipped_post_install(install_name, post_install_steps);
+        warn_skipped_post_install(install_name, formula_name, post_install_steps);
         self.linker
             .apply_post_install(keg_path, post_install_steps)
             .and_then(|()| {
@@ -107,7 +107,9 @@ impl Installer {
                     steps_schema: STEPS_SCHEMA,
                 };
                 write_receipt(keg_path, &receipt)?;
-                self.record_installed_package(&receipt)
+                self.record_installed_package(&receipt)?;
+                self.run_post_install_scripts(install_name, keg_path, post_install_steps);
+                Ok(())
             })
             .inspect_err(|_| {
                 if let Err(e) = self
@@ -119,6 +121,26 @@ impl Installer {
                     );
                 }
             })
+    }
+
+    /// Trusted `run` steps, after the file steps. As with Homebrew, a failed
+    /// script warns and leaves the keg installed.
+    fn run_post_install_scripts(&self, name: &str, keg_path: &Path, steps: &[PostInstallStep]) {
+        let scripts = match self.linker.post_install_scripts(keg_path, steps) {
+            Ok(scripts) => scripts,
+            Err(e) => {
+                eprintln!("warning: {name}: post-install script not run: {e}");
+                return;
+            }
+        };
+        for script in scripts {
+            if let Err(message) = run_post_install_script(keg_path, &script) {
+                eprintln!(
+                    "warning: {name}: post-install script {} failed: {message}",
+                    script.path.display()
+                );
+            }
+        }
     }
 
     /// Opt and declarative runtime links are required whether or not the keg
@@ -499,8 +521,11 @@ impl Installer {
 }
 
 /// Homebrew would have run these; say so instead of reporting a clean install.
-fn warn_skipped_post_install(name: &str, steps: &[PostInstallStep]) {
-    let mut skipped: Vec<&str> = steps.iter().filter_map(PostInstallStep::skipped).collect();
+fn warn_skipped_post_install(name: &str, formula: &str, steps: &[PostInstallStep]) {
+    let mut skipped: Vec<&str> = steps
+        .iter()
+        .filter_map(|step| step.skipped(formula))
+        .collect();
     if skipped.is_empty() {
         return;
     }
@@ -510,6 +535,25 @@ fn warn_skipped_post_install(name: &str, steps: &[PostInstallStep]) {
         "warning: {name}: skipped post-install steps upkg does not run: {}",
         skipped.join(", ")
     );
+}
+
+/// A script runs with nothing of upkg's environment: a fixed `PATH` of the
+/// system's own tools, the C locale, no stdin, from the keg.
+fn run_post_install_script(keg_path: &Path, script: &PostInstallScript) -> Result<(), String> {
+    let output = std::process::Command::new(&script.path)
+        .args(&script.args)
+        .current_dir(keg_path)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("LC_ALL", "C")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!("{}: {}", output.status, stderr.trim()))
 }
 
 fn dependency_cellar_path(cellar: &Cellar, installed_name: &str, version: &str) -> String {

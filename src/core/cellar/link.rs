@@ -6,6 +6,7 @@ use crate::types::{ConflictedLink, Error};
 
 #[path = "link/post_install.rs"]
 mod post_install;
+pub use post_install::PostInstallScript;
 
 const LINK_DIRS: &[&str] = &[
     "bin",

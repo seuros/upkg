@@ -222,3 +222,89 @@ async fn ordinary_global_link_conflict_does_not_disable_required_runtime_paths()
         "user binary"
     );
 }
+
+/// A formula whose bottle ships `libexec/post-install` and runs it, as
+/// ca-certificates does, with `script` as its body.
+async fn mount_scripted(server: &MockServer, name: &str, script: &str) {
+    let bottle = tar_gz(
+        [
+            ("libexec/post-install", script),
+            ("share/ca-certificates/cacert.pem", "mozilla"),
+        ]
+        .map(|(file, content)| (format!("{name}/2026-11-05/{file}"), content)),
+    );
+    let formula = serde_json::json!({
+        "name": name,
+        "versions": { "stable": "2026-11-05" },
+        "dependencies": [],
+        "keg_only": false,
+        "bottle": { "stable": { "files": {
+            get_test_bottle_tag(): { "url": format!("{}/{name}.tar.gz", server.uri()),
+                                    "sha256": sha256_hex_bytes(&bottle) }
+        }}},
+        "post_install_steps": [
+            {"type":"run", "command":{"base":"libexec","path":"post-install"},
+             "args":["{{pkgshare}}/cacert.pem", "{{pkgetc}}/cert.pem"]}
+        ]
+    });
+    mount_json(server, &format!("/{name}.json"), formula).await;
+    mount_bytes(server, &format!("/{name}.tar.gz"), bottle).await;
+}
+
+/// Copies the bundle and records what the script saw of its environment.
+const BUNDLER: &str =
+    "#!/bin/sh\nset -e\nmkdir -p \"${2%/*}\"\ncat \"$1\" > \"$2\"\nenv | sort > \"${2%/*}/env\"\n";
+
+#[tokio::test]
+async fn trusted_script_builds_the_bundle_with_a_clean_environment() {
+    let server = MockServer::start().await;
+    let tmp = TempDir::new().unwrap();
+    mount_scripted(&server, "ca-certificates", BUNDLER).await;
+    let mut ctx = server_context(&server, &tmp);
+    ctx.installer
+        .install(&["ca-certificates".into()], false)
+        .await
+        .unwrap();
+    let etc = ctx.prefix.join("etc/ca-certificates");
+    assert_eq!(fs::read_to_string(etc.join("cert.pem")).unwrap(), "mozilla");
+    let env = fs::read_to_string(etc.join("env")).unwrap();
+    assert!(
+        env.contains("PATH=/usr/bin:/bin:/usr/sbin:/sbin\n"),
+        "{env}"
+    );
+    assert!(env.contains("LC_ALL=C\n"), "{env}");
+    assert!(!env.contains("HOME="), "{env}");
+}
+
+#[tokio::test]
+async fn untrusted_scripts_never_run() {
+    let server = MockServer::start().await;
+    let tmp = TempDir::new().unwrap();
+    mount_scripted(&server, "docbook", BUNDLER).await;
+    let mut ctx = server_context(&server, &tmp);
+    ctx.installer
+        .install(&["docbook".into()], false)
+        .await
+        .unwrap();
+    assert!(ctx.installer.is_installed("docbook"));
+    assert!(!ctx.prefix.join("etc/docbook").exists());
+}
+
+#[tokio::test]
+async fn a_failing_script_leaves_the_package_installed() {
+    let server = MockServer::start().await;
+    let tmp = TempDir::new().unwrap();
+    mount_scripted(
+        &server,
+        "ca-certificates",
+        "#!/bin/sh\necho broken >&2\nexit 3\n",
+    )
+    .await;
+    let mut ctx = server_context(&server, &tmp);
+    ctx.installer
+        .install(&["ca-certificates".into()], false)
+        .await
+        .unwrap();
+    assert!(ctx.installer.is_installed("ca-certificates"));
+    assert!(!ctx.prefix.join("etc/ca-certificates/cert.pem").exists());
+}

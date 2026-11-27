@@ -341,7 +341,10 @@ fn glob_symlinks_and_unknown_steps_are_skipped_and_named() {
     );
     linker.apply_post_install(&keg, &steps).unwrap();
     assert!(!tmp.path().join("share/man/man1").exists());
-    let skipped: Vec<_> = steps.iter().filter_map(PostInstallStep::skipped).collect();
+    let skipped: Vec<_> = steps
+        .iter()
+        .filter_map(|s| s.skipped("openssl@4"))
+        .collect();
     assert_eq!(skipped, ["symlink (glob)", "run", "unknown"]);
 }
 
@@ -424,4 +427,104 @@ fn symlink_templates_reject_unsafe_paths(#[case] path: &str) {
         source_glob: false,
     }];
     assert!(linker.apply_post_install(&keg, &steps).is_err(), "{path}");
+}
+
+/// ca-certificates' step as Homebrew publishes it.
+const CA_RUN: &str = r#"[{"command":{"base":"libexec","path":"post-install"},"type":"run",
+    "args":["{{pkgshare}}/cacert.pem","{{pkgetc}}/cert.pem"]}]"#;
+
+fn ca_certificates(tmp: &TempDir, name: &str) -> (Linker, PathBuf) {
+    let keg = write_keg(
+        tmp.path(),
+        &format!("{name}/2026-11-05"),
+        &[
+            ("libexec/post-install", b"#!/bin/sh\n"),
+            ("share/ca-certificates/cacert.pem", b"mozilla"),
+        ],
+    );
+    (Linker::new(tmp.path()).unwrap(), keg)
+}
+
+#[test]
+fn a_trusted_run_step_resolves_to_its_script_and_paths() {
+    let tmp = TempDir::new().unwrap();
+    let (linker, keg) = ca_certificates(&tmp, "ca-certificates");
+    let scripts = linker.post_install_scripts(&keg, &parse(CA_RUN)).unwrap();
+    assert_eq!(
+        scripts,
+        [PostInstallScript {
+            path: keg.join("libexec/post-install"),
+            args: vec![
+                keg.join("share/ca-certificates/cacert.pem"),
+                tmp.path().join("etc/ca-certificates/cert.pem"),
+            ],
+        }]
+    );
+    assert_eq!(parse(CA_RUN)[0].skipped("ca-certificates"), None);
+}
+
+#[test]
+fn run_steps_of_untrusted_formulas_are_never_resolved() {
+    let tmp = TempDir::new().unwrap();
+    let (linker, keg) = ca_certificates(&tmp, "docbook");
+    assert_eq!(
+        linker.post_install_scripts(&keg, &parse(CA_RUN)).unwrap(),
+        []
+    );
+    assert_eq!(parse(CA_RUN)[0].skipped("docbook"), Some("run"));
+}
+
+#[rstest::rstest]
+#[case(r#"{"base":"bin","path":"post-install"}"#, r"[]")]
+#[case(
+    r#"{"base":"libexec","path":"../share/ca-certificates/cacert.pem"}"#,
+    r"[]"
+)]
+#[case(r#"{"base":"libexec","path":"missing"}"#, r"[]")]
+#[case(r#"{"base":"libexec","path":"post-install"}"#, r#"["--setupdb"]"#)]
+#[case(
+    r#"{"base":"libexec","path":"post-install"}"#,
+    r#"["{{etc}}/../../escape"]"#
+)]
+#[case(r#"{"base":"libexec","path":"post-install"}"#, r#"["/etc/passwd"]"#)]
+fn trusted_run_steps_reject_anything_outside_the_shape(#[case] command: &str, #[case] args: &str) {
+    let tmp = TempDir::new().unwrap();
+    let (linker, keg) = ca_certificates(&tmp, "ca-certificates");
+    let steps = parse(&format!(
+        r#"[{{"type":"run","command":{command},"args":{args}}}]"#
+    ));
+    assert!(
+        linker.post_install_scripts(&keg, &steps).is_err(),
+        "{command} {args}"
+    );
+}
+
+#[test]
+fn run_steps_with_guards_env_or_redirection_stay_unsupported() {
+    for extra in [
+        r#""guards":[{"base":"var","path":"x","condition":"unless_exists","id":"1"}]"#,
+        r#""env":{"A":"b"}"#,
+        r#""chdir":{"base":"libexec","path":"."}"#,
+        r#""stdin_path":{"path":"{{var}}/words"}"#,
+    ] {
+        let steps = parse(&format!(
+            r#"[{{"type":"run","command":{{"base":"libexec","path":"post-install"}},{extra}}}]"#
+        ));
+        assert_eq!(
+            steps,
+            [PostInstallStep::Unsupported {
+                kind: Some("run".into())
+            }],
+            "{extra}"
+        );
+    }
+}
+
+#[test]
+fn applying_and_removing_file_steps_never_touches_run_steps() {
+    let tmp = TempDir::new().unwrap();
+    let (linker, keg) = ca_certificates(&tmp, "ca-certificates");
+    linker.apply_post_install(&keg, &parse(CA_RUN)).unwrap();
+    linker.remove_post_install(&keg, &parse(CA_RUN)).unwrap();
+    assert!(!tmp.path().join("etc/ca-certificates").exists());
 }

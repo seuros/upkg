@@ -8,7 +8,7 @@ pub mod resolve;
 pub mod types;
 
 pub use bottle::{SelectedBottle, select_bottle};
-pub use post_install::{PostInstallPath, PostInstallStep, STEPS_SCHEMA};
+pub use post_install::{PostInstallPath, PostInstallStep, STEPS_SCHEMA, TRUSTED_SCRIPTS};
 pub use resolve::resolve_closure;
 pub use types::{
     Bottle, BottleFile, BottleStable, Formula, FormulaUrls, KegOnly, RubySourceChecksum, SourceUrl,

@@ -1,7 +1,15 @@
 use std::borrow::Cow;
 
 use super::*;
-use crate::types::formula::{PostInstallPath, PostInstallStep};
+use crate::types::formula::{PostInstallPath, PostInstallStep, TRUSTED_SCRIPTS};
+
+/// A trusted `run` step, resolved: the keg's script and its path arguments.
+/// The linker validates it; the installer runs it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PostInstallScript {
+    pub path: PathBuf,
+    pub args: Vec<PathBuf>,
+}
 
 enum Operation {
     Directory(PathBuf),
@@ -189,8 +197,10 @@ impl Linker {
                         fs::remove_file(dst).map_err(store_err)?;
                     }
                 }
+                // What a script wrote (a CA bundle) stays, as with Homebrew.
                 PostInstallStep::MkdirP { .. }
                 | PostInstallStep::Symlink { .. }
+                | PostInstallStep::Run { .. }
                 | PostInstallStep::Unsupported { .. } => {}
             }
         }
@@ -255,11 +265,61 @@ impl Linker {
                     });
                 }
                 // Glob sources, databases, services, package scripts: reported
-                // by the installer, never run here.
-                PostInstallStep::Symlink { .. } | PostInstallStep::Unsupported { .. } => {}
+                // or run by the installer, never here.
+                PostInstallStep::Symlink { .. }
+                | PostInstallStep::Run { .. }
+                | PostInstallStep::Unsupported { .. } => {}
             }
         }
         Ok(operations)
+    }
+
+    /// The trusted `run` steps of `steps`, resolved and checked: the script is
+    /// a file in the keg's `libexec`, every argument a path template whose
+    /// parent stays inside the prefix. Steps of untrusted formulas are left
+    /// out (the installer reports them).
+    pub fn post_install_scripts(
+        &self,
+        keg: &Path,
+        steps: &[PostInstallStep],
+    ) -> Result<Vec<PostInstallScript>, Error> {
+        let vars = KegVars::new(keg)?;
+        if !TRUSTED_SCRIPTS.contains(&vars.formula_name) {
+            return Ok(Vec::new());
+        }
+        let mut scripts = Vec::new();
+        for step in steps {
+            let PostInstallStep::Run { command, args } = step else {
+                continue;
+            };
+            if command.base != "libexec" {
+                return Err(invalid_step("a script must live in the keg's libexec"));
+            }
+            let path = join_relative(&keg.join("libexec"), &vars, &command.path)?;
+            if !path.is_file()
+                || !fs::canonicalize(&path)
+                    .map_err(store_err)?
+                    .starts_with(fs::canonicalize(keg).map_err(store_err)?)
+            {
+                return Err(invalid_step("a script must be a file inside the keg"));
+            }
+            let args = args
+                .iter()
+                .map(|arg| {
+                    let path = self.helper_path(
+                        &vars,
+                        &PostInstallPath {
+                            base: String::new(),
+                            path: arg.clone(),
+                        },
+                    )?;
+                    self.check_helper_parent(keg, &path)?;
+                    Ok(path)
+                })
+                .collect::<Result<_, Error>>()?;
+            scripts.push(PostInstallScript { path, args });
+        }
+        Ok(scripts)
     }
 
     /// A symlink step's link text and link path. Either may name any of
@@ -273,11 +333,32 @@ impl Linker {
     ) -> Result<(PathBuf, PathBuf), Error> {
         let src = self.helper_path(vars, source)?;
         let dst = self.helper_path(vars, target)?;
-        let parent = dst
-            .parent()
-            .ok_or_else(|| invalid_step("symlink target has no parent"))?;
-        self.check_post_install_destination(parent)?;
+        self.check_helper_parent(vars.keg, &dst)?;
         Ok((src, dst))
+    }
+
+    /// A helper path lands in the keg (which may live outside the prefix) or
+    /// in the prefix; its parent must stay there without crossing a
+    /// directory symlink.
+    fn check_helper_parent(&self, keg: &Path, path: &Path) -> Result<(), Error> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| invalid_step("path has no parent"))?;
+        match parent.strip_prefix(keg) {
+            Ok(relative) => {
+                let mut ancestor = keg.to_path_buf();
+                for component in relative.components() {
+                    ancestor.push(component);
+                    if ancestor.is_symlink() {
+                        return Err(invalid_step(
+                            "destination must not traverse directory symlinks",
+                        ));
+                    }
+                }
+                Ok(())
+            }
+            Err(_) => self.check_post_install_destination(parent),
+        }
     }
 
     /// `{{helper}}/relative`, or an explicit `base` naming the helper.
