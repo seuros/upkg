@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.21.1](https://github.com/seuros/upkg/compare/upkg-v0.21.0...upkg-v0.21.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* **install:** apply Homebrew symlink post-install steps, report skipped ones ([5fb4d75](https://github.com/seuros/upkg/commit/5fb4d753edf1a8c5b50e7fb177b38de8c19f6a37))
+* **install:** run ca-certificates' bundle builder, the one trusted script ([dc9c384](https://github.com/seuros/upkg/commit/dc9c38427961444c807b7be61a646307e364f21f))
+
 ## [0.21.0](https://github.com/seuros/upkg/compare/upkg-v0.20.0...upkg-v0.21.0) (2026-11-09)
 
 
