@@ -55,6 +55,7 @@ fn receipt_wins_over_directory_name() {
             store_key: "abc".into(),
             installed_at: 0,
             post_install_steps: Vec::new(),
+            steps_schema: 0,
         },
     )
     .unwrap();

@@ -40,7 +40,7 @@ use crate::core::storage::state_db::{InstalledPackage, InstalledPackageKind, Sta
 use crate::core::storage::store::Store;
 use crate::package_ref::{cask_name, cask_token, is_cask_name};
 
-use crate::types::formula::PostInstallStep;
+use crate::types::formula::{PostInstallStep, STEPS_SCHEMA};
 use crate::types::{Error, Formula, InstallMethod, formula_token};
 
 #[cfg(test)]
@@ -93,6 +93,7 @@ impl Installer {
         store_key: &str,
         post_install_steps: &[PostInstallStep],
     ) -> Result<(), Error> {
+        warn_skipped_post_install(install_name, post_install_steps);
         self.linker
             .apply_post_install(keg_path, post_install_steps)
             .and_then(|()| {
@@ -103,6 +104,7 @@ impl Installer {
                     store_key: store_key.to_string(),
                     installed_at: unix_secs(),
                     post_install_steps: post_install_steps.to_vec(),
+                    steps_schema: STEPS_SCHEMA,
                 };
                 write_receipt(keg_path, &receipt)?;
                 self.record_installed_package(&receipt)
@@ -484,6 +486,7 @@ impl Installer {
             store_key: cask.sha256.clone(),
             installed_at: unix_secs(),
             post_install_steps: Vec::new(),
+            steps_schema: STEPS_SCHEMA,
         };
         if !cask.binaries.is_empty() {
             let keg_path = self.cellar.keg_path(&cask.install_name, &cask.version);
@@ -493,6 +496,20 @@ impl Installer {
         self.record_installed_package(&receipt)?;
         Ok(())
     }
+}
+
+/// Homebrew would have run these; say so instead of reporting a clean install.
+fn warn_skipped_post_install(name: &str, steps: &[PostInstallStep]) {
+    let mut skipped: Vec<&str> = steps.iter().filter_map(PostInstallStep::skipped).collect();
+    if skipped.is_empty() {
+        return;
+    }
+    skipped.sort_unstable();
+    skipped.dedup();
+    eprintln!(
+        "warning: {name}: skipped post-install steps upkg does not run: {}",
+        skipped.join(", ")
+    );
 }
 
 fn dependency_cellar_path(cellar: &Cellar, installed_name: &str, version: &str) -> String {

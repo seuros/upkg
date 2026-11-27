@@ -7,6 +7,9 @@ enum Operation {
     Directory(PathBuf),
     Tree(PathBuf, PathBuf),
     Link(PathBuf, PathBuf),
+    /// A `force`d link: replaces a file or link already at the destination,
+    /// never a directory.
+    Replace(PathBuf, PathBuf),
 }
 
 /// Template values derived once per keg (`Cellar/<formula>/<version>`).
@@ -105,6 +108,14 @@ impl Linker {
                         });
                     }
                 }
+                Operation::Replace(_, dst) => {
+                    if dst.symlink_metadata().is_ok_and(|meta| meta.is_dir()) {
+                        conflicts.push(ConflictedLink {
+                            path: dst.clone(),
+                            owned_by: None,
+                        });
+                    }
+                }
             }
         }
         if !conflicts.is_empty() {
@@ -114,7 +125,7 @@ impl Linker {
             match op {
                 Operation::Directory(dst) => fs::create_dir_all(dst).map_err(store_err)?,
                 Operation::Tree(src, dst) => Self::link_recursive(&src, &dst, false)?,
-                Operation::Link(src, dst) => {
+                Operation::Link(src, dst) | Operation::Replace(src, dst) => {
                     if dst.symlink_metadata().is_ok() {
                         fs::remove_file(&dst).map_err(store_err)?;
                     }
@@ -167,7 +178,20 @@ impl Linker {
                         }
                     }
                 }
-                PostInstallStep::MkdirP { .. } | PostInstallStep::Unsupported => {}
+                PostInstallStep::Symlink {
+                    source,
+                    target,
+                    source_glob: false,
+                    ..
+                } => {
+                    let (src, dst) = self.symlink_paths(&vars, source, target)?;
+                    if read_link_resolved(&dst).is_ok_and(|old| same_path(&old, &src)) {
+                        fs::remove_file(dst).map_err(store_err)?;
+                    }
+                }
+                PostInstallStep::MkdirP { .. }
+                | PostInstallStep::Symlink { .. }
+                | PostInstallStep::Unsupported { .. } => {}
             }
         }
         Ok(())
@@ -213,11 +237,83 @@ impl Linker {
                     // Checked and created once, before its children are linked.
                     operations.insert(dir_index, Operation::Directory(dst));
                 }
-                // Do not initialize databases or start services during installation.
-                PostInstallStep::Unsupported => {}
+                PostInstallStep::Symlink {
+                    source,
+                    target,
+                    force,
+                    source_glob: false,
+                } => {
+                    let (src, dst) = self.symlink_paths(&vars, source, target)?;
+                    let parent = dst
+                        .parent()
+                        .ok_or_else(|| invalid_step("symlink target has no parent"))?;
+                    operations.push(Operation::Directory(parent.to_path_buf()));
+                    operations.push(if *force {
+                        Operation::Replace(src, dst)
+                    } else {
+                        Operation::Link(src, dst)
+                    });
+                }
+                // Glob sources, databases, services, package scripts: reported
+                // by the installer, never run here.
+                PostInstallStep::Symlink { .. } | PostInstallStep::Unsupported { .. } => {}
             }
         }
         Ok(operations)
+    }
+
+    /// A symlink step's link text and link path. Either may name any of
+    /// Homebrew's path helpers; the link's parent must stay inside the prefix,
+    /// and the link itself may already exist (it is replaced or conflicts).
+    fn symlink_paths(
+        &self,
+        vars: &KegVars<'_>,
+        source: &PostInstallPath,
+        target: &PostInstallPath,
+    ) -> Result<(PathBuf, PathBuf), Error> {
+        let src = self.helper_path(vars, source)?;
+        let dst = self.helper_path(vars, target)?;
+        let parent = dst
+            .parent()
+            .ok_or_else(|| invalid_step("symlink target has no parent"))?;
+        self.check_post_install_destination(parent)?;
+        Ok((src, dst))
+    }
+
+    /// `{{helper}}/relative`, or an explicit `base` naming the helper.
+    fn helper_path(&self, vars: &KegVars<'_>, path: &PostInstallPath) -> Result<PathBuf, Error> {
+        let (helper, relative) = if path.base.is_empty() {
+            path.path
+                .strip_prefix("{{")
+                .and_then(|rest| rest.split_once("}}/"))
+                .ok_or_else(|| invalid_step("unsupported absolute path template"))?
+        } else {
+            (path.base.as_str(), path.path.as_str())
+        };
+        let root = self
+            .helper_root(vars, helper)
+            .ok_or_else(|| invalid_step("unsupported path base"))?;
+        join_relative(&root, vars, relative)
+    }
+
+    /// Homebrew's `Formula` path helpers: the keg's directories, then the
+    /// prefix's.
+    fn helper_root(&self, vars: &KegVars<'_>, helper: &str) -> Option<PathBuf> {
+        let keg = |relative: &str| Some(vars.keg.join(relative));
+        let prefix = |relative: &str| Some(self.prefix.join(relative));
+        match helper {
+            "prefix" => Some(vars.keg.to_path_buf()),
+            "bin" | "sbin" | "lib" | "libexec" | "include" | "share" => keg(helper),
+            "pkgshare" => Some(vars.keg.join("share").join(vars.formula_name)),
+            "bash_completion" => keg("etc/bash_completion.d"),
+            "zsh_completion" => keg("share/zsh/site-functions"),
+            "fish_completion" => keg("share/fish/vendor_completions.d"),
+            "pwsh_completion" => keg("share/pwsh/completions"),
+            "HOMEBREW_PREFIX" | "homebrew_prefix" => Some(self.prefix.clone()),
+            "etc" | "var" => prefix(helper),
+            "pkgetc" => Some(self.prefix.join("etc").join(vars.formula_name)),
+            _ => None,
+        }
     }
 
     /// Resolve a link step's keg source and prefix destination.
@@ -258,29 +354,8 @@ impl Linker {
             (false, "etc") => (self.prefix.as_path(), Some("etc")),
             _ => return Err(invalid_step("unsupported path base")),
         };
-        let expanded = vars.expand(value)?;
-        let relative = Path::new(&*expanded);
-        if relative.as_os_str().is_empty()
-            || relative
-                .components()
-                .any(|c| !matches!(c, Component::Normal(_)))
-        {
-            return Err(invalid_step(
-                "paths must be nonempty relative paths without traversal",
-            ));
-        }
-        let mut out = PathBuf::with_capacity(
-            base.as_os_str().len()
-                + sub.map_or(0, |s| s.len() + 1)
-                + relative.as_os_str().len()
-                + 1,
-        );
-        out.push(base);
-        if let Some(sub) = sub {
-            out.push(sub);
-        }
-        out.push(relative);
-        Ok(out)
+        let base = sub.map_or_else(|| base.to_path_buf(), |sub| base.join(sub));
+        join_relative(&base, vars, value)
     }
 
     fn check_post_install_destination(&self, dst: &Path) -> Result<(), Error> {
@@ -301,6 +376,23 @@ impl Linker {
         }
         Ok(())
     }
+}
+
+/// `base` joined with `value` once templates expand: a nonempty relative path
+/// without traversal, never an arbitrary absolute one.
+fn join_relative(base: &Path, vars: &KegVars<'_>, value: &str) -> Result<PathBuf, Error> {
+    let expanded = vars.expand(value)?;
+    let relative = Path::new(&*expanded);
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+    {
+        return Err(invalid_step(
+            "paths must be nonempty relative paths without traversal",
+        ));
+    }
+    Ok(base.join(relative))
 }
 
 fn check_post_install_source(keg: &Path, src: &Path) -> Result<(), Error> {

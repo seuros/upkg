@@ -102,7 +102,7 @@ pub struct Formula {
     pub requirements: Vec<serde_json::Value>,
     #[serde(default)]
     pub variations: Option<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::post_install::deserialize_steps")]
     pub post_install_steps: Vec<super::post_install::PostInstallStep>,
 }
 

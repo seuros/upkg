@@ -18,8 +18,16 @@ pub struct InstallReceipt {
     pub version: String,
     pub store_key: String,
     pub installed_at: i64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "crate::types::formula::post_install::deserialize_steps"
+    )]
     pub post_install_steps: Vec<crate::types::formula::PostInstallStep>,
+    /// The [`STEPS_SCHEMA`](crate::types::formula::STEPS_SCHEMA) the steps
+    /// were applied under; 0 for receipts written before it existed.
+    #[serde(default)]
+    pub steps_schema: u32,
 }
 
 pub fn write_receipt(keg_path: &Path, receipt: &InstallReceipt) -> Result<(), Error> {

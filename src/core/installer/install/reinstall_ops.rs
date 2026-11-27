@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::core::progress::ProgressCallback;
 use crate::core::storage::receipt::{InstallReceipt, read_receipt};
+use crate::types::formula::STEPS_SCHEMA;
 use crate::types::{Error, formula_token};
 
 use super::{ExecuteResult, InstallPlan, Installer};
@@ -39,8 +40,10 @@ impl Installer {
     /// Plans a reinstall of `names`. Every name must already be installed.
     ///
     /// A keg whose bottle is still in the store is rebuilt from it, which
-    /// reinstalls exactly the installed version. Anything else is fetched,
-    /// with missing dependencies planned and installed ones left alone.
+    /// reinstalls exactly the installed version, unless its receipt predates
+    /// the current [`STEPS_SCHEMA`]: its recorded post-install steps may be
+    /// ones upkg skipped then. Anything else is fetched, with missing
+    /// dependencies planned and installed ones left alone.
     pub async fn plan_reinstall(
         &self,
         names: &[String],
@@ -58,6 +61,7 @@ impl Installer {
                 Some(receipt)
                     if !build_from_source
                         && !receipt.store_key.is_empty()
+                        && receipt.steps_schema == STEPS_SCHEMA
                         && self.store.has_entry(&receipt.store_key) =>
                 {
                     from_store.push(StoreReinstall { keg_name, receipt });

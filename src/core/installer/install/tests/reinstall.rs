@@ -1,5 +1,6 @@
 use super::*;
-use crate::core::storage::receipt::read_receipt;
+use crate::core::storage::receipt::{read_receipt, write_receipt};
+use crate::types::formula::STEPS_SCHEMA;
 use std::path::Path;
 
 async fn mount_testpkg(server: &MockServer, bottle: &[u8], bottle_status: u16) {
@@ -182,4 +183,33 @@ async fn reinstall_requires_an_installed_package() {
 
     assert_matches!(err, Error::NotInstalled { ref name } if name == "testpkg");
     assert!(!tmp.path().join("upkg/Cellar/testpkg").exists());
+}
+
+/// A receipt from before the current schema may have recorded steps upkg
+/// skipped then (or none at all): the formula's steps are fetched again.
+#[tokio::test]
+async fn reinstall_refetches_when_the_receipt_predates_the_steps_schema() {
+    let tmp = TempDir::new().unwrap();
+    let (root, _prefix, _) = install_and_break(&tmp).await;
+    let keg = root.join("Cellar/testpkg/1.0.0");
+    let mut receipt = read_receipt(&keg).unwrap();
+    assert_eq!(receipt.steps_schema, STEPS_SCHEMA);
+    receipt.steps_schema = 0;
+    write_receipt(&keg, &receipt).unwrap();
+
+    let server = MockServer::start().await;
+    mount_testpkg(&server, &create_bottle_tarball("testpkg"), 200).await;
+    let mut installer = server_installer(&server, &tmp);
+    let plan = installer
+        .plan_reinstall(&["testpkg".to_string()], false)
+        .await
+        .unwrap();
+    assert!(plan.from_store.is_empty());
+    assert_eq!(plan.fetch.items.len(), 1);
+
+    installer
+        .reinstall_with_progress(plan, true, None)
+        .await
+        .unwrap();
+    assert_eq!(read_receipt(&keg).unwrap().steps_schema, STEPS_SCHEMA);
 }
